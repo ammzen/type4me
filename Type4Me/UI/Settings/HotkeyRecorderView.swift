@@ -164,7 +164,7 @@ struct HotkeyRecorderView: View {
                 }
                 keyCode = kc
                 // Store modifier flags, stripping only non-hotkey noise.
-                let clean = event.modifierFlags.intersection([.command, .shift, .option, .control, .function])
+                let clean = Self.sanitizedModifierFlags(event.modifierFlags, forKeyCode: kc)
                 modifiers = clean.isEmpty ? 0 : UInt64(clean.rawValue)
                 stopRecording()
                 return nil
@@ -203,6 +203,14 @@ struct HotkeyRecorderView: View {
         [0, 1, 7, 16, 17, 18, 19, 20].contains(keyType)
     }
 
+    nonisolated static func sanitizedModifierFlags(_ flags: NSEvent.ModifierFlags, forKeyCode keyCode: Int? = nil) -> NSEvent.ModifierFlags {
+        var clean = flags.intersection([.command, .shift, .option, .control, .function])
+        if let keyCode, ModeBinding.isFunctionKeyCode(keyCode) {
+            clean.remove(.function)
+        }
+        return clean
+    }
+
     private func isModifierPressed(keyCode: Int, flags: NSEvent.ModifierFlags) -> Bool {
         switch keyCode {
         case 54, 55: return flags.contains(.command)
@@ -228,7 +236,7 @@ struct HotkeyRecorderView: View {
     }
 
     private func modifierComboModifiers(for keyCode: Int, flags: NSEvent.ModifierFlags) -> UInt64 {
-        var clean = flags.intersection([.command, .shift, .option, .control, .function])
+        var clean = Self.sanitizedModifierFlags(flags)
         if let own = modifierFlag(for: keyCode) {
             clean.remove(own)
         }
@@ -246,7 +254,7 @@ struct HotkeyRecorderView: View {
         let mods = modifiers ?? 0
         var parts: [String] = []
         if mods != 0 {
-            let flags = NSEvent.ModifierFlags(rawValue: UInt(mods))
+            let flags = sanitizedModifierFlags(NSEvent.ModifierFlags(rawValue: UInt(mods)), forKeyCode: keyCode)
             if flags.contains(.control) { parts.append("⌃") }
             if flags.contains(.option) { parts.append("⌥") }
             if flags.contains(.shift) { parts.append("⇧") }

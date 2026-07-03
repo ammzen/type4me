@@ -5,6 +5,14 @@ struct BailianASRConfig: ASRProviderConfig, Sendable {
     static let provider = ASRProvider.bailian
     static let displayName = L("阿里云百炼", "Alibaba Cloud Bailian")
     static let defaultModel = "fun-asr-realtime"
+    static let supportedModels = [
+        "fun-asr-realtime",
+        "fun-asr-realtime-2026-02-28",
+        "fun-asr-realtime-2025-11-07",
+        "fun-asr-realtime-2025-09-15",
+        "fun-asr-flash-8k-realtime",
+        "fun-asr-flash-8k-realtime-2026-01-28",
+    ]
     static let supportedLanguageHints = ["zh", "en", "ja"]
 
     static var credentialFields: [CredentialField] {[
@@ -22,7 +30,9 @@ struct BailianASRConfig: ASRProviderConfig, Sendable {
             placeholder: defaultModel,
             isSecure: false,
             isOptional: false,
-            defaultValue: defaultModel
+            defaultValue: defaultModel,
+            options: supportedModels.map { FieldOption(value: $0, label: $0) },
+            allowCustomInput: true
         ),
         CredentialField(
             key: "languageHint",

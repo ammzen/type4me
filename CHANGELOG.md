@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.9.9 — Soniox v5、录音启动稳定性与模型列表更新 (2026-07-03)
+
+### 改进与修复
+- **Soniox 升级到 v5**：实时识别默认使用 `stt-rt-v5`，批量兜底使用 `stt-async-v5`
+- **录音启动更稳**：缩短 Soniox endpoint delay，并丢弃延迟过久的非最终 partial，减少启动/收尾阶段转圈或旧文本回流
+- **快捷键兼容性**：修复 F1-F20 等功能键被 macOS 附带 Fn 标记后，录制、冲突检测和触发不一致的问题；普通按键的 Fn 组合仍保留
+- **模型列表更新**：刷新 OpenAI、Claude、Gemini、DeepSeek、Kimi、豆包、MiniMax、百炼、智谱等 LLM 下拉模型；同步更新 AssemblyAI、Deepgram、ElevenLabs、百炼、百度等 ASR 模型/参数选项
+- **思考模式参数修正**：Kimi K2.7 不再发送禁用思考参数，智谱 GLM 新模型改用 `thinking: disabled`
+
 ## v1.9.8 — 提前润色请求节流与复用优化 (2026-06-19)
 
 ### 改进

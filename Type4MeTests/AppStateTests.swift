@@ -121,6 +121,30 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.segments.first?.isConfirmed == true)
     }
 
+    func testSetLiveTranscriptDropsStalePartialUpdates() {
+        let appState = AppState()
+        appState.setLiveTranscript(
+            RecognitionTranscript(
+                confirmedSegments: ["new"],
+                partialText: "",
+                authoritativeText: "new",
+                isFinal: false
+            )
+        )
+
+        appState.setLiveTranscript(
+            RecognitionTranscript(
+                confirmedSegments: ["old"],
+                partialText: "",
+                authoritativeText: "old",
+                isFinal: false,
+                emitTime: ContinuousClock.now - .seconds(1)
+            )
+        )
+
+        XCTAssertEqual(appState.transcriptionText, "new")
+    }
+
     func testFinalizeShowsClipboardFallbackMessage() {
         let appState = AppState()
         appState.barPhase = .processing

@@ -732,6 +732,7 @@ final class AudioLevelMeter: @unchecked Sendable {
 @Observable
 @MainActor
 final class AppState {
+    private static let stalePartialTranscriptThresholdMs = 500
 
     // MARK: Floating Bar
 
@@ -834,6 +835,12 @@ final class AppState {
         let latencyMs = Int(pipelineLatency.components.seconds * 1000 + pipelineLatency.components.attoseconds / 1_000_000_000_000_000)
         if latencyMs > 50 {
             DebugFileLogger.log("⚠️ pipeline latency \(latencyMs)ms (ASR emit → UI setLiveTranscript)")
+        }
+        if latencyMs > Self.stalePartialTranscriptThresholdMs,
+           !transcript.isFinal,
+           !segments.isEmpty {
+            DebugFileLogger.log("dropping stale partial transcript latency=\(latencyMs)ms")
+            return
         }
 
         if transcript.isFinal,

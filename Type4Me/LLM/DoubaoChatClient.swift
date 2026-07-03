@@ -60,7 +60,7 @@ actor DoubaoChatClient: LLMClient {
             }
             return obj as? Bool ?? true
         }()
-        let disableField = disableThinking ? provider.thinkingDisableField : nil
+        let disableField = disableThinking ? provider.thinkingDisableField(for: config.model) : nil
         let body = ChatRequest(
             model: config.model,
             messages: [ChatMessage(role: "user", content: finalPrompt)],

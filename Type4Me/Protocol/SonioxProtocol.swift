@@ -39,6 +39,7 @@ enum SonioxProtocol {
 
     private static let endpoint = "wss://stt-rt.soniox.com/transcribe-websocket"
     private static let ignoredMarkerTokens: Set<String> = ["<end>", "<fin>"]
+    private static let maxEndpointDelayMs = 2000
 
     static func buildWebSocketURL(override: String? = nil) throws -> URL {
         let urlString = override ?? endpoint
@@ -59,7 +60,7 @@ enum SonioxProtocol {
             "sample_rate": 16000,
             "num_channels": 1,
             "enable_endpoint_detection": true,
-            "max_endpoint_delay_ms": 10000,
+            "max_endpoint_delay_ms": maxEndpointDelayMs,
             "language_hints": ["zh", "en"],
             "language_hints_strict": true,
         ]

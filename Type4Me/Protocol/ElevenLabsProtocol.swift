@@ -40,7 +40,7 @@ enum ElevenLabsProtocol {
             throw ElevenLabsProtocolError.invalidEndpoint
         }
         var queryItems = [
-            URLQueryItem(name: "model_id", value: "scribe_v2_realtime"),
+            URLQueryItem(name: "model_id", value: config.model),
             URLQueryItem(name: "audio_format", value: "pcm_16000"),
             URLQueryItem(name: "no_verbatim", value: "true"),
         ]

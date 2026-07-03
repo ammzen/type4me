@@ -30,6 +30,7 @@ struct ModeBinding {
     private static let mouseKeyCodeBase = 0x8000
     private static let mediaKeyCodeBase = 0x9000
     static let modifierKeyCodes: Set<Int> = [54, 55, 56, 58, 59, 60, 61, 62, 63]
+    static let functionKeyCodes: Set<Int> = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80, 90]
     static let standardModifierMask: CGEventFlags = [
         .maskCommand,
         .maskShift,
@@ -68,6 +69,10 @@ struct ModeBinding {
         modifierKeyCodes.contains(keyCode)
     }
 
+    static func isFunctionKeyCode(_ keyCode: Int) -> Bool {
+        functionKeyCodes.contains(keyCode)
+    }
+
     static func modifierEventFlag(for keyCode: Int) -> CGEventFlags? {
         switch keyCode {
         case 54, 55: return .maskCommand
@@ -79,8 +84,29 @@ struct ModeBinding {
         }
     }
 
-    static func normalizedModifierFlags(_ flags: CGEventFlags) -> CGEventFlags {
-        flags.intersection(standardModifierMask)
+    static func normalizedModifierFlags(_ flags: CGEventFlags, forKeyCode keyCode: Int? = nil) -> CGEventFlags {
+        var normalized = flags.intersection(standardModifierMask)
+        // macOS reports the Fn/function modifier on F-key events themselves.
+        // Treat that as part of the F-key, not as an extra hotkey modifier.
+        if let keyCode, isFunctionKeyCode(keyCode) {
+            normalized.remove(.maskSecondaryFn)
+        }
+        return normalized
+    }
+
+    static func hotkeysAreEquivalent(
+        keyCode: Int,
+        modifiers: UInt64?,
+        otherKeyCode: Int,
+        otherModifiers: UInt64?
+    ) -> Bool {
+        guard keyCode == otherKeyCode else { return false }
+        if isMouseKeyCode(keyCode) || isMediaKeyCode(keyCode) {
+            return true
+        }
+        let flags = normalizedModifierFlags(CGEventFlags(rawValue: modifiers ?? 0), forKeyCode: keyCode)
+        let otherFlags = normalizedModifierFlags(CGEventFlags(rawValue: otherModifiers ?? 0), forKeyCode: otherKeyCode)
+        return flags == otherFlags
     }
 
     static func fullModifierFlags(keyCode: Int, modifiers: UInt64?) -> CGEventFlags? {
@@ -134,7 +160,7 @@ struct ModeBinding {
               !isMediaKeyCode(keyCode),
               !isModifierKeyCode(keyCode)
         else { return nil }
-        let flags = normalizedModifierFlags(CGEventFlags(rawValue: modifiers ?? 0))
+        let flags = normalizedModifierFlags(CGEventFlags(rawValue: modifiers ?? 0), forKeyCode: keyCode)
         return flags.isEmpty ? nil : flags
     }
 }
@@ -487,8 +513,8 @@ final class HotkeyManager: NSObject {
                 continue
             } else {
                 // Regular keys: check modifier flags match
-                let requiredMods = normalizedModifierFlags(binding.modifiers)
-                let currentMods = normalizedModifierFlags(event.flags)
+                let requiredMods = normalizedModifierFlags(binding.modifiers, forKeyCode: Int(binding.keyCode))
+                let currentMods = normalizedModifierFlags(event.flags, forKeyCode: Int(keyCode))
                 guard currentMods == requiredMods else { continue }
 
                 switch binding.style {
@@ -728,8 +754,8 @@ final class HotkeyManager: NSObject {
         ModeBinding.isModifierKeyCode(Int(keyCode))
     }
 
-    private func normalizedModifierFlags(_ flags: CGEventFlags) -> CGEventFlags {
-        ModeBinding.normalizedModifierFlags(flags)
+    private func normalizedModifierFlags(_ flags: CGEventFlags, forKeyCode keyCode: Int? = nil) -> CGEventFlags {
+        ModeBinding.normalizedModifierFlags(flags, forKeyCode: keyCode)
     }
 
     private func modifierEventFlag(for keyCode: CGKeyCode) -> CGEventFlags? {

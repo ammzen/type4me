@@ -4,11 +4,12 @@ struct AssemblyAIASRConfig: ASRProviderConfig, Sendable {
 
     static let provider = ASRProvider.assemblyai
     static let displayName = "AssemblyAI"
-    static let defaultModel = "universal-streaming-multilingual"
+    static let defaultModel = "universal-3-5-pro"
     static let supportedModels = [
+        "universal-3-5-pro",
+        "u3-rt-pro",
         "universal-streaming-multilingual",
         "universal-streaming-english",
-        "u3-rt-pro",
     ]
 
     static var credentialFields: [CredentialField] {[
