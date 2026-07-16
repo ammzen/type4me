@@ -16,6 +16,7 @@ struct GitHubIssueResult: Equatable, Sendable {
 
 actor GitHubIssueReporter {
     static let shared = GitHubIssueReporter()
+    static let issueWriteScope = "public_repo"
 
     private let session: URLSession
 
@@ -25,6 +26,10 @@ actor GitHubIssueReporter {
 
     func isConnected() -> Bool {
         guard let credential = GitHubTokenStore.load() else { return false }
+        guard Self.hasIssueWriteScope(credential.scopes ?? []) else {
+            GitHubTokenStore.delete()
+            return false
+        }
         if let refreshExpiresAt = credential.refreshExpiresAt,
            refreshExpiresAt <= Date(),
            credential.accessExpiresAt?.timeIntervalSinceNow ?? 1 <= 0 {
@@ -39,7 +44,7 @@ actor GitHubIssueReporter {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = formBody(["client_id": GitHubConfiguration.clientID])
+        request.httpBody = formBody(Self.deviceAuthorizationFields())
 
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
@@ -76,7 +81,15 @@ actor GitHubIssueReporter {
             try validate(response: response, data: data)
             let payload = try JSONDecoder().decode(TokenResponse.self, from: data)
             if let token = payload.accessToken {
-                try GitHubTokenStore.save(payload.credential(accessToken: token))
+                let credential = payload.credential(
+                    accessToken: token,
+                    fallbackScopes: [Self.issueWriteScope]
+                )
+                guard Self.hasIssueWriteScope(credential.scopes ?? []) else {
+                    GitHubTokenStore.delete()
+                    throw GitHubReporterError.insufficientScope
+                }
+                try GitHubTokenStore.save(credential)
                 return
             }
             switch payload.error {
@@ -116,9 +129,16 @@ actor GitHubIssueReporter {
         guard let http = response as? HTTPURLResponse else {
             throw GitHubReporterError.invalidResponse
         }
-        if http.statusCode == 401 || http.statusCode == 403 {
+        if http.statusCode == 401 {
             GitHubTokenStore.delete()
             throw GitHubReporterError.authorizationRevoked
+        }
+        if http.statusCode == 403 {
+            let scopeHeader = http.value(forHTTPHeaderField: "X-OAuth-Scopes")
+            if scopeHeader != nil, !Self.hasIssueWriteScope(Self.parseScopes(scopeHeader)) {
+                GitHubTokenStore.delete()
+                throw GitHubReporterError.insufficientScope
+            }
         }
         try validate(response: response, data: data, expectedStatus: 201)
         let payload = try JSONDecoder().decode(CreateIssueResponse.self, from: data)
@@ -135,6 +155,10 @@ actor GitHubIssueReporter {
     private func validAccessToken() async throws -> String {
         guard let credential = GitHubTokenStore.load() else {
             throw GitHubReporterError.notConnected
+        }
+        guard Self.hasIssueWriteScope(credential.scopes ?? []) else {
+            GitHubTokenStore.delete()
+            throw GitHubReporterError.insufficientScope
         }
         guard let expiresAt = credential.accessExpiresAt else {
             return credential.accessToken
@@ -165,13 +189,40 @@ actor GitHubIssueReporter {
             guard let accessToken = payload.accessToken else {
                 throw GitHubReporterError.invalidResponse
             }
-            let refreshed = payload.credential(accessToken: accessToken)
+            let refreshed = payload.credential(
+                accessToken: accessToken,
+                fallbackScopes: credential.scopes ?? []
+            )
+            guard Self.hasIssueWriteScope(refreshed.scopes ?? []) else {
+                throw GitHubReporterError.insufficientScope
+            }
             try GitHubTokenStore.save(refreshed)
             return refreshed.accessToken
+        } catch GitHubReporterError.insufficientScope {
+            GitHubTokenStore.delete()
+            throw GitHubReporterError.insufficientScope
         } catch {
             GitHubTokenStore.delete()
             throw GitHubReporterError.authorizationRevoked
         }
+    }
+
+    nonisolated static func deviceAuthorizationFields() -> [String: String] {
+        [
+            "client_id": GitHubConfiguration.clientID,
+            "scope": issueWriteScope,
+        ]
+    }
+
+    nonisolated static func parseScopes(_ value: String?) -> [String] {
+        guard let value else { return [] }
+        return value
+            .split(whereSeparator: { $0 == "," || $0.isWhitespace })
+            .map(String.init)
+    }
+
+    nonisolated static func hasIssueWriteScope(_ scopes: [String]) -> Bool {
+        scopes.contains(issueWriteScope) || scopes.contains("repo")
     }
 
     private func formBody(_ fields: [String: String]) -> Data? {
@@ -205,6 +256,7 @@ private struct StoredGitHubCredential: Codable {
     let accessExpiresAt: Date?
     let refreshToken: String?
     let refreshExpiresAt: Date?
+    let scopes: [String]?
 }
 
 private enum GitHubTokenStore {
@@ -277,6 +329,7 @@ private struct TokenResponse: Decodable {
     let expiresIn: Int?
     let refreshToken: String?
     let refreshTokenExpiresIn: Int?
+    let scope: String?
     let error: String?
     let errorDescription: String?
 
@@ -285,16 +338,23 @@ private struct TokenResponse: Decodable {
         case expiresIn = "expires_in"
         case refreshToken = "refresh_token"
         case refreshTokenExpiresIn = "refresh_token_expires_in"
+        case scope
         case error
         case errorDescription = "error_description"
     }
 
-    func credential(accessToken: String, now: Date = Date()) -> StoredGitHubCredential {
-        StoredGitHubCredential(
+    func credential(
+        accessToken: String,
+        now: Date = Date(),
+        fallbackScopes: [String] = []
+    ) -> StoredGitHubCredential {
+        let scopes = GitHubIssueReporter.parseScopes(scope)
+        return StoredGitHubCredential(
             accessToken: accessToken,
             accessExpiresAt: expiresIn.map { now.addingTimeInterval(TimeInterval($0)) },
             refreshToken: refreshToken,
-            refreshExpiresAt: refreshTokenExpiresIn.map { now.addingTimeInterval(TimeInterval($0)) }
+            refreshExpiresAt: refreshTokenExpiresIn.map { now.addingTimeInterval(TimeInterval($0)) },
+            scopes: scopes.isEmpty ? fallbackScopes : scopes
         )
     }
 }
@@ -324,6 +384,7 @@ enum GitHubReporterError: LocalizedError {
     case accessDenied
     case authorizationExpired
     case authorizationRevoked
+    case insufficientScope
     case invalidResponse
     case keychainFailure(OSStatus)
     case github(String)
@@ -334,6 +395,11 @@ enum GitHubReporterError: LocalizedError {
         case .accessDenied: return L("GitHub 授权已取消", "GitHub authorization was cancelled")
         case .authorizationExpired: return L("GitHub 授权码已过期，请重试", "GitHub authorization expired; try again")
         case .authorizationRevoked: return L("GitHub 授权已失效，请重新连接", "GitHub authorization expired; reconnect")
+        case .insufficientScope:
+            return L(
+                "GitHub 授权缺少提交 Issue 的权限，请重新授权",
+                "GitHub authorization cannot create issues; authorize again"
+            )
         case .invalidResponse: return L("GitHub 返回了无法识别的数据", "GitHub returned an invalid response")
         case .keychainFailure(let status):
             return L("无法把 GitHub token 保存到钥匙串（\(status)）", "Could not save the GitHub token in Keychain (\(status))")

@@ -4,7 +4,6 @@ import SwiftUI
 struct IssueReportSheet: View {
     @Environment(\.dismiss) private var dismiss
 
-    @State private var issueTitle = ""
     @State private var problemDescription = ""
     @State private var includeLogs = true
     @State private var reportStatus: ReportStatus?
@@ -48,18 +47,7 @@ struct IssueReportSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 7) {
-                Text(L("问题标题（可选）", "Issue title (optional)"))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(TF.settingsText)
-                TextField(
-                    L("例如：蓝牙耳机录音结束后没有恢复音乐音质", "Example: Bluetooth audio does not recover after recording"),
-                    text: $issueTitle
-                )
-                .textFieldStyle(.roundedBorder)
-            }
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text(L("问题描述", "Problem description"))
+                Text(L("问题描述（必填）", "Problem description (required)"))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(TF.settingsText)
                 TextEditor(text: $problemDescription)
@@ -168,7 +156,7 @@ struct IssueReportSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 640, height: githubAuthorization == nil ? 535 : 610)
+        .frame(width: 640, height: githubAuthorization == nil ? 475 : 550)
         .background(TF.settingsBg)
         .task {
             isGitHubConnected = await githubReporter.isConnected()
@@ -183,7 +171,7 @@ struct IssueReportSheet: View {
             ? DebugFileLogger.reportContents(maxCharacters: IssueReportService.maximumReportLogCharacters)
             : ""
         let title = IssueReportService.suggestedTitle(
-            customTitle: issueTitle,
+            customTitle: "",
             description: problemDescription
         )
         let report = IssueReportService.fullReport(
@@ -293,13 +281,17 @@ struct IssueReportSheet: View {
                 githubAuthorization = nil
                 if case GitHubReporterError.authorizationRevoked = error {
                     isGitHubConnected = false
+                } else if case GitHubReporterError.insufficientScope = error {
+                    isGitHubConnected = false
                 }
                 reportStatus = ReportStatus(
                     message: L("提交失败：\(error.localizedDescription)", "Submission failed: \(error.localizedDescription)"),
                     isError: true
                 )
                 let nsError = error as NSError
-                DebugFileLogger.log("issue reporter: submit failed domain=\(nsError.domain) code=\(nsError.code)")
+                DebugFileLogger.log(
+                    "issue reporter: submit failed domain=\(nsError.domain) code=\(nsError.code) message=\(error.localizedDescription)"
+                )
             }
         }
     }
