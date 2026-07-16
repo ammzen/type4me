@@ -8,8 +8,13 @@ struct IssueReportSheet: View {
     @State private var problemDescription = ""
     @State private var includeLogs = true
     @State private var reportStatus: ReportStatus?
+    @State private var isGitHubConnected = false
+    @State private var isSubmitting = false
+    @State private var githubAuthorization: GitHubDeviceAuthorization?
+    @State private var authorizationTask: Task<Void, Never>?
 
     private let environment = IssueReportEnvironment.current
+    private let githubReporter = GitHubIssueReporter.shared
 
     private var canCreateReport: Bool {
         !problemDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -23,8 +28,8 @@ struct IssueReportSheet: View {
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundStyle(TF.settingsText)
                     Text(L(
-                        "填写问题后，可打开预填好的 GitHub Issue，或复制完整诊断报告。",
-                        "Describe the problem, then open a prefilled GitHub issue or copy the full diagnostic report."
+                        "填写问题后可直接创建 GitHub Issue；首次提交需要授权 GitHub。",
+                        "Describe the problem and create a GitHub issue directly. GitHub authorization is required the first time."
                     ))
                     .font(.system(size: 12))
                     .foregroundStyle(TF.settingsTextSecondary)
@@ -101,6 +106,27 @@ struct IssueReportSheet: View {
                     .foregroundStyle(reportStatus.isError ? .orange : .green)
             }
 
+            if let authorization = githubAuthorization {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(L("GitHub 设备授权码", "GitHub device code"))
+                            .font(.system(size: 10))
+                            .foregroundStyle(TF.settingsTextTertiary)
+                        Text(authorization.userCode)
+                            .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                            .textSelection(.enabled)
+                            .foregroundStyle(TF.settingsText)
+                    }
+                    Spacer()
+                    Button(L("复制并打开授权页", "Copy & Open Authorization")) {
+                        openAuthorizationPage(authorization)
+                    }
+                }
+                .padding(10)
+                .background(TF.settingsCardAlt)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+
             HStack(spacing: 10) {
                 Button(L("取消", "Cancel")) {
                     dismiss()
@@ -116,17 +142,40 @@ struct IssueReportSheet: View {
                 .disabled(!canCreateReport)
 
                 Button {
-                    openGitHubIssue()
+                    openGitHubIssueInBrowser()
                 } label: {
-                    Label(L("打开 GitHub 提交", "Open GitHub Issue"), systemImage: "arrow.up.right.square")
+                    Label(L("浏览器提交", "Submit in Browser"), systemImage: "arrow.up.right.square")
+                }
+                .disabled(!canCreateReport || isSubmitting)
+
+                Button {
+                    submitIssue()
+                } label: {
+                    if isSubmitting {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label(
+                            isGitHubConnected
+                                ? L("直接提交", "Submit Directly")
+                                : L("连接 GitHub 并提交", "Connect GitHub & Submit"),
+                            systemImage: "paperplane.fill"
+                        )
+                    }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!canCreateReport)
+                .disabled(!canCreateReport || isSubmitting)
             }
         }
         .padding(24)
-        .frame(width: 590, height: 520)
+        .frame(width: 640, height: githubAuthorization == nil ? 535 : 610)
         .background(TF.settingsBg)
+        .task {
+            isGitHubConnected = await githubReporter.isConnected()
+        }
+        .onDisappear {
+            authorizationTask?.cancel()
+        }
     }
 
     private func reportInputs() -> (title: String, log: String, report: String) {
@@ -156,7 +205,7 @@ struct IssueReportSheet: View {
         DebugFileLogger.log("issue reporter: full report copied")
     }
 
-    private func openGitHubIssue() {
+    private func openGitHubIssueInBrowser() {
         let inputs = reportInputs()
         copyToPasteboard(inputs.report)
 
@@ -186,6 +235,78 @@ struct IssueReportSheet: View {
                 isError: true
             )
         }
+    }
+
+    private func submitIssue() {
+        guard canCreateReport, authorizationTask == nil else { return }
+        isSubmitting = true
+        reportStatus = ReportStatus(
+            message: isGitHubConnected
+                ? L("正在创建 GitHub Issue…", "Creating GitHub issue…")
+                : L("正在连接 GitHub…", "Connecting GitHub…"),
+            isError: false
+        )
+
+        authorizationTask = Task { @MainActor in
+            defer {
+                isSubmitting = false
+                authorizationTask = nil
+            }
+
+            do {
+                if !isGitHubConnected {
+                    let authorization = try await githubReporter.beginAuthorization()
+                    githubAuthorization = authorization
+                    copyToPasteboard(authorization.userCode)
+                    NSWorkspace.shared.open(authorization.verificationURL)
+                    reportStatus = ReportStatus(
+                        message: L(
+                            "请在 GitHub 输入授权码，授权完成后会自动提交。",
+                            "Enter the code on GitHub; the report will submit automatically after authorization."
+                        ),
+                        isError: false
+                    )
+                    try await githubReporter.finishAuthorization(authorization)
+                    isGitHubConnected = true
+                    githubAuthorization = nil
+                    DebugFileLogger.log("issue reporter: GitHub connected")
+                }
+
+                let inputs = reportInputs()
+                let issue = try await githubReporter.createIssue(
+                    title: inputs.title,
+                    body: inputs.report
+                )
+                reportStatus = ReportStatus(
+                    message: L("Issue #\(issue.number) 已创建", "Issue #\(issue.number) created"),
+                    isError: false
+                )
+                DebugFileLogger.log("issue reporter: issue created number=\(issue.number)")
+                NSWorkspace.shared.open(issue.url)
+            } catch is CancellationError {
+                githubAuthorization = nil
+                reportStatus = ReportStatus(
+                    message: L("GitHub 提交已取消", "GitHub submission cancelled"),
+                    isError: true
+                )
+            } catch {
+                githubAuthorization = nil
+                if case GitHubReporterError.authorizationRevoked = error {
+                    isGitHubConnected = false
+                }
+                reportStatus = ReportStatus(
+                    message: L("提交失败：\(error.localizedDescription)", "Submission failed: \(error.localizedDescription)"),
+                    isError: true
+                )
+                let nsError = error as NSError
+                DebugFileLogger.log("issue reporter: submit failed domain=\(nsError.domain) code=\(nsError.code)")
+            }
+        }
+    }
+
+    private func openAuthorizationPage(_ authorization: GitHubDeviceAuthorization) {
+        copyToPasteboard(authorization.userCode)
+        NSWorkspace.shared.open(authorization.verificationURL)
     }
 
     private func copyToPasteboard(_ text: String) {
