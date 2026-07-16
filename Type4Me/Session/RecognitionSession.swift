@@ -71,11 +71,7 @@ actor RecognitionSession {
         #if HAS_CLOUD_SUBSCRIPTION
         if isCloudMode { return CloudLLMClient() }
         #endif
-        let provider = KeychainService.selectedLLMProvider
-        if provider == .claude {
-            return ClaudeChatClient()
-        }
-        return DoubaoChatClient(provider: provider)
+        return LLMClientFactory.make(for: KeychainService.selectedLLMProvider)
     }
 
     /// Load LLM credentials from KeychainService.
@@ -1357,10 +1353,12 @@ actor RecognitionSession {
     // MARK: - Speculative LLM
 
     private var isSpeculativeLLMEnabled: Bool {
+        let provider = KeychainService.selectedLLMProvider
+        guard provider.supportsSpeculativeProcessing else { return false }
         if let override = UserDefaults.standard.object(forKey: "tf_enableSpeculativeLLM") as? Bool {
             return override
         }
-        return !KeychainService.selectedLLMProvider.isLocal
+        return true
     }
 
     /// Debounce: after each transcript update, wait 800ms of silence before
