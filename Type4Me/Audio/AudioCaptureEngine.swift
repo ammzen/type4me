@@ -97,8 +97,6 @@ final class AudioCaptureEngine: NSObject, @unchecked Sendable, AVCaptureAudioDat
     // MARK: - Warm-up
 
     private var isWarmedUp = false
-    private var warmSession: AVCaptureSession?
-
     override init() {
         super.init()
         outputQueue.setSpecific(key: outputQueueKey, value: outputQueueTag)
@@ -112,25 +110,13 @@ final class AudioCaptureEngine: NSObject, @unchecked Sendable, AVCaptureAudioDat
             return
         }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self else { return }
-            do {
-                guard let device = self.resolveDevice() else { return }
-                let session = AVCaptureSession()
-                let input = try AVCaptureDeviceInput(device: device)
-                guard session.canAddInput(input) else { return }
-                session.addInput(input)
-                let output = AVCaptureAudioDataOutput()
-                guard session.canAddOutput(output) else { return }
-                session.addOutput(output)
-                session.startRunning()
-                // Keep it alive briefly to fully initialize CoreAudio, then stop
-                Thread.sleep(forTimeInterval: 0.3)
-                session.stopRunning()
-                self.isWarmedUp = true
-                NSLog("[Audio] Warm-up complete (device: %@)", device.localizedName)
-            } catch {
-                NSLog("[Audio] Warm-up failed: %@", String(describing: error))
-            }
+            // Loading AVAudioEngine and its input node primes the framework without
+            // opening the microphone. Starting a warm-up capture here would push a
+            // Bluetooth headset into call mode while the app is merely launching.
+            let engine = AVAudioEngine()
+            _ = engine.inputNode
+            self?.isWarmedUp = true
+            NSLog("[Audio] Warm-up complete (AVAudioEngine graph initialized)")
         }
     }
 
@@ -179,26 +165,52 @@ final class AudioCaptureEngine: NSObject, @unchecked Sendable, AVCaptureAudioDat
         captureSession = session
         isWarmedUp = true
         NSLog("[Audio] Capture session started (AVCapture), device: %@", device.localizedName)
+        DebugFileLogger.log("audio capture started device=\(device.localizedName)")
     }
 
     func stop() {
-        captureSession?.stopRunning()
+        guard let session = captureSession else {
+            clearCaptureState()
+            return
+        }
+
+        session.stopRunning()
         drainOutputQueue()
+
         let output = stateLock.withLock { () -> AVCaptureAudioDataOutput? in
             let current = activeOutput
             activeOutput = nil
             return current
         }
         output?.setSampleBufferDelegate(nil, queue: nil)
+
+        // stopRunning() stops delivery, but explicitly detaching every graph node
+        // releases the AVCaptureDeviceInput immediately. This is important for a
+        // Bluetooth headset: CoreAudio can leave the HFP input route alive while
+        // a stopped session still owns its device input.
+        session.beginConfiguration()
+        for captureOutput in session.outputs {
+            session.removeOutput(captureOutput)
+        }
+        for captureInput in session.inputs {
+            session.removeInput(captureInput)
+        }
+        session.commitConfiguration()
         captureSession = nil
+
         flushRemaining()
+        clearCaptureState()
+        NSLog("[Audio] Capture session stopped and graph detached")
+        DebugFileLogger.log("audio capture stopped; AVCapture graph detached")
+    }
+
+    private func clearCaptureState() {
         bufferLock.lock()
         converter = nil
         onAudioChunk = nil
         onAudioLevel = nil
         bufferLock.unlock()
         levelCounter = 0
-        NSLog("[Audio] Capture session stopped")
     }
 
     // MARK: - AVCaptureAudioDataOutputSampleBufferDelegate
@@ -234,6 +246,9 @@ final class AudioCaptureEngine: NSObject, @unchecked Sendable, AVCaptureAudioDat
             }
             converter = AVAudioConverter(from: sourceFormat, to: Self.targetFormat)
             NSLog("[Audio] Input format: %@", sourceFormat.description)
+            DebugFileLogger.log(
+                "audio input format rate=\(sourceFormat.sampleRate) channels=\(sourceFormat.channelCount) interleaved=\(sourceFormat.isInterleaved)"
+            )
         }
         guard let conv = converter else {
             bufferLock.unlock()
