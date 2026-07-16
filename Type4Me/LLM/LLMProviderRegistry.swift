@@ -14,6 +14,7 @@ enum LLMProviderRegistry {
         .deepseek:    OpenAICompatibleLLMConfig<DeepSeekLLMTag>.self,
         .zhipu:       OpenAICompatibleLLMConfig<ZhipuLLMTag>.self,
         .claude:      ClaudeLLMConfig.self,
+        .codexCLI:    CodexCLILLMConfig.self,
         .ollama:      OpenAICompatibleLLMConfig<OllamaLLMTag>.self,
         .custom:      OpenAICompatibleLLMConfig<CustomLLMTag>.self,
     ]

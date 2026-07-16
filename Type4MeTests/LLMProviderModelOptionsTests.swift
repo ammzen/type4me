@@ -40,6 +40,9 @@ final class LLMProviderModelOptionsTests: XCTestCase {
         XCTAssertEqual(LLMProvider.claude.optionValues.first, "claude-sonnet-5")
         XCTAssertTrue(LLMProvider.claude.optionValues.contains("claude-fable-5"))
         XCTAssertTrue(LLMProvider.claude.optionValues.contains("claude-opus-4-8"))
+
+        XCTAssertEqual(LLMProvider.codexCLI.optionValues.first, "gpt-5.6-luna")
+        XCTAssertTrue(LLMProvider.codexCLI.optionValues.contains("gpt-5.3-codex-spark"))
     }
 
     func testProviderModelOptionsHaveNoDuplicates() {

@@ -78,6 +78,11 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
             llmProviderPicker
             SettingsDivider()
 
+            if selectedLLMProvider == .codexCLI {
+                codexRuntimeNotice
+                SettingsDivider()
+            }
+
             if hasLLMCredentials && !isEditingLLM {
                 credentialSummaryCard(rows: llmSummaryRows)
             } else {
@@ -217,11 +222,31 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
             fetchedModelOptions = []
             loadLLMCredentialsForProvider(newProvider)
 
-            // Auto-save provider switch if target already has credentials
-            if hasLLMCredentials {
+            // Auto-switch only when the target already has a saved config.
+            // Defaults alone (notably Codex CLI's model) must not change the
+            // active provider until the user explicitly saves.
+            if hasStoredLLM && hasLLMCredentials {
                 KeychainService.selectedLLMProvider = newProvider
             }
         }
+    }
+
+    private var codexRuntimeNotice: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "terminal")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(TF.settingsTextSecondary)
+                .padding(.top, 1)
+            Text(L(
+                "使用本机 Codex CLI 和 ChatGPT 登录态，无需 API Key。文本仍会发送到 OpenAI，并消耗 Codex 账号额度。",
+                "Uses the local Codex CLI and ChatGPT sign-in with no API key. Text is still sent to OpenAI and uses Codex account quota."
+            ))
+            .font(.system(size: 11))
+            .foregroundStyle(TF.settingsTextSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
     }
 
     // MARK: - Credential Fields
@@ -256,7 +281,11 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
         }
 
         if let modelField {
-            rows.append([.credential(modelField), .thinkingMode])
+            if selectedLLMProvider == .codexCLI {
+                rows.append([.credential(modelField)])
+            } else {
+                rows.append([.credential(modelField), .thinkingMode])
+            }
         } else {
             rows.append([.thinkingMode])
         }
@@ -466,9 +495,7 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
                     return
                 }
                 let llmConfig = config.toLLMConfig()
-                let client: any LLMClient = provider == .claude
-                    ? ClaudeChatClient()
-                    : DoubaoChatClient(provider: provider)
+                let client = LLMClientFactory.make(for: provider)
                 let reply = try await client.process(text: "hi", prompt: "{text}", config: llmConfig)
                 guard !Task.isCancelled else { return }
                 llmTestStatus = .success
