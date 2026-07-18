@@ -1,6 +1,17 @@
 {
-  "latest": "1.9.9",
+  "latest": "2.0.0",
   "releases": [
+    {
+      "version": "2.0.0",
+      "date": "2026-07-17",
+      "notes": "- 新增 Codex CLI 本地账号运行时，无需配置 API Key，直接复用本机 Codex 登录态与额度\n- 默认使用 GPT-5.6 Luna，同时提供更快的 GPT-5.3 Codex Spark 实验选项\n- 设置页支持模型选择、连接测试和保存，并对本地 CLI 调用增加隔离、超时与结构化输出保护",
+      "cloud_dmg_url": "https://github.com/joewongjc/type4me-private/releases/download/v2.0.0/Type4Me-v2.0.0-cloud.dmg",
+      "cloud_dmg_size": 6163313,
+      "cloud_dmg_sha256": "622d2a9354566bf7466e1d085a2b36c6c7f5f057b0fd1622824caee478084c3f",
+      "local_dmg_url": "https://github.com/joewongjc/type4me-private/releases/download/v2.0.0/Type4Me-v2.0.0-local-apple-silicon.dmg",
+      "local_dmg_size": 705525787,
+      "local_dmg_sha256": "970cbd2f29af2ad289bbba5a5da67c1238b5666fc6a05d1563b4cb2051aafb1f"
+    },
     {
       "version": "1.9.9",
       "date": "2026-07-03",

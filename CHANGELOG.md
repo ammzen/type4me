@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.0.0 — Codex CLI 本地账号运行时 (2026-07-17)
+
+### 新功能
+- **Codex CLI 本地账号运行时**：无需配置 API Key，直接复用本机 Codex / ChatGPT 登录态与可用额度完成 LLM 后处理
+- **速度选项**：默认使用 GPT-5.6 Luna，同时提供更快的 GPT-5.3 Codex Spark 实验选项
+- **设置与连接测试**：模型设置页支持选择 Codex CLI、测试连接并保存模型配置
+
+### 稳定性与安全
+- Codex CLI 子进程使用隔离临时目录、只读 sandbox、结构化 JSON 输出及超时/取消机制
+- Codex CLI 模式关闭录音过程中的 speculative processing，避免中间稿反复启动本地进程
+
 ## v1.9.9 — Soniox v5、录音启动稳定性与模型列表更新 (2026-07-03)
 
 ### 改进与修复

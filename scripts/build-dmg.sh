@@ -3,12 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && /bin/pwd -P)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && /bin/pwd -P)"
-APP_VERSION="${APP_VERSION:-1.9.9}"
+APP_VERSION="${APP_VERSION:-2.0.0}"
 APP_FLAVOR="${APP_FLAVOR:-public}"  # public or personal
 VARIANT="${VARIANT:-pure}"          # pure, official, local, or cloud(alias pure)
 ARCH="${ARCH:-}"                    # arm64 or universal (default: universal for pure/official, arm64 for local)
 DIST_DIR="${DIST_DIR:-$PROJECT_DIR/dist}"
-NOTARY_PROFILE="${NOTARY_PROFILE:-type4me-notary}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-selectx-notary}"
 NOTARY_KEYCHAIN="${NOTARY_KEYCHAIN:-}"
 TIMESTAMP_URL="${TIMESTAMP_URL:-http://timestamp.apple.com/ts01}"
 SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
@@ -49,10 +49,13 @@ if [ -z "$ARCH" ]; then
     fi
 fi
 
+LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then
     SIGNING_IDENTITY="$CODESIGN_IDENTITY"
+elif [ -f "$LOGIN_KEYCHAIN" ] && security find-identity -v -p codesigning "$LOGIN_KEYCHAIN" 2>/dev/null | grep -q "Developer ID Application"; then
+    SIGNING_IDENTITY=$(security find-identity -v -p codesigning "$LOGIN_KEYCHAIN" 2>/dev/null | grep "Developer ID Application" | head -1 | awk '{print $2}')
 elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
-    SIGNING_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
+    SIGNING_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | awk '{print $2}')
 else
     SIGNING_IDENTITY="-"
 fi
@@ -61,6 +64,26 @@ if [ "$SKIP_NOTARIZE" != "1" ] && [ "$SIGNING_IDENTITY" = "-" ]; then
     echo "ERROR: Notarized DMG builds require a Developer ID Application identity."
     echo "       Set CODESIGN_IDENTITY or use SKIP_NOTARIZE=1 for local smoke tests."
     exit 1
+fi
+
+NOTARYTOOL_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+if [ -n "$NOTARY_KEYCHAIN" ]; then
+    NOTARYTOOL_AUTH+=(--keychain "$NOTARY_KEYCHAIN")
+fi
+
+if [ "$SKIP_NOTARIZE" != "1" ]; then
+    echo "Checking notarization profile '$NOTARY_PROFILE'..."
+    if ! xcrun notarytool history "${NOTARYTOOL_AUTH[@]}" >/dev/null 2>&1; then
+        echo "ERROR: Notarization profile '$NOTARY_PROFILE' is unavailable or invalid."
+        if [ -n "$NOTARY_KEYCHAIN" ]; then
+            echo "       Requested keychain: $NOTARY_KEYCHAIN"
+        else
+            echo "       Expected location: the current user's login keychain."
+        fi
+        echo "       Run: bash scripts/setup-notary-profile.sh"
+        echo "       The deployment keychain password is unrelated to Apple notarization credentials."
+        exit 1
+    fi
 fi
 
 APP_BUNDLE="${APP_NAME}.app"
@@ -198,11 +221,6 @@ fi
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 if [ "$SKIP_NOTARIZE" != "1" ] && [ "$SIGNING_IDENTITY" != "-" ]; then
-    NOTARYTOOL_AUTH=(--keychain-profile "$NOTARY_PROFILE")
-    if [ -n "$NOTARY_KEYCHAIN" ]; then
-        NOTARYTOOL_AUTH+=(--keychain "$NOTARY_KEYCHAIN")
-    fi
-
     echo "Submitting app for notarization..."
     ditto -c -k --keepParent "$APP" "$APP_ZIP"
     xcrun notarytool submit "$APP_ZIP" \
