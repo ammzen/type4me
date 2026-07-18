@@ -24,7 +24,7 @@ esac
 APP_PATH="${APP_PATH:-$PROJECT_DIR/dist/${APP_NAME}.app}"
 APP_EXECUTABLE="${APP_EXECUTABLE:-Type4Me}"
 APP_ICON_NAME="${APP_ICON_NAME:-AppIcon}"
-APP_VERSION="${APP_VERSION:-1.9.8}"
+APP_VERSION="${APP_VERSION:-1.9.9}"
 APP_BUILD="${APP_BUILD:-1}"
 MIN_SYSTEM_VERSION="${MIN_SYSTEM_VERSION:-14.0}"
 VARIANT="${VARIANT:-cloud}"    # cloud or local
@@ -277,6 +277,10 @@ fi
 
 # Copy third-party licenses
 cp "$PROJECT_DIR/Type4Me/Resources/THIRD_PARTY_LICENSES.txt" "$APP_PATH/Contents/Resources/" 2>/dev/null || true
+
+# CloudDocs/Finder can attach provenance or FinderInfo xattrs to copied resources.
+# Developer ID signing rejects those as resource-fork detritus, so scrub before signing.
+xattr -cr "$APP_PATH" 2>/dev/null || true
 
 # Sign the app bundle. Skip if already signed with the same identity to preserve
 # Keychain ACLs and Accessibility TCC records across rebuilds.

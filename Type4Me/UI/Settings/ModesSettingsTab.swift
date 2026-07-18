@@ -103,11 +103,16 @@ struct ModesSettingsTab: View {
                 target: target,
                 checkConflict: { code, mods in
                     guard let code else { return nil }
-                    let m = mods ?? 0
                     return modes.first { other in
-                        other.id != target.id &&
-                        other.hotkeyCode == code &&
-                        (other.hotkeyModifiers ?? 0) == m
+                        guard other.id != target.id,
+                              let otherCode = other.hotkeyCode
+                        else { return false }
+                        return ModeBinding.hotkeysAreEquivalent(
+                            keyCode: code,
+                            modifiers: mods,
+                            otherKeyCode: otherCode,
+                            otherModifiers: other.hotkeyModifiers
+                        )
                     }
                 },
                 checkPrefixConflict: { code, mods in
@@ -125,11 +130,16 @@ struct ModesSettingsTab: View {
                     }
                 },
                 onConfirm: { code, mods, style in
-                    let m = mods ?? 0
                     if let conflictIdx = modes.firstIndex(where: {
-                        $0.id != target.id &&
-                        $0.hotkeyCode == code &&
-                        ($0.hotkeyModifiers ?? 0) == m
+                        guard $0.id != target.id,
+                              let otherCode = $0.hotkeyCode
+                        else { return false }
+                        return ModeBinding.hotkeysAreEquivalent(
+                            keyCode: code,
+                            modifiers: mods,
+                            otherKeyCode: otherCode,
+                            otherModifiers: $0.hotkeyModifiers
+                        )
                     }) {
                         modes[conflictIdx].hotkeyCode = nil
                         modes[conflictIdx].hotkeyModifiers = nil
@@ -815,7 +825,7 @@ private struct HotkeyRecordingSheet: View {
                 }
 
                 capturedKeyCode = kc
-                let clean = sanitizedModifierFlags(event.modifierFlags)
+                let clean = sanitizedModifierFlags(event.modifierFlags, forKeyCode: kc)
                 capturedModifiers = clean.isEmpty ? 0 : UInt64(clean.rawValue)
                 isListening = false
                 removeMonitor()
@@ -851,8 +861,8 @@ private struct HotkeyRecordingSheet: View {
         removeMonitor()
     }
 
-    private func sanitizedModifierFlags(_ flags: NSEvent.ModifierFlags) -> NSEvent.ModifierFlags {
-        flags.intersection([.command, .shift, .option, .control, .function])
+    private func sanitizedModifierFlags(_ flags: NSEvent.ModifierFlags, forKeyCode keyCode: Int? = nil) -> NSEvent.ModifierFlags {
+        HotkeyRecorderView.sanitizedModifierFlags(flags, forKeyCode: keyCode)
     }
 
     private func modifierFlag(for keyCode: Int) -> NSEvent.ModifierFlags? {

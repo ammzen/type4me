@@ -1,6 +1,17 @@
 {
-  "latest": "1.9.8",
+  "latest": "1.9.9",
   "releases": [
+    {
+      "version": "1.9.9",
+      "date": "2026-07-03",
+      "notes": "- Soniox 默认升级到 stt-rt-v5，批量兜底升级到 stt-async-v5\n- 缩短 Soniox endpoint delay，并丢弃过期 partial，减少录音启动/收尾阶段转圈或旧文本回流\n- 修复 F1-F20 功能键被 macOS 附带 Fn 标记后，录制、冲突检测和触发不一致的问题\n- 刷新主流 LLM/ASR 厂商的模型列表，并修正 Kimi K2.7、智谱 GLM 新模型的思考模式参数",
+      "cloud_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v1.9.9/Type4Me-v1.9.9-cloud.dmg",
+      "cloud_dmg_size": 5919536,
+      "cloud_dmg_sha256": "fa40a0e26025f74a6b6fdf1fe61297458098f537128c8ea5a3516b98d53e4f0b",
+      "local_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v1.9.9/Type4Me-v1.9.9-local-apple-silicon.dmg",
+      "local_dmg_size": 713919031,
+      "local_dmg_sha256": "0814fbbc56d193e2f8790daf81e0247c755c69c8e7a494b47267b7582775a14b"
+    },
     {
       "version": "1.9.8",
       "date": "2026-06-19",

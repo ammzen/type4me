@@ -3,12 +3,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && /bin/pwd -P)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && /bin/pwd -P)"
-APP_VERSION="${APP_VERSION:-1.9.8}"
+APP_VERSION="${APP_VERSION:-1.9.9}"
 APP_FLAVOR="${APP_FLAVOR:-public}"  # public or personal
 VARIANT="${VARIANT:-pure}"          # pure, official, local, or cloud(alias pure)
 ARCH="${ARCH:-}"                    # arm64 or universal (default: universal for pure/official, arm64 for local)
 DIST_DIR="${DIST_DIR:-$PROJECT_DIR/dist}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-type4me-notary}"
+NOTARY_KEYCHAIN="${NOTARY_KEYCHAIN:-}"
 TIMESTAMP_URL="${TIMESTAMP_URL:-http://timestamp.apple.com/ts01}"
 SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
 KEEP_OUT_DIR="${KEEP_OUT_DIR:-0}"
@@ -132,6 +133,7 @@ app_flavor=$APP_FLAVOR
 variant=$VARIANT
 arch=$ARCH
 notary_profile=$NOTARY_PROFILE
+notary_keychain=$NOTARY_KEYCHAIN
 signing_identity=$SIGNING_IDENTITY
 INFO
 
@@ -196,10 +198,15 @@ fi
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 if [ "$SKIP_NOTARIZE" != "1" ] && [ "$SIGNING_IDENTITY" != "-" ]; then
+    NOTARYTOOL_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+    if [ -n "$NOTARY_KEYCHAIN" ]; then
+        NOTARYTOOL_AUTH+=(--keychain "$NOTARY_KEYCHAIN")
+    fi
+
     echo "Submitting app for notarization..."
     ditto -c -k --keepParent "$APP" "$APP_ZIP"
     xcrun notarytool submit "$APP_ZIP" \
-        --keychain-profile "$NOTARY_PROFILE" \
+        "${NOTARYTOOL_AUTH[@]}" \
         --wait --timeout 45m \
         --no-s3-acceleration \
         --output-format json | tee "$OUT_DIR/app-notary.json"
@@ -224,7 +231,7 @@ fi
 if [ "$SKIP_NOTARIZE" != "1" ] && [ "$SIGNING_IDENTITY" != "-" ]; then
     echo "Submitting DMG for notarization..."
     xcrun notarytool submit "$DMG_TMP" \
-        --keychain-profile "$NOTARY_PROFILE" \
+        "${NOTARYTOOL_AUTH[@]}" \
         --wait --timeout 45m \
         --no-s3-acceleration \
         --output-format json | tee "$OUT_DIR/dmg-notary.json"

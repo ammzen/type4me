@@ -169,7 +169,7 @@ enum SonioxAsyncClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         var config: [String: Any] = [
-            "model": "stt-async-v4",
+            "model": SonioxASRConfig.asyncModel,
             "file_id": fileId,
             "language_hints": ["zh", "en"],
             "language_hints_strict": true,

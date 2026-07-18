@@ -144,7 +144,7 @@ enum AssemblyAIProtocol {
     }
 
     private static func usesFormatTurns(model: String) -> Bool {
-        model != "u3-rt-pro"
+        model.hasPrefix("universal-streaming-")
     }
 
     private static func sanitizedKeyterms(from hotwords: [String]) -> [String] {

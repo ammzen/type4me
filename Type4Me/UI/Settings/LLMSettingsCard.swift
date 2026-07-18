@@ -55,6 +55,22 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
         )
     }
 
+    private var selectedLLMModel: String {
+        if let model = effectiveLLMValues["model"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !model.isEmpty {
+            return model
+        }
+        if let modelField = currentLLMFields.first(where: { $0.key == "model" }),
+           !modelField.defaultValue.isEmpty {
+            return modelField.defaultValue
+        }
+        return selectedLLMProvider.modelOptions.first?.value ?? ""
+    }
+
+    private var selectedThinkingDisableField: ThinkingDisableField? {
+        selectedLLMProvider.thinkingDisableField(for: selectedLLMModel)
+    }
+
     // MARK: Body
 
     var body: some View {
@@ -104,7 +120,7 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
     }
 
     private var thinkingToggleAvailable: Bool {
-        selectedLLMProvider.thinkingDisableField != nil
+        selectedThinkingDisableField != nil
     }
 
     private var thinkingModeBinding: Binding<String> {
@@ -135,16 +151,21 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
     }
 
     private var thinkingToggleDescription: String {
-        switch selectedLLMProvider {
-        case .doubao, .kimi, .deepseek:
+        if selectedLLMProvider == .kimi,
+           selectedLLMModel.lowercased().hasPrefix("kimi-k2.7-code") {
+            return L("K2.7 始终思考，不发送 thinking 参数", "K2.7 always thinks; no thinking parameter is sent")
+        }
+
+        switch selectedThinkingDisableField {
+        case .thinking:
             return L("发送 thinking: disabled", "Sends thinking: disabled")
-        case .bailian:
+        case .enableThinking:
             return L("发送 enable_thinking: false", "Sends enable_thinking: false")
-        case .zhipu:
+        case .reasoningEffort:
             return L("发送 reasoning_effort: none", "Sends reasoning_effort: none")
-        case .ollama:
+        case .think:
             return L("发送 think: false", "Sends think: false")
-        case .minimaxCN, .minimaxIntl:
+        case nil where selectedLLMProvider.needsReasoningSplit:
             return L("不支持关闭，已自动分离 reasoning 内容", "Cannot disable; reasoning is separated")
         default:
             return L("暂无可靠关闭参数，仅隐藏返回中的 <think>", "No reliable disable parameter; hides returned <think>")

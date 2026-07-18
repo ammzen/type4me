@@ -156,13 +156,13 @@ final class HistoryStoreTests: XCTestCase {
                 id: "soniox-now", createdAt: now.addingTimeInterval(-60), durationSeconds: 30,
                 rawText: "a", processingMode: nil, processedText: nil,
                 finalText: "a", status: "completed", characterCount: 1, asrProvider: "Soniox",
-                asrModel: "Soniox · stt-rt-v4"
+                asrModel: "Soniox · stt-rt-v5"
             ),
             HistoryRecord(
                 id: "soniox-week", createdAt: now.addingTimeInterval(-3 * 24 * 60 * 60), durationSeconds: 90,
                 rawText: "b", processingMode: nil, processedText: nil,
                 finalText: "b", status: "completed", characterCount: 1, asrProvider: "Soniox",
-                asrModel: "Soniox · stt-rt-v4"
+                asrModel: "Soniox · stt-rt-v5"
             ),
             HistoryRecord(
                 id: "openai-month", createdAt: now.addingTimeInterval(-10 * 24 * 60 * 60), durationSeconds: 120,
@@ -183,9 +183,9 @@ final class HistoryStoreTests: XCTestCase {
         let rows = await store.getUsageBreakdown(now: now)
         let byModel = Dictionary(uniqueKeysWithValues: rows.map { ($0.modelName, $0) })
 
-        XCTAssertEqual(byModel["Soniox · stt-rt-v4"]?.lastDayDuration ?? 0, 30, accuracy: 0.01)
-        XCTAssertEqual(byModel["Soniox · stt-rt-v4"]?.last7DaysDuration ?? 0, 120, accuracy: 0.01)
-        XCTAssertEqual(byModel["Soniox · stt-rt-v4"]?.last30DaysDuration ?? 0, 120, accuracy: 0.01)
+        XCTAssertEqual(byModel["Soniox · stt-rt-v5"]?.lastDayDuration ?? 0, 30, accuracy: 0.01)
+        XCTAssertEqual(byModel["Soniox · stt-rt-v5"]?.last7DaysDuration ?? 0, 120, accuracy: 0.01)
+        XCTAssertEqual(byModel["Soniox · stt-rt-v5"]?.last30DaysDuration ?? 0, 120, accuracy: 0.01)
         XCTAssertEqual(byModel["OpenAI"]?.lastDayDuration ?? 0, 0, accuracy: 0.01)
         XCTAssertEqual(byModel["OpenAI"]?.last7DaysDuration ?? 0, 0, accuracy: 0.01)
         XCTAssertEqual(byModel["OpenAI"]?.last30DaysDuration ?? 0, 120, accuracy: 0.01)
