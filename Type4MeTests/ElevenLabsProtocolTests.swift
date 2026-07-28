@@ -79,7 +79,7 @@ final class ElevenLabsProtocolTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(update.transcript.partialText, "This is a test,okay?")
+        XCTAssertEqual(update.transcript.partialText, "This is a test, okay?")
     }
 }
 

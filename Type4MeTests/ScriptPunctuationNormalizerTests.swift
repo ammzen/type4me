@@ -27,11 +27,25 @@ final class ScriptPunctuationNormalizerTests: XCTestCase {
         )
     }
 
-    func testNormalizeCJKPunctuationToLatin_convertsCommonMarks() {
+    func testNormalizeCJKPunctuationToLatin_convertsCommonMarksAndAddsSpacing() {
         let input = "Hello world。How are you？Great！"
         XCTAssertEqual(
             ScriptPunctuationNormalizer.normalizeCJKPunctuationToLatin(input),
-            "Hello world.How are you?Great!"
+            "Hello world. How are you? Great!"
+        )
+    }
+
+    func testNormalizeCJKPunctuationToLatin_addsSpaceAfterComma() {
+        XCTAssertEqual(
+            ScriptPunctuationNormalizer.normalizeCJKPunctuationToLatin("He can come to Vancouver,but need a good reason"),
+            "He can come to Vancouver, but need a good reason"
+        )
+    }
+
+    func testNormalizeCJKPunctuationToLatin_preservesDecimalPoint() {
+        XCTAssertEqual(
+            ScriptPunctuationNormalizer.normalizeCJKPunctuationToLatin("The value is 3.14 today"),
+            "The value is 3.14 today"
         )
     }
 
