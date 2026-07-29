@@ -89,6 +89,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                 (L("可用模型", "Models"), L("查看", "view"), URL(string: "https://help.aliyun.com/zh/model-studio/fun-asr-realtime-websocket-api")!),
                 ("API Key", L("获取", "get"), URL(string: "https://help.aliyun.com/zh/model-studio/get-api-key")!),
             ]
+        case .stepfunBatch:
+            return [
+                (L("接入文档", "Setup guide"), L("查看", "view"), URL(string: "https://platform.stepfun.com/docs/zh/api-reference/audio/asr-sse")!),
+                ("API Key", L("获取", "get"), URL(string: "https://platform.stepfun.com/interface-key")!),
+            ]
         default:
             return []
         }
@@ -108,6 +113,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         switch selectedASRProvider {
         case .deepgram:
             return L("受接口限制，热词仅取前 30 个", "Due to API limits, only the first 30 hotwords are used")
+        case .stepfunBatch:
+            return L(
+                "松开快捷键后提交完整录音；Step Plan 与标准按量付费需显式选择",
+                "The complete recording is submitted after you release the hotkey; explicitly choose Step Plan or standard pay-as-you-go"
+            )
         default:
             return nil
         }
@@ -142,6 +152,12 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                     }
                 }
                 .padding(.bottom, 4)
+            }
+            if let note = currentProviderNote {
+                Text(note)
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                    .padding(.bottom, 4)
             }
             SettingsDivider()
 

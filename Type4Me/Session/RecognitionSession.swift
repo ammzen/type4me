@@ -140,6 +140,8 @@ actor RecognitionSession {
         switch provider {
         case .volcano:
             return "https://openspeech.bytedance.com"
+        case .stepfunBatch:
+            return "https://api.stepfun.com"
         case .soniox:
             return "https://stt-rt.soniox.com"
         case .deepgram:
