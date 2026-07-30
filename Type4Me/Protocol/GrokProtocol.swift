@@ -243,19 +243,35 @@ enum GrokProtocol {
 
         var utterances = state.utterances
         let chunkText = state.currentChunks.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        let utteranceText = commitUtteranceFromChunks(trimmed, chunkText: chunkText)
 
         if let last = utterances.last,
-           shouldReviseUtterance(trimmed, previousUtterance: last, pendingChunks: chunkText) {
-            utterances[utterances.count - 1] = trimmed
-        } else if let last = utterances.last, isNearDuplicate(trimmed, of: last) {
+           shouldReviseUtterance(utteranceText, previousUtterance: last, pendingChunks: "") {
+            utterances[utterances.count - 1] = utteranceText
+        } else if let last = utterances.last, isNearDuplicate(utteranceText, of: last) {
             // duplicate echo — keep existing
         } else if utterances.isEmpty {
-            utterances = [trimmed]
+            utterances = [utteranceText]
         } else {
-            utterances.append(normalize(segment: trimmed, after: utterances.joined()))
+            utterances.append(normalize(segment: utteranceText, after: utterances.joined()))
         }
 
         return GrokTranscriptState(utterances: utterances, currentChunks: [])
+    }
+
+    /// Merge pending chunk finals with a `speech_final` clause. xAI sometimes finalizes only
+    /// the tail while earlier words remain in chunk finals.
+    private static func commitUtteranceFromChunks(_ trimmed: String, chunkText: String) -> String {
+        guard !chunkText.isEmpty else { return trimmed }
+
+        if trimmed.hasPrefix(chunkText) || isUtteranceRevision(trimmed, of: chunkText) {
+            return trimmed
+        }
+        if chunkText.hasPrefix(trimmed) || isNearDuplicate(trimmed, of: chunkText) {
+            return chunkText
+        }
+
+        return chunkText + normalize(segment: trimmed, after: chunkText)
     }
 
     private static func finalizeSessionDone(_ text: String, state: GrokTranscriptState) -> GrokTranscriptState {
@@ -281,6 +297,11 @@ enum GrokProtocol {
             if suffix.isEmpty || isNearDuplicate(suffix, of: joined) {
                 return GrokTranscriptState(utterances: [dedupeOverlappingPhrases(trimmed)], currentChunks: [])
             }
+        }
+
+        if trimmed.count < joined.count,
+           normalizedForDedup(joined).contains(normalizedForDedup(trimmed)) || joined.hasSuffix(trimmed) {
+            return GrokTranscriptState(utterances: [dedupeOverlappingPhrases(joined)], currentChunks: [])
         }
 
         if trimmed.count >= joined.count {

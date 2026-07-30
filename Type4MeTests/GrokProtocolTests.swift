@@ -212,6 +212,52 @@ final class GrokProtocolTests: XCTestCase {
         XCTAssertEqual(second.transcript.authoritativeText, "Sure, we can start from two weeks.")
     }
 
+    func testMakeTranscriptUpdate_speechFinalStitchesPendingChunks() throws {
+        var state = state(chunks: ["Those AU FDE are less busy than US FDE but they"])
+
+        let chunk2 = """
+        {"type": "transcript.partial", "text": "are also work on", "is_final": true, "speech_final": false}
+        """
+        state = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(chunk2.utf8),
+                state: state
+            )
+        ).state
+
+        let speechFinal = """
+        {"type": "transcript.partial", "text": "We are also work on multiple projects in the same time.", "is_final": true, "speech_final": true}
+        """
+        let update = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(speechFinal.utf8),
+                state: state,
+                isFinalCommit: true
+            )
+        )
+
+        XCTAssertTrue(update.transcript.authoritativeText.contains("Those AU FDE are less busy than US FDE"))
+        XCTAssertTrue(update.transcript.authoritativeText.contains("multiple projects in the same time"))
+    }
+
+    func testMakeTranscriptUpdate_transcriptDoneKeepsLongerAccumulatedText() throws {
+        let accumulated = """
+        Those AU FDE are less busy than US FDE but they are also work on multiple projects in the same time.
+        """
+        let message = """
+        {"type": "transcript.done", "text": "We are also work on multiple projects in the same time.", "duration": 8.0}
+        """
+        let update = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(message.utf8),
+                state: state(utterances: [accumulated]),
+                isFinalCommit: true
+            )
+        )
+
+        XCTAssertTrue(update.transcript.authoritativeText.contains("Those AU FDE are less busy than US FDE"))
+    }
+
     func testMakeTranscriptUpdate_transcriptDoneDedupesRepeatedTail() throws {
         let message = """
         {"type": "transcript.done", "text": "Thank you for the update and the follow-up. Thank you for the update and the follow up.", "duration": 3.2}
