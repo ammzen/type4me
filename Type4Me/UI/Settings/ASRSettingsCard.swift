@@ -80,6 +80,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             return [
                 ("API Key", L("获取", "get"), URL(string: "https://elevenlabs.io/app/settings/api-keys")!),
             ]
+        case .grok:
+            return [
+                ("API Key", L("获取", "get"), URL(string: "https://console.x.ai/team/default/api-keys")!),
+                (L("文档", "Docs"), L("查看", "view"), URL(string: "https://docs.x.ai/developers/model-capabilities/audio/speech-to-text")!),
+            ]
         case .soniox:
             return [
                 ("API Key", L("获取", "get"), URL(string: "https://console.soniox.com")!),
