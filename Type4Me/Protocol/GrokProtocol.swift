@@ -14,10 +14,28 @@ enum GrokProtocolError: Error, LocalizedError {
     }
 }
 
+/// Separates committed utterances from in-flight chunk finals within the current pause.
+struct GrokTranscriptState: Sendable, Equatable {
+    var utterances: [String]
+    var currentChunks: [String]
+
+    static let empty = GrokTranscriptState(utterances: [], currentChunks: [])
+
+    var confirmedSegments: [String] {
+        GrokProtocol.flattenSegments(utterances: utterances, currentChunks: currentChunks)
+    }
+
+    var joinedConfirmed: String {
+        confirmedSegments.joined()
+    }
+}
+
 struct GrokTranscriptUpdate: Sendable, Equatable {
     let transcript: RecognitionTranscript
-    let confirmedSegments: [String]
+    let state: GrokTranscriptState
     let serverReady: Bool
+
+    var confirmedSegments: [String] { state.confirmedSegments }
 }
 
 enum GrokProtocol {
@@ -80,7 +98,7 @@ enum GrokProtocol {
 
     static func makeTranscriptUpdate(
         from data: Data,
-        confirmedSegments: [String],
+        state: GrokTranscriptState,
         isFinalCommit: Bool = false
     ) throws -> GrokTranscriptUpdate? {
         guard data.first == UInt8(ascii: "{") else { return nil }
@@ -90,7 +108,7 @@ enum GrokProtocol {
         case "transcript.created":
             return GrokTranscriptUpdate(
                 transcript: .empty,
-                confirmedSegments: confirmedSegments,
+                state: state,
                 serverReady: true
             )
 
@@ -102,79 +120,80 @@ enum GrokProtocol {
             let speechFinal = message.speechFinal ?? false
 
             if !isFinal {
-                let confirmed = confirmedSegments.joined()
+                let confirmed = state.joinedConfirmed
                 let partialOnly = stripConfirmedPrefix(from: text, confirmed: confirmed)
                 guard !partialOnly.isEmpty else { return nil }
                 let normalized = normalize(segment: partialOnly, after: confirmed)
+                let segments = state.confirmedSegments
                 let transcript = RecognitionTranscript(
-                    confirmedSegments: confirmedSegments,
+                    confirmedSegments: segments,
                     partialText: normalized,
-                    authoritativeText: (confirmedSegments + [normalized]).joined(),
+                    authoritativeText: (segments + [normalized]).joined(),
                     isFinal: false
                 )
                 return GrokTranscriptUpdate(
                     transcript: transcript,
-                    confirmedSegments: confirmedSegments,
+                    state: state,
                     serverReady: false
                 )
             }
 
             if speechFinal {
-                let next = finalizeSpeechFinal(text, confirmedSegments: confirmedSegments)
+                let next = commitSpeechFinal(text, state: state)
                 let transcript = RecognitionTranscript(
-                    confirmedSegments: next,
+                    confirmedSegments: next.confirmedSegments,
                     partialText: "",
-                    authoritativeText: next.joined(),
+                    authoritativeText: next.joinedConfirmed,
                     isFinal: isFinalCommit
                 )
                 return GrokTranscriptUpdate(
                     transcript: transcript,
-                    confirmedSegments: next,
+                    state: next,
                     serverReady: false
                 )
             }
 
-            let next = appendChunk(text, to: confirmedSegments)
+            let next = appendChunk(text, to: state)
             let transcript = RecognitionTranscript(
-                confirmedSegments: next,
+                confirmedSegments: next.confirmedSegments,
                 partialText: "",
-                authoritativeText: next.joined(),
+                authoritativeText: next.joinedConfirmed,
                 isFinal: false
             )
             return GrokTranscriptUpdate(
                 transcript: transcript,
-                confirmedSegments: next,
+                state: next,
                 serverReady: false
             )
 
         case "transcript.done":
             let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if text.isEmpty {
-                let joined = confirmedSegments.joined()
+                let joined = state.joinedConfirmed
                 guard !joined.isEmpty else { return nil }
                 let transcript = RecognitionTranscript(
-                    confirmedSegments: confirmedSegments,
+                    confirmedSegments: state.confirmedSegments,
                     partialText: "",
                     authoritativeText: joined,
                     isFinal: isFinalCommit
                 )
                 return GrokTranscriptUpdate(
                     transcript: transcript,
-                    confirmedSegments: confirmedSegments,
+                    state: state,
                     serverReady: false
                 )
             }
 
-            let next = finalizeSessionDone(text, confirmedSegments: confirmedSegments)
+            let next = finalizeSessionDone(text, state: state)
             let transcript = RecognitionTranscript(
-                confirmedSegments: next,
+                confirmedSegments: next.confirmedSegments,
                 partialText: "",
-                authoritativeText: next.joined(),
+                authoritativeText: next.joinedConfirmed,
                 isFinal: isFinalCommit
             )
             return GrokTranscriptUpdate(
                 transcript: transcript,
-                confirmedSegments: next,
+                state: next,
                 serverReady: false
             )
 
@@ -186,100 +205,144 @@ enum GrokProtocol {
         }
     }
 
-    private static func jsonString(_ payload: [String: Any]) -> String {
-        (try? JSONSerialization.data(withJSONObject: payload))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    // MARK: - State transitions
+
+    fileprivate static func flattenSegments(utterances: [String], currentChunks: [String]) -> [String] {
+        if currentChunks.isEmpty { return utterances }
+        if utterances.isEmpty { return currentChunks }
+        var chunks = currentChunks
+        chunks[0] = normalize(segment: chunks[0], after: utterances.joined())
+        return utterances + chunks
     }
 
-    private static func appendChunk(_ chunk: String, to segments: [String]) -> [String] {
+    private static func appendChunk(_ chunk: String, to state: GrokTranscriptState) -> GrokTranscriptState {
         let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return segments }
-        let joined = segments.joined()
-        if joined.isEmpty { return [trimmed] }
-        if joined == trimmed || joined.hasSuffix(trimmed) { return segments }
-        if isNearDuplicate(trimmed, of: joined) { return segments }
-        return segments + [normalize(segment: trimmed, after: joined)]
+        guard !trimmed.isEmpty else { return state }
+
+        var chunks = state.currentChunks
+        let joined = chunks.joined()
+        if joined.isEmpty {
+            chunks = [trimmed]
+        } else if joined == trimmed || joined.hasSuffix(trimmed) {
+            // no-op
+        } else if isNearDuplicate(trimmed, of: joined) {
+            // no-op
+        } else {
+            chunks.append(normalize(segment: trimmed, after: state.utterances.joined() + joined))
+        }
+        return GrokTranscriptState(utterances: state.utterances, currentChunks: chunks)
     }
 
-    /// xAI `speech_final` ends one utterance, not the whole session. Append new sentences;
-    /// collapse trailing chunk finals when the utterance stitches them.
-    private static func finalizeSpeechFinal(_ text: String, confirmedSegments: [String]) -> [String] {
+    /// `speech_final` commits the current utterance. Revise the last utterance when xAI
+    /// sends a longer/corrected take; otherwise append a new sentence.
+    private static func commitSpeechFinal(_ text: String, state: GrokTranscriptState) -> GrokTranscriptState {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return confirmedSegments }
-        guard !confirmedSegments.isEmpty else { return [trimmed] }
-
-        let joined = confirmedSegments.joined()
-        let joinedTrimmed = joined.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if joinedTrimmed == trimmed || joined.hasSuffix(trimmed) { return confirmedSegments }
-        if isNearDuplicate(trimmed, of: joinedTrimmed), confirmedSegments.count == 1 {
-            return confirmedSegments
+        guard !trimmed.isEmpty else {
+            return GrokTranscriptState(utterances: state.utterances, currentChunks: [])
         }
 
-        // Cumulative stitch for the current utterance (includes prior confirmed text).
-        if trimmed.hasPrefix(joinedTrimmed) {
-            return [trimmed]
+        var utterances = state.utterances
+        let chunkText = state.currentChunks.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let last = utterances.last,
+           shouldReviseUtterance(trimmed, previousUtterance: last, pendingChunks: chunkText) {
+            utterances[utterances.count - 1] = trimmed
+        } else if let last = utterances.last, isNearDuplicate(trimmed, of: last) {
+            // duplicate echo — keep existing
+        } else if utterances.isEmpty {
+            utterances = [trimmed]
+        } else {
+            utterances.append(normalize(segment: trimmed, after: utterances.joined()))
         }
 
-        // Refinement of trailing chunk finals within the same utterance.
-        if let last = confirmedSegments.last {
-            let lastTrimmed = last.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !lastTrimmed.isEmpty,
-               trimmed.localizedCaseInsensitiveContains(lastTrimmed) || isNearDuplicate(trimmed, of: lastTrimmed) {
-                var prefix = confirmedSegments.dropLast()
-                while let tail = prefix.last {
-                    let tailTrimmed = tail.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmed.localizedCaseInsensitiveContains(tailTrimmed) || isNearDuplicate(trimmed, of: tailTrimmed) {
-                        prefix = prefix.dropLast()
-                    } else {
-                        break
-                    }
-                }
-                let prior = Array(prefix)
-                if prior.isEmpty { return [trimmed] }
-                return prior + [normalize(segment: trimmed, after: prior.joined())]
-            }
-        }
-
-        // Distinct new utterance in the same session.
-        return confirmedSegments + [normalize(segment: trimmed, after: joined)]
+        return GrokTranscriptState(utterances: utterances, currentChunks: [])
     }
 
-    /// `transcript.done` is authoritative for the full session when it supersedes confirmed text.
-    private static func finalizeSessionDone(_ text: String, confirmedSegments: [String]) -> [String] {
+    private static func finalizeSessionDone(_ text: String, state: GrokTranscriptState) -> GrokTranscriptState {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return confirmedSegments }
+        guard !trimmed.isEmpty else { return state }
 
-        let joined = confirmedSegments.joined().trimmingCharacters(in: .whitespacesAndNewlines)
-        if joined.isEmpty { return [trimmed] }
-        if trimmed == joined { return [trimmed] }
+        let joined = state.joinedConfirmed.trimmingCharacters(in: .whitespacesAndNewlines)
+        if joined.isEmpty {
+            return GrokTranscriptState(utterances: [dedupeOverlappingPhrases(trimmed)], currentChunks: [])
+        }
+
+        if trimmed == joined {
+            return GrokTranscriptState(utterances: [joined], currentChunks: [])
+        }
+
         if isNearDuplicate(trimmed, of: joined) {
-            return confirmedSegments.count == 1 ? confirmedSegments : [dedupeRepeatedTail(trimmed)]
+            let deduped = dedupeOverlappingPhrases(joined)
+            return GrokTranscriptState(utterances: [deduped], currentChunks: [])
         }
 
         if trimmed.hasPrefix(joined) {
             let suffix = String(trimmed.dropFirst(joined.count)).trimmingCharacters(in: .whitespacesAndNewlines)
             if suffix.isEmpty || isNearDuplicate(suffix, of: joined) {
-                return [dedupeRepeatedTail(trimmed)]
+                return GrokTranscriptState(utterances: [dedupeOverlappingPhrases(trimmed)], currentChunks: [])
             }
         }
 
-        if trimmed.count >= joined.count, isNearDuplicate(trimmed, of: joined) {
-            return confirmedSegments
+        if trimmed.count >= joined.count {
+            return GrokTranscriptState(utterances: [dedupeOverlappingPhrases(trimmed)], currentChunks: [])
         }
 
-        if trimmed.hasPrefix(joined) || trimmed.count >= joined.count {
-            return [dedupeRepeatedTail(trimmed)]
-        }
-
-        return confirmedSegments + [normalize(segment: trimmed, after: confirmedSegments.joined())]
+        return GrokTranscriptState(utterances: state.utterances + [normalize(segment: trimmed, after: joined)], currentChunks: [])
     }
 
-    /// Collapse trivial ASR variants: hyphenation, spacing, casing.
+    // MARK: - Dedup helpers
+
+    private static func shouldReviseUtterance(
+        _ candidate: String,
+        previousUtterance: String,
+        pendingChunks: String
+    ) -> Bool {
+        let prev = previousUtterance.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prev.isEmpty else { return false }
+
+        if isNearDuplicate(candidate, of: prev) { return false }
+        if isUtteranceRevision(candidate, of: prev) { return true }
+
+        if !pendingChunks.isEmpty, isUtteranceRevision(candidate, of: pendingChunks) {
+            return true
+        }
+
+        return false
+    }
+
+    /// Detect when a new `speech_final` extends or corrects a prior take of the same pause.
+    private static func isUtteranceRevision(_ candidate: String, of previous: String) -> Bool {
+        let cand = normalizedForDedup(candidate)
+        let prev = normalizedForDedup(previous)
+        guard !cand.isEmpty, !prev.isEmpty else { return false }
+
+        if cand.hasPrefix(prev) || prev.hasPrefix(cand) { return true }
+
+        let prevWords = prev.split(separator: " ").map(String.init)
+        let candWords = cand.split(separator: " ").map(String.init)
+        guard prevWords.count >= 2, candWords.count >= 2 else { return false }
+
+        let maxOverlap = min(prevWords.count, candWords.count)
+        for size in stride(from: maxOverlap, through: 2, by: -1) {
+            let prevSuffix = prevWords.suffix(size)
+            let candPrefix = candWords.prefix(size)
+            if zip(prevSuffix, candPrefix).allSatisfy({ fuzzyWordEqual($0, $1) }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func fuzzyWordEqual(_ lhs: String, _ rhs: String) -> Bool {
+        if lhs == rhs { return true }
+        if isNearDuplicate(lhs, of: rhs) { return true }
+        return false
+    }
+
     private static func normalizedForDedup(_ text: String) -> String {
         text.lowercased()
             .replacingOccurrences(of: "-", with: " ")
-            .components(separatedBy: .whitespacesAndNewlines)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
     }
@@ -300,26 +363,82 @@ enum GrokProtocol {
         return false
     }
 
-    /// Remove a repeated tail when xAI echoes the same utterance twice in one payload.
-    private static func dedupeRepeatedTail(_ text: String) -> String {
+    /// Remove repeated sentences and near-duplicate clauses from a final payload.
+    static func dedupeOverlappingPhrases(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
 
-        let parts = trimmed.split(
-            separator: ".",
-            omittingEmptySubsequences: true
+        let rawParts = trimmed.split(
+            whereSeparator: { $0 == "." || $0 == "?" || $0 == "!" }
         ).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        guard parts.count >= 2 else { return trimmed }
+        guard rawParts.count >= 2 else {
+            return dedupeRepeatedWordSequences(trimmed)
+        }
 
-        var result: [String] = []
-        for part in parts {
-            let sentence = part + "."
-            if let last = result.last, isNearDuplicate(sentence, of: last) {
+        var sentences: [String] = []
+        for part in rawParts where !part.isEmpty {
+            let sentence = dedupeRepeatedWordSequences(part) + "."
+            if let last = sentences.last, isNearDuplicate(sentence, of: last) || isUtteranceRevision(sentence, of: last) {
+                if normalizedForDedup(sentence).count > normalizedForDedup(last).count {
+                    sentences[sentences.count - 1] = sentence
+                }
                 continue
             }
-            result.append(sentence)
+            sentences.append(sentence)
         }
-        return result.joined(separator: " ")
+
+        var deduped = sentences.joined(separator: " ")
+        deduped = dedupeRepeatedClauses(in: deduped)
+        return deduped
+    }
+
+    private static func dedupeRepeatedWordSequences(_ text: String) -> String {
+        var words = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard words.count >= 6 else { return text }
+
+        for i in 1..<words.count {
+            for j in 0..<i {
+                guard fuzzyWordEqual(words[i], words[j]) else { continue }
+
+                var overlap = 0
+                while i + overlap < words.count,
+                      j + overlap < i,
+                      fuzzyWordEqual(words[i + overlap], words[j + overlap]) {
+                    overlap += 1
+                }
+
+                guard overlap >= 3 else { continue }
+
+                words.removeSubrange(j..<i)
+                return dedupeRepeatedWordSequences(words.joined(separator: " "))
+            }
+        }
+
+        return words.joined(separator: " ")
+    }
+
+    private static func dedupeRepeatedClauses(in text: String) -> String {
+        let clauses = text.split(separator: ",", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard clauses.count >= 2 else { return text }
+
+        var result: [String] = []
+        for clause in clauses where !clause.isEmpty {
+            if let last = result.last,
+               isNearDuplicate(clause, of: last) || isUtteranceRevision(clause, of: last) {
+                if normalizedForDedup(clause).count > normalizedForDedup(last).count {
+                    result[result.count - 1] = clause
+                }
+                continue
+            }
+            result.append(clause)
+        }
+        return result.joined(separator: ", ")
+    }
+
+    private static func jsonString(_ payload: [String: Any]) -> String {
+        (try? JSONSerialization.data(withJSONObject: payload))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
 
     private static func stripConfirmedPrefix(from text: String, confirmed: String) -> String {

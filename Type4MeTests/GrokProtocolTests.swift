@@ -3,6 +3,10 @@ import XCTest
 
 final class GrokProtocolTests: XCTestCase {
 
+    private func state(utterances: [String] = [], chunks: [String] = []) -> GrokTranscriptState {
+        GrokTranscriptState(utterances: utterances, currentChunks: chunks)
+    }
+
     func testBuildWebSocketURL_includesStreamingParams() throws {
         let config = try XCTUnwrap(GrokASRConfig(credentials: [
             "apiKey": "xai_test_key",
@@ -34,7 +38,7 @@ final class GrokProtocolTests: XCTestCase {
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(message.utf8),
-                confirmedSegments: []
+                state: .empty
             )
         )
 
@@ -49,7 +53,7 @@ final class GrokProtocolTests: XCTestCase {
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(message.utf8),
-                confirmedSegments: []
+                state: .empty
             )
         )
 
@@ -65,7 +69,7 @@ final class GrokProtocolTests: XCTestCase {
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(message.utf8),
-                confirmedSegments: ["Hello"],
+                state: state(utterances: ["Hello"]),
                 isFinalCommit: true
             )
         )
@@ -82,10 +86,10 @@ final class GrokProtocolTests: XCTestCase {
         let first = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(chunk1.utf8),
-                confirmedSegments: []
+                state: .empty
             )
         )
-        XCTAssertEqual(first.confirmedSegments, ["To add some"])
+        XCTAssertEqual(first.state.currentChunks, ["To add some"])
 
         let duplicateChunk = """
         {"type": "transcript.partial", "text": "To add some", "is_final": true, "speech_final": false}
@@ -93,10 +97,10 @@ final class GrokProtocolTests: XCTestCase {
         let second = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(duplicateChunk.utf8),
-                confirmedSegments: first.confirmedSegments
+                state: first.state
             )
         )
-        XCTAssertEqual(second.confirmedSegments, ["To add some"])
+        XCTAssertEqual(second.state.currentChunks, ["To add some"])
 
         let chunk2 = """
         {"type": "transcript.partial", "text": "For future training", "is_final": true, "speech_final": false}
@@ -104,7 +108,7 @@ final class GrokProtocolTests: XCTestCase {
         let third = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(chunk2.utf8),
-                confirmedSegments: second.confirmedSegments
+                state: second.state
             )
         )
         XCTAssertEqual(third.confirmedSegments, ["To add some", " For future training"])
@@ -117,7 +121,7 @@ final class GrokProtocolTests: XCTestCase {
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(speechFinal.utf8),
-                confirmedSegments: ["To add some", " For future training"],
+                state: state(chunks: ["To add some", " For future training"]),
                 isFinalCommit: true
             )
         )
@@ -133,10 +137,10 @@ final class GrokProtocolTests: XCTestCase {
         let first = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(sentenceOne.utf8),
-                confirmedSegments: []
+                state: .empty
             )
         )
-        XCTAssertEqual(first.confirmedSegments, ["This is sentence one."])
+        XCTAssertEqual(first.state.utterances, ["This is sentence one."])
 
         let sentenceTwo = """
         {"type": "transcript.partial", "text": "This is sentence two.", "is_final": true, "speech_final": true}
@@ -144,12 +148,12 @@ final class GrokProtocolTests: XCTestCase {
         let second = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(sentenceTwo.utf8),
-                confirmedSegments: first.confirmedSegments
+                state: first.state
             )
         )
 
         XCTAssertEqual(
-            second.confirmedSegments,
+            second.state.utterances,
             ["This is sentence one.", " This is sentence two."]
         )
         XCTAssertEqual(
@@ -165,7 +169,7 @@ final class GrokProtocolTests: XCTestCase {
         let first = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(sentenceOne.utf8),
-                confirmedSegments: []
+                state: .empty
             )
         )
 
@@ -175,12 +179,37 @@ final class GrokProtocolTests: XCTestCase {
         let second = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(sentenceTwo.utf8),
-                confirmedSegments: first.confirmedSegments
+                state: first.state
             )
         )
 
-        XCTAssertEqual(second.confirmedSegments, first.confirmedSegments)
+        XCTAssertEqual(second.state.utterances, first.state.utterances)
         XCTAssertEqual(second.transcript.authoritativeText, "Thank you for the update and the follow-up.")
+    }
+
+    func testMakeTranscriptUpdate_speechFinalRevisesShortUtterance() throws {
+        let short = """
+        {"type": "transcript.partial", "text": "Sure.", "is_final": true, "speech_final": true}
+        """
+        let first = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(short.utf8),
+                state: .empty
+            )
+        )
+
+        let longer = """
+        {"type": "transcript.partial", "text": "Sure, we can start from two weeks.", "is_final": true, "speech_final": true}
+        """
+        let second = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(longer.utf8),
+                state: first.state
+            )
+        )
+
+        XCTAssertEqual(second.state.utterances, ["Sure, we can start from two weeks."])
+        XCTAssertEqual(second.transcript.authoritativeText, "Sure, we can start from two weeks.")
     }
 
     func testMakeTranscriptUpdate_transcriptDoneDedupesRepeatedTail() throws {
@@ -190,7 +219,7 @@ final class GrokProtocolTests: XCTestCase {
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(message.utf8),
-                confirmedSegments: ["Thank you for the update and the follow-up."],
+                state: state(utterances: ["Thank you for the update and the follow-up."]),
                 isFinalCommit: true
             )
         )
@@ -206,7 +235,7 @@ final class GrokProtocolTests: XCTestCase {
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(message.utf8),
-                confirmedSegments: ["Hello", " world"],
+                state: state(chunks: ["Hello", " world"]),
                 isFinalCommit: true
             )
         )
@@ -214,6 +243,18 @@ final class GrokProtocolTests: XCTestCase {
         XCTAssertEqual(update.confirmedSegments, ["Hello world"])
         XCTAssertEqual(update.transcript.authoritativeText, "Hello world")
         XCTAssertTrue(update.transcript.isFinal)
+    }
+
+    func testDedupeOverlappingPhrases_collapsesRepeatedOnboardingClauses() {
+        let noisy = """
+        Getting started and we pick up some of the projects in the human-in-loop Getting started and we pick up some of the projects in the half Per care phase two for them to get an understanding of what we are Per care phase two for them to get an understanding what we are busy or struggle with.
+        """
+        let deduped = GrokProtocol.dedupeOverlappingPhrases(noisy)
+        XCTAssertFalse(deduped.contains("Getting started and we pick up some of the projects in the human-in-loop Getting started"))
+        XCTAssertEqual(
+            deduped,
+            "Getting started and we pick up some of the projects in the half Per care phase two for them to get an understanding what we are busy or struggle with."
+        )
     }
 
     func testFinalizeAndAudioDoneMessages() {

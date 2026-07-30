@@ -50,7 +50,7 @@ actor GrokASRClient: SpeechRecognizer {
     private var eventContinuation: AsyncStream<RecognitionEvent>.Continuation?
     private var _events: AsyncStream<RecognitionEvent>?
 
-    private var confirmedSegments: [String] = []
+    private var transcriptState: GrokTranscriptState = .empty
     private var lastTranscript: RecognitionTranscript = .empty
     private var didRequestClose = false
     private var pendingFinalCommit = false
@@ -90,7 +90,7 @@ actor GrokASRClient: SpeechRecognizer {
         self.sessionDelegate = delegate
         self.session = session
         self.webSocketTask = task
-        confirmedSegments = []
+        transcriptState = .empty
         lastTranscript = .empty
         didRequestClose = false
         pendingFinalCommit = false
@@ -129,7 +129,7 @@ actor GrokASRClient: SpeechRecognizer {
         eventContinuation = nil
         _events = nil
         connectionGate = nil
-        confirmedSegments = []
+        transcriptState = .empty
         lastTranscript = .empty
         didRequestClose = false
         pendingFinalCommit = false
@@ -185,7 +185,7 @@ actor GrokASRClient: SpeechRecognizer {
 
             if let update = try GrokProtocol.makeTranscriptUpdate(
                 from: data,
-                confirmedSegments: confirmedSegments,
+                state: transcriptState,
                 isFinalCommit: pendingFinalCommit
             ) {
                 if update.serverReady {
@@ -193,7 +193,7 @@ actor GrokASRClient: SpeechRecognizer {
                     return
                 }
 
-                confirmedSegments = update.confirmedSegments
+                transcriptState = update.state
                 guard update.transcript != lastTranscript else { return }
                 lastTranscript = update.transcript
                 logger.info("Grok transcript confirmed=\(update.transcript.confirmedSegments.count) partial=\(update.transcript.partialText.count) final=\(update.transcript.isFinal)")
