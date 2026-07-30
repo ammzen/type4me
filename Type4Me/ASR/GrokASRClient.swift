@@ -55,6 +55,7 @@ actor GrokASRClient: SpeechRecognizer {
     private var didRequestClose = false
     private var pendingFinalCommit = false
     private var serverReady = false
+    private var sessionCompleted = false
 
     private var connectionGate: GrokConnectionGate?
 
@@ -94,6 +95,7 @@ actor GrokASRClient: SpeechRecognizer {
         didRequestClose = false
         pendingFinalCommit = false
         serverReady = false
+        sessionCompleted = false
 
         startReceiveLoop()
 
@@ -132,6 +134,7 @@ actor GrokASRClient: SpeechRecognizer {
         didRequestClose = false
         pendingFinalCommit = false
         serverReady = false
+        sessionCompleted = false
         logger.info("Grok disconnected")
     }
 
@@ -171,6 +174,7 @@ actor GrokASRClient: SpeechRecognizer {
     }
 
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
+        guard !sessionCompleted else { return }
         do {
             let data: Data
             switch message {
@@ -196,6 +200,7 @@ actor GrokASRClient: SpeechRecognizer {
                 emitEvent(.transcript(update.transcript))
 
                 if update.transcript.isFinal && pendingFinalCommit {
+                    sessionCompleted = true
                     emitEvent(.completed)
                     eventContinuation?.finish()
                 }

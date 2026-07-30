@@ -34,6 +34,7 @@ enum GrokProtocol {
             URLQueryItem(name: "sample_rate", value: String(sampleRate)),
             URLQueryItem(name: "encoding", value: "pcm"),
             URLQueryItem(name: "interim_results", value: "true"),
+            URLQueryItem(name: "filler_words", value: "false"),
         ]
 
         if !config.language.isEmpty {
@@ -97,66 +98,81 @@ enum GrokProtocol {
             let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !text.isEmpty else { return nil }
 
-            let confirmed = confirmedSegments.joined()
             let isFinal = message.isFinal ?? false
             let speechFinal = message.speechFinal ?? false
 
-            if isFinal {
-                var next = confirmedSegments
-                let newOnly = stripConfirmedPrefix(from: text, confirmed: confirmed)
-                if !newOnly.isEmpty {
-                    next.append(normalize(segment: newOnly, after: confirmed))
-                }
-                let shouldEndSession = isFinalCommit && speechFinal
+            if !isFinal {
+                let confirmed = confirmedSegments.joined()
+                let partialOnly = stripConfirmedPrefix(from: text, confirmed: confirmed)
+                guard !partialOnly.isEmpty else { return nil }
+                let normalized = normalize(segment: partialOnly, after: confirmed)
                 let transcript = RecognitionTranscript(
-                    confirmedSegments: next,
-                    partialText: "",
-                    authoritativeText: next.joined(),
-                    isFinal: shouldEndSession
+                    confirmedSegments: confirmedSegments,
+                    partialText: normalized,
+                    authoritativeText: (confirmedSegments + [normalized]).joined(),
+                    isFinal: false
                 )
                 return GrokTranscriptUpdate(
                     transcript: transcript,
-                    confirmedSegments: next,
+                    confirmedSegments: confirmedSegments,
                     serverReady: false
                 )
             }
 
-            let partialOnly = stripConfirmedPrefix(from: text, confirmed: confirmed)
-            guard !partialOnly.isEmpty else { return nil }
-            let normalized = normalize(segment: partialOnly, after: confirmed)
+            if speechFinal {
+                let transcript = RecognitionTranscript(
+                    confirmedSegments: [text],
+                    partialText: "",
+                    authoritativeText: text,
+                    isFinal: isFinalCommit
+                )
+                return GrokTranscriptUpdate(
+                    transcript: transcript,
+                    confirmedSegments: [text],
+                    serverReady: false
+                )
+            }
+
+            let next = appendChunk(text, to: confirmedSegments)
             let transcript = RecognitionTranscript(
-                confirmedSegments: confirmedSegments,
-                partialText: normalized,
-                authoritativeText: (confirmedSegments + [normalized]).joined(),
+                confirmedSegments: next,
+                partialText: "",
+                authoritativeText: next.joined(),
                 isFinal: false
             )
             return GrokTranscriptUpdate(
                 transcript: transcript,
-                confirmedSegments: confirmedSegments,
+                confirmedSegments: next,
                 serverReady: false
             )
 
         case "transcript.done":
             let text = message.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            var next = confirmedSegments
-            if !text.isEmpty {
-                let confirmed = confirmedSegments.joined()
-                let newOnly = stripConfirmedPrefix(from: text, confirmed: confirmed)
-                if !newOnly.isEmpty {
-                    next.append(normalize(segment: newOnly, after: confirmed))
-                } else if next.isEmpty {
-                    next = [text]
-                }
+            if text.isEmpty {
+                let joined = confirmedSegments.joined()
+                guard !joined.isEmpty else { return nil }
+                let transcript = RecognitionTranscript(
+                    confirmedSegments: confirmedSegments,
+                    partialText: "",
+                    authoritativeText: joined,
+                    isFinal: isFinalCommit
+                )
+                return GrokTranscriptUpdate(
+                    transcript: transcript,
+                    confirmedSegments: confirmedSegments,
+                    serverReady: false
+                )
             }
+
             let transcript = RecognitionTranscript(
-                confirmedSegments: next,
+                confirmedSegments: [text],
                 partialText: "",
-                authoritativeText: next.joined(),
+                authoritativeText: text,
                 isFinal: isFinalCommit
             )
             return GrokTranscriptUpdate(
                 transcript: transcript,
-                confirmedSegments: next,
+                confirmedSegments: [text],
                 serverReady: false
             )
 
@@ -171,6 +187,15 @@ enum GrokProtocol {
     private static func jsonString(_ payload: [String: Any]) -> String {
         (try? JSONSerialization.data(withJSONObject: payload))
             .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+
+    private static func appendChunk(_ chunk: String, to segments: [String]) -> [String] {
+        let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return segments }
+        let joined = segments.joined()
+        if joined.isEmpty { return [trimmed] }
+        if joined == trimmed || joined.hasSuffix(trimmed) { return segments }
+        return segments + [normalize(segment: trimmed, after: joined)]
     }
 
     private static func stripConfirmedPrefix(from text: String, confirmed: String) -> String {

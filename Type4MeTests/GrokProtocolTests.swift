@@ -10,7 +10,7 @@ final class GrokProtocolTests: XCTestCase {
         ]))
         let url = try GrokProtocol.buildWebSocketURL(
             config: config,
-            options: ASRRequestOptions(hotwords: ["Type4Me"])
+            options: ASRRequestOptions(hotwords: ["Type4Me", "Understand The Universe"])
         )
         let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
         let items = components.queryItems ?? []
@@ -21,8 +21,9 @@ final class GrokProtocolTests: XCTestCase {
         XCTAssertEqual(items.value(for: "sample_rate"), "16000")
         XCTAssertEqual(items.value(for: "encoding"), "pcm")
         XCTAssertEqual(items.value(for: "interim_results"), "true")
+        XCTAssertEqual(items.value(for: "filler_words"), "false")
         XCTAssertEqual(items.value(for: "language"), "en")
-        XCTAssertEqual(items.values(for: "keyterm"), ["Type4Me"])
+        XCTAssertEqual(items.values(for: "keyterm"), ["Type4Me", "Understand The Universe"])
     }
 
     func testMakeTranscriptUpdate_marksServerReadyOnCreated() throws {
@@ -64,12 +65,81 @@ final class GrokProtocolTests: XCTestCase {
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(message.utf8),
-                confirmedSegments: [],
+                confirmedSegments: ["Hello"],
                 isFinalCommit: true
             )
         )
 
         XCTAssertEqual(update.confirmedSegments, ["Hello world"])
+        XCTAssertEqual(update.transcript.authoritativeText, "Hello world")
+        XCTAssertTrue(update.transcript.isFinal)
+    }
+
+    func testMakeTranscriptUpdate_appendsChunkFinalsWithoutDuplicating() throws {
+        let chunk1 = """
+        {"type": "transcript.partial", "text": "To add some", "is_final": true, "speech_final": false}
+        """
+        let first = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(chunk1.utf8),
+                confirmedSegments: []
+            )
+        )
+        XCTAssertEqual(first.confirmedSegments, ["To add some"])
+
+        let duplicateChunk = """
+        {"type": "transcript.partial", "text": "To add some", "is_final": true, "speech_final": false}
+        """
+        let second = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(duplicateChunk.utf8),
+                confirmedSegments: first.confirmedSegments
+            )
+        )
+        XCTAssertEqual(second.confirmedSegments, ["To add some"])
+
+        let chunk2 = """
+        {"type": "transcript.partial", "text": "For future training", "is_final": true, "speech_final": false}
+        """
+        let third = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(chunk2.utf8),
+                confirmedSegments: second.confirmedSegments
+            )
+        )
+        XCTAssertEqual(third.confirmedSegments, ["To add some", " For future training"])
+    }
+
+    func testMakeTranscriptUpdate_speechFinalReplacesChunkSegments() throws {
+        let speechFinal = """
+        {"type": "transcript.partial", "text": "To add some for future training.", "is_final": true, "speech_final": true}
+        """
+        let update = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(speechFinal.utf8),
+                confirmedSegments: ["To add some", "For future training"],
+                isFinalCommit: true
+            )
+        )
+
+        XCTAssertEqual(update.confirmedSegments, ["To add some for future training."])
+        XCTAssertTrue(update.transcript.isFinal)
+    }
+
+    func testMakeTranscriptUpdate_transcriptDoneReplacesConfirmedSegments() throws {
+        let message = """
+        {"type": "transcript.done", "text": "Hello world", "duration": 1.2}
+        """
+        let update = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(message.utf8),
+                confirmedSegments: ["Hello", " world"],
+                isFinalCommit: true
+            )
+        )
+
+        XCTAssertEqual(update.confirmedSegments, ["Hello world"])
+        XCTAssertEqual(update.transcript.authoritativeText, "Hello world")
         XCTAssertTrue(update.transcript.isFinal)
     }
 
