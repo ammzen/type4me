@@ -158,6 +158,47 @@ final class GrokProtocolTests: XCTestCase {
         )
     }
 
+    func testMakeTranscriptUpdate_speechFinalSkipsNearDuplicateUtterance() throws {
+        let sentenceOne = """
+        {"type": "transcript.partial", "text": "Thank you for the update and the follow-up.", "is_final": true, "speech_final": true}
+        """
+        let first = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(sentenceOne.utf8),
+                confirmedSegments: []
+            )
+        )
+
+        let sentenceTwo = """
+        {"type": "transcript.partial", "text": "Thank you for the update and the follow up.", "is_final": true, "speech_final": true}
+        """
+        let second = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(sentenceTwo.utf8),
+                confirmedSegments: first.confirmedSegments
+            )
+        )
+
+        XCTAssertEqual(second.confirmedSegments, first.confirmedSegments)
+        XCTAssertEqual(second.transcript.authoritativeText, "Thank you for the update and the follow-up.")
+    }
+
+    func testMakeTranscriptUpdate_transcriptDoneDedupesRepeatedTail() throws {
+        let message = """
+        {"type": "transcript.done", "text": "Thank you for the update and the follow-up. Thank you for the update and the follow up.", "duration": 3.2}
+        """
+        let update = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(message.utf8),
+                confirmedSegments: ["Thank you for the update and the follow-up."],
+                isFinalCommit: true
+            )
+        )
+
+        XCTAssertEqual(update.confirmedSegments, ["Thank you for the update and the follow-up."])
+        XCTAssertEqual(update.transcript.authoritativeText, "Thank you for the update and the follow-up.")
+    }
+
     func testMakeTranscriptUpdate_transcriptDoneReplacesConfirmedSegments() throws {
         let message = """
         {"type": "transcript.done", "text": "Hello world", "duration": 1.2}

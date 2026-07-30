@@ -197,6 +197,7 @@ enum GrokProtocol {
         let joined = segments.joined()
         if joined.isEmpty { return [trimmed] }
         if joined == trimmed || joined.hasSuffix(trimmed) { return segments }
+        if isNearDuplicate(trimmed, of: joined) { return segments }
         return segments + [normalize(segment: trimmed, after: joined)]
     }
 
@@ -211,6 +212,9 @@ enum GrokProtocol {
         let joinedTrimmed = joined.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if joinedTrimmed == trimmed || joined.hasSuffix(trimmed) { return confirmedSegments }
+        if isNearDuplicate(trimmed, of: joinedTrimmed), confirmedSegments.count == 1 {
+            return confirmedSegments
+        }
 
         // Cumulative stitch for the current utterance (includes prior confirmed text).
         if trimmed.hasPrefix(joinedTrimmed) {
@@ -220,11 +224,16 @@ enum GrokProtocol {
         // Refinement of trailing chunk finals within the same utterance.
         if let last = confirmedSegments.last {
             let lastTrimmed = last.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !lastTrimmed.isEmpty && trimmed.localizedCaseInsensitiveContains(lastTrimmed) {
+            if !lastTrimmed.isEmpty,
+               trimmed.localizedCaseInsensitiveContains(lastTrimmed) || isNearDuplicate(trimmed, of: lastTrimmed) {
                 var prefix = confirmedSegments.dropLast()
-                while let tail = prefix.last,
-                      trimmed.localizedCaseInsensitiveContains(tail.trimmingCharacters(in: .whitespacesAndNewlines)) {
-                    prefix = prefix.dropLast()
+                while let tail = prefix.last {
+                    let tailTrimmed = tail.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.localizedCaseInsensitiveContains(tailTrimmed) || isNearDuplicate(trimmed, of: tailTrimmed) {
+                        prefix = prefix.dropLast()
+                    } else {
+                        break
+                    }
                 }
                 let prior = Array(prefix)
                 if prior.isEmpty { return [trimmed] }
@@ -243,10 +252,74 @@ enum GrokProtocol {
 
         let joined = confirmedSegments.joined().trimmingCharacters(in: .whitespacesAndNewlines)
         if joined.isEmpty { return [trimmed] }
-        if trimmed == joined || trimmed.hasPrefix(joined) || trimmed.count >= joined.count {
-            return [trimmed]
+        if trimmed == joined { return [trimmed] }
+        if isNearDuplicate(trimmed, of: joined) {
+            return confirmedSegments.count == 1 ? confirmedSegments : [dedupeRepeatedTail(trimmed)]
         }
+
+        if trimmed.hasPrefix(joined) {
+            let suffix = String(trimmed.dropFirst(joined.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if suffix.isEmpty || isNearDuplicate(suffix, of: joined) {
+                return [dedupeRepeatedTail(trimmed)]
+            }
+        }
+
+        if trimmed.count >= joined.count, isNearDuplicate(trimmed, of: joined) {
+            return confirmedSegments
+        }
+
+        if trimmed.hasPrefix(joined) || trimmed.count >= joined.count {
+            return [dedupeRepeatedTail(trimmed)]
+        }
+
         return confirmedSegments + [normalize(segment: trimmed, after: confirmedSegments.joined())]
+    }
+
+    /// Collapse trivial ASR variants: hyphenation, spacing, casing.
+    private static func normalizedForDedup(_ text: String) -> String {
+        text.lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static func isNearDuplicate(_ candidate: String, of existing: String) -> Bool {
+        let normalizedCandidate = normalizedForDedup(candidate)
+        let normalizedExisting = normalizedForDedup(existing)
+        guard !normalizedCandidate.isEmpty, !normalizedExisting.isEmpty else { return false }
+        if normalizedCandidate == normalizedExisting { return true }
+
+        let shorter = min(normalizedCandidate.count, normalizedExisting.count)
+        let longer = max(normalizedCandidate.count, normalizedExisting.count)
+        guard shorter > 0 else { return false }
+
+        if normalizedCandidate.contains(normalizedExisting) || normalizedExisting.contains(normalizedCandidate) {
+            return Double(shorter) / Double(longer) >= 0.85
+        }
+        return false
+    }
+
+    /// Remove a repeated tail when xAI echoes the same utterance twice in one payload.
+    private static func dedupeRepeatedTail(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+
+        let parts = trimmed.split(
+            separator: ".",
+            omittingEmptySubsequences: true
+        ).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard parts.count >= 2 else { return trimmed }
+
+        var result: [String] = []
+        for part in parts {
+            let sentence = part + "."
+            if let last = result.last, isNearDuplicate(sentence, of: last) {
+                continue
+            }
+            result.append(sentence)
+        }
+        return result.joined(separator: " ")
     }
 
     private static func stripConfirmedPrefix(from text: String, confirmed: String) -> String {
