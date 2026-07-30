@@ -140,15 +140,20 @@ enum GrokProtocol {
 
             if speechFinal {
                 let next = commitSpeechFinal(text, state: state)
+                let dedupedText = dedupeOverlappingPhrases(next.joinedConfirmed)
+                let finalState = GrokTranscriptState(
+                    utterances: dedupedText == next.joinedConfirmed ? next.utterances : [dedupedText],
+                    currentChunks: []
+                )
                 let transcript = RecognitionTranscript(
-                    confirmedSegments: next.confirmedSegments,
+                    confirmedSegments: finalState.confirmedSegments,
                     partialText: "",
-                    authoritativeText: next.joinedConfirmed,
+                    authoritativeText: dedupedText,
                     isFinal: isFinalCommit
                 )
                 return GrokTranscriptUpdate(
                     transcript: transcript,
-                    state: next,
+                    state: finalState,
                     serverReady: false
                 )
             }
@@ -298,8 +303,8 @@ enum GrokProtocol {
 
         if trimmed.hasPrefix(joined) {
             let suffix = String(trimmed.dropFirst(joined.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            if suffix.isEmpty || isNearDuplicate(suffix, of: joined) {
-                return GrokTranscriptState(utterances: [dedupeOverlappingPhrases(trimmed)], currentChunks: [])
+            if suffix.isEmpty || isNearDuplicateEcho(suffix, of: joined) || isNearDuplicate(suffix, of: joined) {
+                return GrokTranscriptState(utterances: [joined], currentChunks: [])
             }
         }
 
@@ -338,16 +343,27 @@ enum GrokProtocol {
     /// Detect when xAI sends a second full take of the same monologue with minor edits.
     private static func isFullUtteranceRetake(_ candidate: String, of previous: String) -> Bool {
         if isNearDuplicateEcho(candidate, of: previous) { return false }
-        let candWords = normalizedWords(candidate)
-        let prevWords = normalizedWords(previous)
-        guard candWords.count >= 4, prevWords.count >= 4 else { return false }
+        let candWords = collapsedNormalizedWords(candidate)
+        let prevWords = collapsedNormalizedWords(previous)
+        guard candWords.count >= 6, prevWords.count >= 6 else { return false }
 
-        let openingSize = 4
-        guard zip(candWords.prefix(openingSize), prevWords.prefix(openingSize)).allSatisfy({ fuzzyWordEqual($0, $1) }) else {
-            return false
-        }
+        guard openingWordsMatch(candWords, prevWords, count: 3) else { return false }
 
         return wordOverlapRatio(candWords, prevWords) >= 0.55
+    }
+
+    private static func collapsedNormalizedWords(_ text: String) -> [String] {
+        var collapsed: [String] = []
+        for word in normalizedWords(text) {
+            if collapsed.last == word { continue }
+            collapsed.append(word)
+        }
+        return collapsed
+    }
+
+    private static func openingWordsMatch(_ a: [String], _ b: [String], count: Int) -> Bool {
+        guard a.count >= count, b.count >= count else { return false }
+        return zip(a.prefix(count), b.prefix(count)).allSatisfy { fuzzyWordEqual($0, $1) }
     }
 
     /// Trivial echo with only formatting or one-word drift — keep the first take.
@@ -464,25 +480,51 @@ enum GrokProtocol {
 
     private static func dedupeFullUtteranceRestarts(_ text: String) -> String {
         let words = text.split(whereSeparator: \.isWhitespace).map(String.init)
-        let normalized = words.map { normalizedForDedup($0) }
         guard words.count >= 8 else { return text }
 
-        let openingSize = 4
-        for i in openingSize..<words.count {
-            guard i + openingSize <= words.count else { break }
-            let restartOpen = normalized[i..<(i + openingSize)]
-            let startOpen = normalized[0..<openingSize]
-            guard restartOpen.elementsEqual(startOpen) else { continue }
+        for i in 3..<words.count {
+            let head = words[0..<i].joined(separator: " ")
+            let headWordCount = collapsedNormalizedWords(head).count
+            guard words.count > i + 3 else { continue }
 
-            let firstHalf = words[0..<i].joined(separator: " ")
-            let secondHalf = words[i...].joined(separator: " ")
-            if isFullUtteranceRetake(secondHalf, of: firstHalf) {
-                return secondHalf
-            }
-            if isNearDuplicateEcho(secondHalf, of: firstHalf) {
-                return preferBetterUtterance(firstHalf, over: secondHalf)
+            let maxRetakeWords = min(headWordCount + 5, words.count - i)
+            for retakeWordCount in stride(from: maxRetakeWords, through: max(3, headWordCount - 2), by: -1) {
+                let retakeEnd = i + retakeWordCount
+                guard retakeEnd <= words.count else { continue }
+                let retake = words[i..<retakeEnd].joined(separator: " ")
+                if isFullUtteranceRetake(retake, of: head) {
+                    return words[i...].joined(separator: " ")
+                }
             }
         }
+
+        let collapsed = collapsedNormalizedWords(words.joined(separator: " "))
+        let openingSize = 3
+        for i in openingSize..<collapsed.count {
+            guard openingWordsMatch(Array(collapsed[i...]), collapsed, count: openingSize) else { continue }
+
+            var wordIndex = 0
+            var collapsedIndex = 0
+            while wordIndex < words.count, collapsedIndex < i {
+                let token = normalizedForDedup(words[wordIndex])
+                if !token.isEmpty {
+                    collapsedIndex += 1
+                }
+                wordIndex += 1
+            }
+            guard wordIndex < words.count else { continue }
+
+            let head = words[0..<wordIndex].joined(separator: " ")
+            let tail = words[wordIndex...].joined(separator: " ")
+            guard collapsedNormalizedWords(head).count >= 6, collapsedNormalizedWords(tail).count >= 6 else { continue }
+            if isFullUtteranceRetake(tail, of: head) {
+                return tail
+            }
+            if isNearDuplicateEcho(tail, of: head) {
+                return preferBetterUtterance(head, over: tail)
+            }
+        }
+
         return text
     }
 

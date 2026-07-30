@@ -239,6 +239,17 @@ final class GrokProtocolTests: XCTestCase {
         XCTAssertTrue(second.transcript.authoritativeText.contains("do you mind I invite Alex and Riley"))
     }
 
+    func testDedupeOverlappingPhrases_removesStutteredUtteranceRetakeWithTail() {
+        let noisy = """
+        Cool I I just invited them We can set as is and Alex is traveling in the metro area this week Cool I just invited them We can set as is and Alex is traveling in the metro area this week But they may not be able to join every single week
+        """
+        let deduped = GrokProtocol.dedupeOverlappingPhrases(noisy)
+        XCTAssertEqual(deduped.filter { $0 == "C" }.count, 1)
+        XCTAssertFalse(deduped.contains("Cool I I just invited them We can set as is"))
+        XCTAssertTrue(deduped.contains("Cool I just invited them"))
+        XCTAssertTrue(deduped.contains("may not be able to join every single week"))
+    }
+
     func testDedupeOverlappingPhrases_removesFullUtteranceRestart() {
         let noisy = """
         Hello Morgan for the call tomorrow do you want me to invite Alex and Riley so the design lead and platform lead can sync regularly To I guess there are many details we can figure out Hello Morgan for the call tomorrow do you mind I invite Alex and Riley so the design lead and platform lead can sync regularly to I guess there are many details we can figure out
