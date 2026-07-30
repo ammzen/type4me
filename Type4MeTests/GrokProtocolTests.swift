@@ -213,10 +213,10 @@ final class GrokProtocolTests: XCTestCase {
     }
 
     func testMakeTranscriptUpdate_speechFinalStitchesPendingChunks() throws {
-        var state = state(chunks: ["Those AU FDE are less busy than US FDE but they"])
+        var state = state(chunks: ["The red team ships fewer releases than the blue team but they"])
 
         let chunk2 = """
-        {"type": "transcript.partial", "text": "are also work on", "is_final": true, "speech_final": false}
+        {"type": "transcript.partial", "text": "also handle", "is_final": true, "speech_final": false}
         """
         state = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
@@ -226,7 +226,7 @@ final class GrokProtocolTests: XCTestCase {
         ).state
 
         let speechFinal = """
-        {"type": "transcript.partial", "text": "We are also work on multiple projects in the same time.", "is_final": true, "speech_final": true}
+        {"type": "transcript.partial", "text": "We are also working on multiple projects at the same time.", "is_final": true, "speech_final": true}
         """
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
@@ -236,16 +236,16 @@ final class GrokProtocolTests: XCTestCase {
             )
         )
 
-        XCTAssertTrue(update.transcript.authoritativeText.contains("Those AU FDE are less busy than US FDE"))
-        XCTAssertTrue(update.transcript.authoritativeText.contains("multiple projects in the same time"))
+        XCTAssertTrue(update.transcript.authoritativeText.contains("The red team ships fewer releases than the blue team"))
+        XCTAssertTrue(update.transcript.authoritativeText.contains("multiple projects at the same time"))
     }
 
     func testMakeTranscriptUpdate_transcriptDoneKeepsLongerAccumulatedText() throws {
         let accumulated = """
-        Those AU FDE are less busy than US FDE but they are also work on multiple projects in the same time.
+        The red team ships fewer releases than the blue team but they are also working on multiple projects at the same time.
         """
         let message = """
-        {"type": "transcript.done", "text": "We are also work on multiple projects in the same time.", "duration": 8.0}
+        {"type": "transcript.done", "text": "We are also working on multiple projects at the same time.", "duration": 8.0}
         """
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
@@ -255,7 +255,7 @@ final class GrokProtocolTests: XCTestCase {
             )
         )
 
-        XCTAssertTrue(update.transcript.authoritativeText.contains("Those AU FDE are less busy than US FDE"))
+        XCTAssertTrue(update.transcript.authoritativeText.contains("The red team ships fewer releases than the blue team"))
     }
 
     func testMakeTranscriptUpdate_transcriptDoneDedupesRepeatedTail() throws {
@@ -291,15 +291,15 @@ final class GrokProtocolTests: XCTestCase {
         XCTAssertTrue(update.transcript.isFinal)
     }
 
-    func testDedupeOverlappingPhrases_collapsesRepeatedOnboardingClauses() {
+    func testDedupeOverlappingPhrases_collapsesRepeatedRunOnPhrases() {
         let noisy = """
-        Getting started and we pick up some of the projects in the human-in-loop Getting started and we pick up some of the projects in the half Per care phase two for them to get an understanding of what we are Per care phase two for them to get an understanding what we are busy or struggle with.
+        Alpha builds the API layer Alpha builds the API layer in phase two so the crew learns what we ship in phase two so the crew learns what we ship each week.
         """
         let deduped = GrokProtocol.dedupeOverlappingPhrases(noisy)
-        XCTAssertFalse(deduped.contains("Getting started and we pick up some of the projects in the human-in-loop Getting started"))
+        XCTAssertFalse(deduped.contains("Alpha builds the API layer Alpha builds"))
         XCTAssertEqual(
             deduped,
-            "Getting started and we pick up some of the projects in the half Per care phase two for them to get an understanding what we are busy or struggle with."
+            "Alpha builds the API layer in phase two so the crew learns what we ship each week."
         )
     }
 
