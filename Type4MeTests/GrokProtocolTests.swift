@@ -117,13 +117,45 @@ final class GrokProtocolTests: XCTestCase {
         let update = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
                 from: Data(speechFinal.utf8),
-                confirmedSegments: ["To add some", "For future training"],
+                confirmedSegments: ["To add some", " For future training"],
                 isFinalCommit: true
             )
         )
 
         XCTAssertEqual(update.confirmedSegments, ["To add some for future training."])
         XCTAssertTrue(update.transcript.isFinal)
+    }
+
+    func testMakeTranscriptUpdate_speechFinalAppendsMultipleSentences() throws {
+        let sentenceOne = """
+        {"type": "transcript.partial", "text": "This is sentence one.", "is_final": true, "speech_final": true}
+        """
+        let first = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(sentenceOne.utf8),
+                confirmedSegments: []
+            )
+        )
+        XCTAssertEqual(first.confirmedSegments, ["This is sentence one."])
+
+        let sentenceTwo = """
+        {"type": "transcript.partial", "text": "This is sentence two.", "is_final": true, "speech_final": true}
+        """
+        let second = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(sentenceTwo.utf8),
+                confirmedSegments: first.confirmedSegments
+            )
+        )
+
+        XCTAssertEqual(
+            second.confirmedSegments,
+            ["This is sentence one.", " This is sentence two."]
+        )
+        XCTAssertEqual(
+            second.transcript.authoritativeText,
+            "This is sentence one. This is sentence two."
+        )
     }
 
     func testMakeTranscriptUpdate_transcriptDoneReplacesConfirmedSegments() throws {

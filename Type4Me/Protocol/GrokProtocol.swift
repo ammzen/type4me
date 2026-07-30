@@ -120,15 +120,16 @@ enum GrokProtocol {
             }
 
             if speechFinal {
+                let next = finalizeSpeechFinal(text, confirmedSegments: confirmedSegments)
                 let transcript = RecognitionTranscript(
-                    confirmedSegments: [text],
+                    confirmedSegments: next,
                     partialText: "",
-                    authoritativeText: text,
+                    authoritativeText: next.joined(),
                     isFinal: isFinalCommit
                 )
                 return GrokTranscriptUpdate(
                     transcript: transcript,
-                    confirmedSegments: [text],
+                    confirmedSegments: next,
                     serverReady: false
                 )
             }
@@ -164,15 +165,16 @@ enum GrokProtocol {
                 )
             }
 
+            let next = finalizeSessionDone(text, confirmedSegments: confirmedSegments)
             let transcript = RecognitionTranscript(
-                confirmedSegments: [text],
+                confirmedSegments: next,
                 partialText: "",
-                authoritativeText: text,
+                authoritativeText: next.joined(),
                 isFinal: isFinalCommit
             )
             return GrokTranscriptUpdate(
                 transcript: transcript,
-                confirmedSegments: [text],
+                confirmedSegments: next,
                 serverReady: false
             )
 
@@ -196,6 +198,55 @@ enum GrokProtocol {
         if joined.isEmpty { return [trimmed] }
         if joined == trimmed || joined.hasSuffix(trimmed) { return segments }
         return segments + [normalize(segment: trimmed, after: joined)]
+    }
+
+    /// xAI `speech_final` ends one utterance, not the whole session. Append new sentences;
+    /// collapse trailing chunk finals when the utterance stitches them.
+    private static func finalizeSpeechFinal(_ text: String, confirmedSegments: [String]) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return confirmedSegments }
+        guard !confirmedSegments.isEmpty else { return [trimmed] }
+
+        let joined = confirmedSegments.joined()
+        let joinedTrimmed = joined.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if joinedTrimmed == trimmed || joined.hasSuffix(trimmed) { return confirmedSegments }
+
+        // Cumulative stitch for the current utterance (includes prior confirmed text).
+        if trimmed.hasPrefix(joinedTrimmed) {
+            return [trimmed]
+        }
+
+        // Refinement of trailing chunk finals within the same utterance.
+        if let last = confirmedSegments.last {
+            let lastTrimmed = last.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !lastTrimmed.isEmpty && trimmed.localizedCaseInsensitiveContains(lastTrimmed) {
+                var prefix = confirmedSegments.dropLast()
+                while let tail = prefix.last,
+                      trimmed.localizedCaseInsensitiveContains(tail.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                    prefix = prefix.dropLast()
+                }
+                let prior = Array(prefix)
+                if prior.isEmpty { return [trimmed] }
+                return prior + [normalize(segment: trimmed, after: prior.joined())]
+            }
+        }
+
+        // Distinct new utterance in the same session.
+        return confirmedSegments + [normalize(segment: trimmed, after: joined)]
+    }
+
+    /// `transcript.done` is authoritative for the full session when it supersedes confirmed text.
+    private static func finalizeSessionDone(_ text: String, confirmedSegments: [String]) -> [String] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return confirmedSegments }
+
+        let joined = confirmedSegments.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        if joined.isEmpty { return [trimmed] }
+        if trimmed == joined || trimmed.hasPrefix(joined) || trimmed.count >= joined.count {
+            return [trimmed]
+        }
+        return confirmedSegments + [normalize(segment: trimmed, after: confirmedSegments.joined())]
     }
 
     private static func stripConfirmedPrefix(from text: String, confirmed: String) -> String {
