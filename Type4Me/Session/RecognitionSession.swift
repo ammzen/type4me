@@ -1228,7 +1228,7 @@ actor RecognitionSession {
                 DebugFileLogger.log("stop: .completed resumed finalTranscriptCont (\(text.count) chars)")
                 cont.resume(returning: text.isEmpty ? nil : text)
             }
-            if state == .recording {
+            if state == .recording, activeProvider != .grok {
                 NSLog("[Session] Server closed ASR while recording, initiating stop")
                 DebugFileLogger.log("server-initiated stop from recording state")
                 Task { await self.stopRecording() }

@@ -26,7 +26,10 @@ struct GrokTranscriptState: Sendable, Equatable {
     }
 
     var joinedConfirmed: String {
-        confirmedSegments.joined()
+        confirmedSegments
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 }
 
@@ -140,7 +143,7 @@ enum GrokProtocol {
 
             if speechFinal {
                 let next = commitSpeechFinal(text, state: state)
-                let dedupedText = dedupeOverlappingPhrases(next.joinedConfirmed)
+                let dedupedText = polishTranscript(next.joinedConfirmed)
                 let finalState = GrokTranscriptState(
                     utterances: dedupedText == next.joinedConfirmed ? next.utterances : [dedupedText],
                     currentChunks: []
@@ -289,7 +292,7 @@ enum GrokProtocol {
 
         let joined = state.joinedConfirmed.trimmingCharacters(in: .whitespacesAndNewlines)
         if joined.isEmpty {
-            return GrokTranscriptState(utterances: [dedupeOverlappingPhrases(trimmed)], currentChunks: [])
+            return GrokTranscriptState(utterances: [polishTranscript(trimmed)], currentChunks: [])
         }
 
         if trimmed == joined {
@@ -297,7 +300,7 @@ enum GrokProtocol {
         }
 
         if isNearDuplicate(trimmed, of: joined) {
-            let deduped = dedupeOverlappingPhrases(joined)
+            let deduped = polishTranscript(joined)
             return GrokTranscriptState(utterances: [deduped], currentChunks: [])
         }
 
@@ -310,11 +313,11 @@ enum GrokProtocol {
 
         if trimmed.count < joined.count,
            normalizedForDedup(joined).contains(normalizedForDedup(trimmed)) || joined.hasSuffix(trimmed) {
-            return GrokTranscriptState(utterances: [dedupeOverlappingPhrases(joined)], currentChunks: [])
+            return GrokTranscriptState(utterances: [polishTranscript(joined)], currentChunks: [])
         }
 
         if trimmed.count >= joined.count {
-            return GrokTranscriptState(utterances: [dedupeOverlappingPhrases(trimmed)], currentChunks: [])
+            return GrokTranscriptState(utterances: [polishTranscript(trimmed)], currentChunks: [])
         }
 
         return GrokTranscriptState(utterances: state.utterances + [normalize(segment: trimmed, after: joined)], currentChunks: [])
@@ -448,6 +451,11 @@ enum GrokProtocol {
         return false
     }
 
+    /// Dedup overlapping phrases and repair orphan periods from chunk boundaries.
+    static func polishTranscript(_ text: String) -> String {
+        repairOrphanTerminalPeriods(dedupeOverlappingPhrases(text))
+    }
+
     /// Remove repeated sentences and near-duplicate clauses from a final payload.
     static func dedupeOverlappingPhrases(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -570,6 +578,16 @@ enum GrokProtocol {
             result.append(clause)
         }
         return result.joined(separator: ", ")
+    }
+
+    /// xAI chunk finals often end conjunctions/prepositions with a stray period before continuation.
+    private static func repairOrphanTerminalPeriods(_ text: String) -> String {
+        let pattern = #"\b(and|or|in|to|with|for|but|as|at|on)\.\s+"#
+        return text.replacingOccurrences(
+            of: pattern,
+            with: "$1 ",
+            options: [.regularExpression, .caseInsensitive]
+        )
     }
 
     private static func jsonString(_ payload: [String: Any]) -> String {

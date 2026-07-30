@@ -351,6 +351,31 @@ final class GrokProtocolTests: XCTestCase {
         )
     }
 
+    func testPolishTranscript_repairsOrphanTerminalPeriods() {
+        let broken = "We should be careful for platform changes and. Those are changes hard to be reverted."
+        XCTAssertEqual(
+            GrokProtocol.polishTranscript(broken),
+            "We should be careful for platform changes and Those are changes hard to be reverted."
+        )
+
+        let broken2 = "I'll share with team individually and in. The meetings."
+        XCTAssertEqual(
+            GrokProtocol.polishTranscript(broken2),
+            "I'll share with team individually and in The meetings."
+        )
+    }
+
+    func testJoinedConfirmed_joinsUtterancesWithSpaces() {
+        var state = GrokTranscriptState(
+            utterances: [
+                "Thanks for the feedback.",
+                "Yes, agree."
+            ],
+            currentChunks: []
+        )
+        XCTAssertEqual(state.joinedConfirmed, "Thanks for the feedback. Yes, agree.")
+    }
+
     func testFinalizeAndAudioDoneMessages() {
         XCTAssertEqual(GrokProtocol.finalizeMessage(), "{\"type\":\"finalize\"}")
         XCTAssertEqual(GrokProtocol.audioDoneMessage(), "{\"type\":\"audio.done\"}")

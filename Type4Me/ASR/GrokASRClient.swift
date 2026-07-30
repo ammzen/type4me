@@ -164,7 +164,6 @@ actor GrokASRClient: SpeechRecognizer {
                         await self.emitEvent(.completed)
                     } else {
                         await self.emitEvent(.error(error))
-                        await self.emitEvent(.completed)
                     }
                     break
                 }
