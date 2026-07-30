@@ -212,6 +212,43 @@ final class GrokProtocolTests: XCTestCase {
         XCTAssertEqual(second.transcript.authoritativeText, "Sure, we can start from two weeks.")
     }
 
+    func testMakeTranscriptUpdate_speechFinalReplacesFullUtteranceRetake() throws {
+        let firstTake = """
+        {"type": "transcript.partial", "text": "Hello Morgan for the call tomorrow do you want me to invite Alex and Riley so the design lead and platform lead can sync regularly To I guess there are many details we can figure out", "is_final": true, "speech_final": true}
+        """
+        let first = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(firstTake.utf8),
+                state: .empty
+            )
+        )
+
+        let secondTake = """
+        {"type": "transcript.partial", "text": "Hello Morgan for the call tomorrow do you mind I invite Alex and Riley so the design lead and platform lead can sync regularly to I guess there are many details we can figure out", "is_final": true, "speech_final": true}
+        """
+        let second = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(secondTake.utf8),
+                state: first.state,
+                isFinalCommit: true
+            )
+        )
+
+        XCTAssertEqual(second.state.utterances.count, 1)
+        XCTAssertFalse(second.transcript.authoritativeText.contains("Hello Morgan for the call tomorrow do you want me"))
+        XCTAssertTrue(second.transcript.authoritativeText.contains("do you mind I invite Alex and Riley"))
+    }
+
+    func testDedupeOverlappingPhrases_removesFullUtteranceRestart() {
+        let noisy = """
+        Hello Morgan for the call tomorrow do you want me to invite Alex and Riley so the design lead and platform lead can sync regularly To I guess there are many details we can figure out Hello Morgan for the call tomorrow do you mind I invite Alex and Riley so the design lead and platform lead can sync regularly to I guess there are many details we can figure out
+        """
+        let deduped = GrokProtocol.dedupeOverlappingPhrases(noisy)
+        XCTAssertEqual(deduped.filter { $0 == "H" }.count, 1)
+        XCTAssertFalse(deduped.contains("do you want me to invite Alex and Riley"))
+        XCTAssertTrue(deduped.contains("do you mind I invite Alex and Riley"))
+    }
+
     func testMakeTranscriptUpdate_speechFinalStitchesPendingChunks() throws {
         var state = state(chunks: ["The red team ships fewer releases than the blue team but they"])
 

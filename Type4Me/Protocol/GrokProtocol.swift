@@ -245,9 +245,13 @@ enum GrokProtocol {
         let chunkText = state.currentChunks.joined().trimmingCharacters(in: .whitespacesAndNewlines)
         let utteranceText = commitUtteranceFromChunks(trimmed, chunkText: chunkText)
 
-        if let last = utterances.last,
-           shouldReviseUtterance(utteranceText, previousUtterance: last, pendingChunks: "") {
+        if let last = utterances.last, isNearDuplicateEcho(utteranceText, of: last) {
+            // duplicate echo — keep existing
+        } else if let last = utterances.last, isFullUtteranceRetake(utteranceText, of: last) {
             utterances[utterances.count - 1] = utteranceText
+        } else if let last = utterances.last,
+                  shouldReviseUtterance(utteranceText, previousUtterance: last, pendingChunks: "") {
+            utterances[utterances.count - 1] = preferBetterUtterance(utteranceText, over: last)
         } else if let last = utterances.last, isNearDuplicate(utteranceText, of: last) {
             // duplicate echo — keep existing
         } else if utterances.isEmpty {
@@ -331,6 +335,50 @@ enum GrokProtocol {
         return false
     }
 
+    /// Detect when xAI sends a second full take of the same monologue with minor edits.
+    private static func isFullUtteranceRetake(_ candidate: String, of previous: String) -> Bool {
+        if isNearDuplicateEcho(candidate, of: previous) { return false }
+        let candWords = normalizedWords(candidate)
+        let prevWords = normalizedWords(previous)
+        guard candWords.count >= 4, prevWords.count >= 4 else { return false }
+
+        let openingSize = 4
+        guard zip(candWords.prefix(openingSize), prevWords.prefix(openingSize)).allSatisfy({ fuzzyWordEqual($0, $1) }) else {
+            return false
+        }
+
+        return wordOverlapRatio(candWords, prevWords) >= 0.55
+    }
+
+    /// Trivial echo with only formatting or one-word drift — keep the first take.
+    private static func isNearDuplicateEcho(_ candidate: String, of previous: String) -> Bool {
+        guard isNearDuplicate(candidate, of: previous) else { return false }
+        let candWords = normalizedWords(candidate)
+        let prevWords = normalizedWords(previous)
+        guard abs(candWords.count - prevWords.count) <= 2 else { return false }
+        return wordOverlapRatio(candWords, prevWords) >= 0.95
+    }
+
+    private static func normalizedWords(_ text: String) -> [String] {
+        normalizedForDedup(text).split(separator: " ").map(String.init)
+    }
+
+    private static func wordOverlapRatio(_ a: [String], _ b: [String]) -> Double {
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        let setA = Set(a)
+        let setB = Set(b)
+        return Double(setA.intersection(setB).count) / Double(setA.union(setB).count)
+    }
+
+    private static func preferBetterUtterance(_ a: String, over b: String) -> String {
+        let aNorm = normalizedForDedup(a)
+        let bNorm = normalizedForDedup(b)
+        if aNorm.count != bNorm.count {
+            return aNorm.count > bNorm.count ? a : b
+        }
+        return a.count >= b.count ? a : b
+    }
+
     /// Detect when a new `speech_final` extends or corrects a prior take of the same pause.
     private static func isUtteranceRevision(_ candidate: String, of previous: String) -> Bool {
         let cand = normalizedForDedup(candidate)
@@ -389,11 +437,12 @@ enum GrokProtocol {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
 
-        let rawParts = trimmed.split(
+        let withoutRestart = dedupeFullUtteranceRestarts(trimmed)
+        let rawParts = withoutRestart.split(
             whereSeparator: { $0 == "." || $0 == "?" || $0 == "!" }
         ).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard rawParts.count >= 2 else {
-            return dedupeRepeatedWordSequences(trimmed)
+            return dedupeRepeatedWordSequences(withoutRestart)
         }
 
         var sentences: [String] = []
@@ -411,6 +460,30 @@ enum GrokProtocol {
         var deduped = sentences.joined(separator: " ")
         deduped = dedupeRepeatedClauses(in: deduped)
         return deduped
+    }
+
+    private static func dedupeFullUtteranceRestarts(_ text: String) -> String {
+        let words = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        let normalized = words.map { normalizedForDedup($0) }
+        guard words.count >= 8 else { return text }
+
+        let openingSize = 4
+        for i in openingSize..<words.count {
+            guard i + openingSize <= words.count else { break }
+            let restartOpen = normalized[i..<(i + openingSize)]
+            let startOpen = normalized[0..<openingSize]
+            guard restartOpen.elementsEqual(startOpen) else { continue }
+
+            let firstHalf = words[0..<i].joined(separator: " ")
+            let secondHalf = words[i...].joined(separator: " ")
+            if isFullUtteranceRetake(secondHalf, of: firstHalf) {
+                return secondHalf
+            }
+            if isNearDuplicateEcho(secondHalf, of: firstHalf) {
+                return preferBetterUtterance(firstHalf, over: secondHalf)
+            }
+        }
+        return text
     }
 
     private static func dedupeRepeatedWordSequences(_ text: String) -> String {
