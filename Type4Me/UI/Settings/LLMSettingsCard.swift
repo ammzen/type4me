@@ -84,33 +84,36 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
                 dynamicCredentialFields
             }
 
-            HStack(spacing: 8) {
-                Spacer()
-                testButton(
-                    L("测试连接", "Test"),
-                    status: llmTestStatus,
-                    isEnabled: hasLLMCredentials
-                ) { testLLMConnection() }
-                if hasLLMCredentials && !isEditingLLM {
-                    secondaryButton(L("修改", "Edit")) {
-                        testTask?.cancel()
-                        llmTestStatus = .idle
-                        llmCredentialValues = [:]
-                        editedFields = []
-                        isEditingLLM = true
-                        syncCustomModeFields()
-                    }
-                } else {
-                    if hasLLMCredentials && hasStoredLLM {
-                        secondaryButton(L("取消", "Cancel")) {
+            VStack(alignment: .trailing, spacing: 0) {
+                HStack(alignment: .top, spacing: 8) {
+                    Spacer()
+                    testButton(
+                        L("测试连接", "Test"),
+                        status: llmTestStatus,
+                        isEnabled: hasLLMCredentials
+                    ) { testLLMConnection() }
+                    if hasLLMCredentials && !isEditingLLM {
+                        secondaryButton(L("修改", "Edit")) {
                             testTask?.cancel()
                             llmTestStatus = .idle
-                            loadLLMCredentials()
+                            llmCredentialValues = [:]
+                            editedFields = []
+                            isEditingLLM = true
+                            syncCustomModeFields()
                         }
+                    } else {
+                        if hasLLMCredentials && hasStoredLLM {
+                            secondaryButton(L("取消", "Cancel")) {
+                                testTask?.cancel()
+                                llmTestStatus = .idle
+                                loadLLMCredentials()
+                            }
+                        }
+                        primaryButton(L("保存", "Save")) { saveLLMCredentials() }
+                            .disabled(!hasLLMCredentials)
                     }
-                    primaryButton(L("保存", "Save")) { saveLLMCredentials() }
-                        .disabled(!hasLLMCredentials)
                 }
+                testStatusMessage(status: llmTestStatus)
             }
             .padding(.top, 12)
         }

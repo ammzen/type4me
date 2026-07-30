@@ -4,6 +4,7 @@ import os
 enum GrokASRError: Error, LocalizedError {
     case unsupportedProvider
     case handshakeTimedOut
+    case httpRejected(statusCode: Int)
     case closedBeforeHandshake(code: Int, reason: String?)
 
     var errorDescription: String? {
@@ -11,12 +12,28 @@ enum GrokASRError: Error, LocalizedError {
         case .unsupportedProvider:
             return "GrokASRClient requires GrokASRConfig"
         case .handshakeTimedOut:
-            return "Grok STT handshake timed out"
+            return L("Grok STT 握手超时", "Grok STT handshake timed out")
+        case .httpRejected(let statusCode):
+            return Self.describeHTTPStatus(statusCode)
         case .closedBeforeHandshake(let code, let reason):
             if let reason, !reason.isEmpty {
-                return "Grok WebSocket closed before handshake (\(code)): \(reason)"
+                return L("Grok 连接被拒绝", "Grok connection rejected") + " (\(code)): \(reason)"
             }
-            return "Grok WebSocket closed before handshake (\(code))"
+            return L("Grok 连接被拒绝", "Grok connection rejected") + " (\(code))"
+        }
+    }
+
+    private static func describeHTTPStatus(_ statusCode: Int) -> String {
+        switch statusCode {
+        case 401:
+            return L("API Key 无效或已禁用", "Invalid or disabled API key") + " (HTTP 401)"
+        case 403:
+            return L("API Key 无权限访问该服务", "API key not authorized for this service") + " (HTTP 403)"
+        case 429:
+            return L("请求过于频繁", "Too many requests") + " (HTTP 429)"
+        default:
+            let reason = HTTPURLResponse.localizedString(forStatusCode: statusCode)
+            return L("服务器拒绝连接", "Server rejected connection") + " (HTTP \(statusCode): \(reason))"
         }
     }
 }
@@ -242,8 +259,16 @@ final class GrokWebSocketDelegate: NSObject, URLSessionWebSocketDelegate, URLSes
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let error else { return }
-        Task { await gate.markFailure(error) }
+        Task {
+            if let response = task.response as? HTTPURLResponse,
+               !(200...299).contains(response.statusCode),
+               await !gate.hasOpened {
+                await gate.markFailure(GrokASRError.httpRejected(statusCode: response.statusCode))
+                return
+            }
+            guard let error else { return }
+            await gate.markFailure(error)
+        }
     }
 
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {

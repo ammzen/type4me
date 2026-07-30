@@ -16,7 +16,7 @@ struct GrokASRConfig: ASRProviderConfig, Sendable {
         CredentialField(
             key: "apiKey",
             label: "API Key",
-            placeholder: L("粘贴 xAI API Key", "Paste your xAI API Key"),
+            placeholder: "xai-...",
             isSecure: true,
             isOptional: false,
             defaultValue: ""

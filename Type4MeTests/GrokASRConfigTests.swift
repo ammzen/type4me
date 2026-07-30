@@ -26,4 +26,9 @@ final class GrokASRConfigTests: XCTestCase {
         let keys = GrokASRConfig.credentialFields.map(\.key)
         XCTAssertEqual(keys, ["apiKey", "language"])
     }
+
+    func testAPIKeyPlaceholderMatchesProviderFormat() {
+        let apiKeyField = GrokASRConfig.credentialFields.first { $0.key == "apiKey" }
+        XCTAssertEqual(apiKeyField?.placeholder, "xai-...")
+    }
 }
