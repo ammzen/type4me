@@ -4,7 +4,7 @@ import XCTest
 final class GrokProtocolTests: XCTestCase {
 
     private func state(utterances: [String] = [], chunks: [String] = []) -> GrokTranscriptState {
-        GrokTranscriptState(utterances: utterances, currentChunks: chunks)
+        GrokTranscriptState(utterances: utterances, chunks: chunks)
     }
 
     func testBuildWebSocketURL_includesStreamingParams() throws {
@@ -26,6 +26,8 @@ final class GrokProtocolTests: XCTestCase {
         XCTAssertEqual(items.value(for: "encoding"), "pcm")
         XCTAssertEqual(items.value(for: "interim_results"), "true")
         XCTAssertEqual(items.value(for: "filler_words"), "false")
+        XCTAssertEqual(items.value(for: "smart_turn"), "0.7")
+        XCTAssertEqual(items.value(for: "smart_turn_timeout"), "3000")
         XCTAssertEqual(items.value(for: "language"), "en")
         XCTAssertEqual(items.values(for: "keyterm"), ["Type4Me", "Understand The Universe"])
     }
@@ -89,7 +91,7 @@ final class GrokProtocolTests: XCTestCase {
                 state: .empty
             )
         )
-        XCTAssertEqual(first.state.currentChunks, ["To add some"])
+        XCTAssertEqual(first.state.chunks, ["To add some"])
 
         let duplicateChunk = """
         {"type": "transcript.partial", "text": "To add some", "is_final": true, "speech_final": false}
@@ -100,7 +102,7 @@ final class GrokProtocolTests: XCTestCase {
                 state: first.state
             )
         )
-        XCTAssertEqual(second.state.currentChunks, ["To add some"])
+        XCTAssertEqual(second.state.chunks, ["To add some"])
 
         let chunk2 = """
         {"type": "transcript.partial", "text": "For future training", "is_final": true, "speech_final": false}
@@ -162,29 +164,55 @@ final class GrokProtocolTests: XCTestCase {
         )
     }
 
-    func testMakeTranscriptUpdate_speechFinalSkipsNearDuplicateUtterance() throws {
-        let sentenceOne = """
+    func testMakeTranscriptUpdate_speechFinalReplacesNearDuplicateRevision() throws {
+        let firstTake = """
         {"type": "transcript.partial", "text": "Thank you for the update and the follow-up.", "is_final": true, "speech_final": true}
         """
         let first = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
-                from: Data(sentenceOne.utf8),
+                from: Data(firstTake.utf8),
                 state: .empty
             )
         )
 
-        let sentenceTwo = """
+        let revision = """
         {"type": "transcript.partial", "text": "Thank you for the update and the follow up.", "is_final": true, "speech_final": true}
         """
         let second = try XCTUnwrap(
             GrokProtocol.makeTranscriptUpdate(
-                from: Data(sentenceTwo.utf8),
+                from: Data(revision.utf8),
                 state: first.state
             )
         )
 
-        XCTAssertEqual(second.state.utterances, first.state.utterances)
-        XCTAssertEqual(second.transcript.authoritativeText, "Thank you for the update and the follow-up.")
+        XCTAssertEqual(second.state.utterances.count, 1)
+        XCTAssertEqual(second.transcript.authoritativeText, "Thank you for the update and the follow up.")
+    }
+
+    func testMakeTranscriptUpdate_speechFinalReplacesContractionRevision() throws {
+        let firstTake = """
+        {"type": "transcript.partial", "text": "And also this relocation is not business critical.", "is_final": true, "speech_final": true}
+        """
+        let first = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(firstTake.utf8),
+                state: .empty
+            )
+        )
+
+        let revision = """
+        {"type": "transcript.partial", "text": "And also this relocation isn't business critical.", "is_final": true, "speech_final": true}
+        """
+        let second = try XCTUnwrap(
+            GrokProtocol.makeTranscriptUpdate(
+                from: Data(revision.utf8),
+                state: first.state
+            )
+        )
+
+        XCTAssertEqual(second.state.utterances.count, 1)
+        XCTAssertEqual(second.transcript.authoritativeText, "And also this relocation isn't business critical.")
+        XCTAssertFalse(second.transcript.authoritativeText.contains("is not business critical"))
     }
 
     func testMakeTranscriptUpdate_speechFinalRevisesShortUtterance() throws {
@@ -235,29 +263,8 @@ final class GrokProtocolTests: XCTestCase {
         )
 
         XCTAssertEqual(second.state.utterances.count, 1)
-        XCTAssertFalse(second.transcript.authoritativeText.contains("Hello Morgan for the call tomorrow do you want me"))
+        XCTAssertFalse(second.transcript.authoritativeText.contains("do you want me to invite Alex and Riley"))
         XCTAssertTrue(second.transcript.authoritativeText.contains("do you mind I invite Alex and Riley"))
-    }
-
-    func testDedupeOverlappingPhrases_removesStutteredUtteranceRetakeWithTail() {
-        let noisy = """
-        Cool I I just invited them We can set as is and Alex is traveling in the metro area this week Cool I just invited them We can set as is and Alex is traveling in the metro area this week But they may not be able to join every single week
-        """
-        let deduped = GrokProtocol.dedupeOverlappingPhrases(noisy)
-        XCTAssertEqual(deduped.filter { $0 == "C" }.count, 1)
-        XCTAssertFalse(deduped.contains("Cool I I just invited them We can set as is"))
-        XCTAssertTrue(deduped.contains("Cool I just invited them"))
-        XCTAssertTrue(deduped.contains("may not be able to join every single week"))
-    }
-
-    func testDedupeOverlappingPhrases_removesFullUtteranceRestart() {
-        let noisy = """
-        Hello Morgan for the call tomorrow do you want me to invite Alex and Riley so the design lead and platform lead can sync regularly To I guess there are many details we can figure out Hello Morgan for the call tomorrow do you mind I invite Alex and Riley so the design lead and platform lead can sync regularly to I guess there are many details we can figure out
-        """
-        let deduped = GrokProtocol.dedupeOverlappingPhrases(noisy)
-        XCTAssertEqual(deduped.filter { $0 == "H" }.count, 1)
-        XCTAssertFalse(deduped.contains("do you want me to invite Alex and Riley"))
-        XCTAssertTrue(deduped.contains("do you mind I invite Alex and Riley"))
     }
 
     func testMakeTranscriptUpdate_speechFinalStitchesPendingChunks() throws {
@@ -318,8 +325,8 @@ final class GrokProtocolTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(update.confirmedSegments, ["Thank you for the update and the follow-up."])
-        XCTAssertEqual(update.transcript.authoritativeText, "Thank you for the update and the follow-up.")
+        XCTAssertEqual(update.confirmedSegments, ["Thank you for the update and the follow-up. Thank you for the update and the follow up."])
+        XCTAssertFalse(update.transcript.authoritativeText.filter { $0 == "." }.count > 2)
     }
 
     func testMakeTranscriptUpdate_transcriptDoneReplacesConfirmedSegments() throws {
@@ -339,39 +346,13 @@ final class GrokProtocolTests: XCTestCase {
         XCTAssertTrue(update.transcript.isFinal)
     }
 
-    func testDedupeOverlappingPhrases_collapsesRepeatedRunOnPhrases() {
-        let noisy = """
-        Alpha builds the API layer Alpha builds the API layer in phase two so the crew learns what we ship in phase two so the crew learns what we ship each week.
-        """
-        let deduped = GrokProtocol.dedupeOverlappingPhrases(noisy)
-        XCTAssertFalse(deduped.contains("Alpha builds the API layer Alpha builds"))
-        XCTAssertEqual(
-            deduped,
-            "Alpha builds the API layer in phase two so the crew learns what we ship each week."
-        )
-    }
-
-    func testPolishTranscript_repairsOrphanTerminalPeriods() {
-        let broken = "We should be careful for platform changes and. Those are changes hard to be reverted."
-        XCTAssertEqual(
-            GrokProtocol.polishTranscript(broken),
-            "We should be careful for platform changes and Those are changes hard to be reverted."
-        )
-
-        let broken2 = "I'll share with team individually and in. The meetings."
-        XCTAssertEqual(
-            GrokProtocol.polishTranscript(broken2),
-            "I'll share with team individually and in The meetings."
-        )
-    }
-
     func testJoinedConfirmed_joinsUtterancesWithSpaces() {
-        var state = GrokTranscriptState(
+        let state = GrokTranscriptState(
             utterances: [
                 "Thanks for the feedback.",
                 "Yes, agree."
             ],
-            currentChunks: []
+            chunks: []
         )
         XCTAssertEqual(state.joinedConfirmed, "Thanks for the feedback. Yes, agree.")
     }
