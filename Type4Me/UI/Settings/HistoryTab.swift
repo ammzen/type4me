@@ -1030,7 +1030,7 @@ struct HistoryTab: View {
             }
         }
         .padding(16)
-        .frame(width: 460)
+        .frame(width: 550)
     }
 
     private var usageDetailsHeader: some View {
@@ -1042,6 +1042,8 @@ struct HistoryTab: View {
             Text(L("7天", "7 days"))
                 .frame(width: 78, alignment: .trailing)
             Text(L("30天", "30 days"))
+                .frame(width: 78, alignment: .trailing)
+            Text(L("全部", "All time"))
                 .frame(width: 78, alignment: .trailing)
         }
         .font(.system(size: 10, weight: .semibold))
@@ -1069,6 +1071,8 @@ struct HistoryTab: View {
             Text(formatUsageDuration(row.last7DaysDuration))
                 .frame(width: 78, alignment: .trailing)
             Text(formatUsageDuration(row.last30DaysDuration))
+                .frame(width: 78, alignment: .trailing)
+            Text(formatUsageDuration(row.allTimeDuration))
                 .frame(width: 78, alignment: .trailing)
         }
         .font(.system(size: 11, weight: .medium, design: .rounded))

@@ -302,6 +302,7 @@ actor HistoryStore {
         let lastDayDuration: Double
         let last7DaysDuration: Double
         let last30DaysDuration: Double
+        let allTimeDuration: Double
         let recordCount: Int
 
         var id: String { modelName }
@@ -353,10 +354,14 @@ actor HistoryStore {
 
         let sql = """
         SELECT
-            COALESCE(NULLIF(asr_model, ''), NULLIF(asr_provider, ''), ?) AS model_name,
+            CASE
+                WHEN lower(trim(COALESCE(asr_provider, ''))) = 'elevenlabs' THEN 'ElevenLabs'
+                ELSE COALESCE(NULLIF(asr_model, ''), NULLIF(asr_provider, ''), ?)
+            END AS model_name,
             COALESCE(SUM(CASE WHEN created_at >= ? THEN duration_seconds ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN created_at >= ? THEN duration_seconds ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN created_at >= ? THEN duration_seconds ELSE 0 END), 0),
+            COALESCE(SUM(duration_seconds), 0),
             COUNT(*)
         FROM recognition_history
         GROUP BY 1
@@ -379,7 +384,8 @@ actor HistoryStore {
                 lastDayDuration: sqlite3_column_double(stmt, 1),
                 last7DaysDuration: sqlite3_column_double(stmt, 2),
                 last30DaysDuration: sqlite3_column_double(stmt, 3),
-                recordCount: Int(sqlite3_column_int(stmt, 4))
+                allTimeDuration: sqlite3_column_double(stmt, 4),
+                recordCount: Int(sqlite3_column_int(stmt, 5))
             ))
         }
         return rows
