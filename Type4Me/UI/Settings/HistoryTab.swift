@@ -1060,9 +1060,6 @@ struct HistoryTab: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(TF.settingsText)
                     .lineLimit(1)
-                Text(L("\(row.recordCount) 条记录", "\(row.recordCount) records"))
-                    .font(.system(size: 9))
-                    .foregroundStyle(TF.settingsTextTertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1072,8 +1069,13 @@ struct HistoryTab: View {
                 .frame(width: 78, alignment: .trailing)
             Text(formatUsageDuration(row.last30DaysDuration))
                 .frame(width: 78, alignment: .trailing)
-            Text(formatUsageDuration(row.allTimeDuration))
-                .frame(width: 78, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(formatUsageDuration(row.allTimeDuration))
+                Text(L("\(row.recordCount) 条记录", "\(row.recordCount) records"))
+                    .font(.system(size: 9))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+            .frame(width: 78, alignment: .trailing)
         }
         .font(.system(size: 11, weight: .medium, design: .rounded))
         .foregroundStyle(TF.settingsText)

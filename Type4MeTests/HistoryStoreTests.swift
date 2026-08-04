@@ -185,6 +185,11 @@ final class HistoryStoreTests: XCTestCase {
                 rawText: "f", processingMode: nil, processedText: nil,
                 finalText: "f", status: "completed", characterCount: 1, asrProvider: "ElevenLabs",
                 asrModel: "ElevenLabs"
+            ),
+            HistoryRecord(
+                id: "unknown", createdAt: now.addingTimeInterval(-60), durationSeconds: 60,
+                rawText: "g", processingMode: nil, processedText: nil,
+                finalText: "g", status: "completed", characterCount: 1, asrProvider: nil
             )
         ]
 
@@ -209,5 +214,7 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(byModel["ElevenLabs"]?.recordCount, 2)
         XCTAssertEqual(byModel["ElevenLabs"]?.last30DaysDuration ?? 0, 45, accuracy: 0.01)
         XCTAssertEqual(byModel["ElevenLabs"]?.allTimeDuration ?? 0, 120, accuracy: 0.01)
+        XCTAssertEqual(rows.last?.modelName, "Unknown")
+        XCTAssertEqual(rows.dropLast().map(\.allTimeDuration), rows.dropLast().map(\.allTimeDuration).sorted(by: >))
     }
 }
