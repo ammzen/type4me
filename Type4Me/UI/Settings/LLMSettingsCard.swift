@@ -76,12 +76,10 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
     var body: some View {
         settingsGroupCard(L("LLM 文本处理", "LLM Settings"), icon: "gearshape.fill") {
             llmProviderPicker
-            SettingsDivider()
-
             if selectedLLMProvider == .codexCLI {
                 codexRuntimeNotice
-                SettingsDivider()
             }
+            SettingsDivider()
 
             if hasLLMCredentials && !isEditingLLM {
                 credentialSummaryCard(rows: llmSummaryRows)
@@ -235,21 +233,15 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
     }
 
     private var codexRuntimeNotice: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "terminal")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(TF.settingsTextSecondary)
-                .padding(.top, 1)
-            Text(L(
-                "使用本机 Codex CLI 和 ChatGPT 登录态，无需 API Key。文本仍会发送到 OpenAI，并消耗 Codex 账号额度。",
-                "Uses the local Codex CLI and ChatGPT sign-in with no API key. Text is still sent to OpenAI and uses Codex account quota."
-            ))
-            .font(.system(size: 11))
-            .foregroundStyle(TF.settingsTextSecondary)
-            .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 6)
+        Text(L(
+            "使用本机已登录的 Codex CLI，无需单独配置 API Key。文本仍会发送到 OpenAI，并消耗 Codex 账号额度。",
+            "Uses the Codex CLI already signed in on this Mac, with no separate API key configuration. Text is still sent to OpenAI and uses Codex account quota."
+        ))
+        .font(.system(size: 11))
+        .foregroundStyle(TF.settingsTextSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, 6)
     }
 
     // MARK: - Credential Fields
