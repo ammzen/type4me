@@ -163,14 +163,6 @@ enum KeychainService {
 
     // MARK: - Legacy ASR convenience (volcano-specific, kept for migration)
 
-    static func saveASRCredentials(appKey: String, accessKey: String, resourceId: String) throws {
-        try saveASRCredentials(for: .volcano, values: [
-            "appKey": appKey,
-            "accessKey": accessKey,
-            "resourceId": resourceId,
-        ])
-    }
-
     static func loadASRConfig() -> VolcanoASRConfig? {
         loadASRConfig(for: .volcano) as? VolcanoASRConfig
     }
@@ -288,6 +280,11 @@ enum KeychainService {
         var mutableDict = dict
         var legacyExternalKeysToClean = Set<String>()
 
+        // Volcano moved to single-API-Key auth: purge the retired App ID +
+        // Access Token pair so the token cannot be demoted to plaintext JSON
+        // by a later save (it is no longer a `isSecure` field).
+        migrated = purgeRetiredVolcanoAuthFields(in: &mutableDict) || migrated
+
         // Migrate ASR: tf_appKey/tf_accessKey/tf_resourceId → tf_asr_volcano
         let legacyASRKeys = ["tf_appKey", "tf_accessKey", "tf_resourceId"]
         let legacyASR = legacyVolcanoASRCredentials(in: dict)
@@ -363,6 +360,42 @@ enum KeychainService {
     }
 
     @discardableResult
+    /// Removes the retired Volcano App ID / Access Token from both stores.
+    /// Returns true when the plaintext file dict was modified.
+    private static func purgeRetiredVolcanoAuthFields(in dict: inout [String: Any]) -> Bool {
+        let storageKey = asrStorageKey(for: .volcano)
+        let retired = VolcanoASRConfig.retiredCredentialKeys
+
+        // Keychain: rewrite the grouped blob without the retired keys.
+        let secure = loadSecureValues(account: storageKey)
+        if retired.contains(where: { secure[$0] != nil }) {
+            var cleaned = secure
+            for key in retired {
+                cleaned.removeValue(forKey: key)
+            }
+            if cleaned.isEmpty {
+                deleteSecureValue(service: keychainGroupedService, account: storageKey)
+            } else {
+                try? saveSecureValues(cleaned, account: storageKey)
+            }
+            NSLog("[KeychainService] Purged retired Volcano auth fields from Keychain")
+        }
+
+        // Plaintext file: drop the retired keys from the provider bucket.
+        var plaintext = stringDictionary(dict[storageKey])
+        guard retired.contains(where: { plaintext[$0] != nil }) else { return false }
+        for key in retired {
+            plaintext.removeValue(forKey: key)
+        }
+        if plaintext.isEmpty {
+            dict.removeValue(forKey: storageKey)
+        } else {
+            dict[storageKey] = plaintext
+        }
+        NSLog("[KeychainService] Purged retired Volcano auth fields from credentials.json")
+        return true
+    }
+
     private static func removeLegacyFileKeys(_ keys: [String], from dict: inout [String: Any]) -> Bool {
         var changed = false
         for key in keys {
@@ -492,7 +525,13 @@ enum KeychainService {
         legacy: [String: String] = [:]
     ) -> [String: String] {
         let fields = ASRProviderRegistry.configType(for: provider)?.credentialFields ?? []
-        return compatibleCredentialValues(stored: stored, legacy: legacy, fields: fields)
+        let retired = provider == .volcano ? VolcanoASRConfig.retiredCredentialKeys : []
+        return compatibleCredentialValues(
+            stored: stored,
+            legacy: legacy,
+            fields: fields,
+            retiredKeys: retired
+        )
     }
 
     static func compatibleLLMCredentials(
@@ -507,11 +546,15 @@ enum KeychainService {
     private static func compatibleCredentialValues(
         stored: [String: String],
         legacy: [String: String],
-        fields: [CredentialField]
+        fields: [CredentialField],
+        retiredKeys: [String] = []
     ) -> [String: String] {
         var result: [String: String] = [:]
         mergeNonEmpty(legacy, into: &result)
         mergeNonEmpty(stored, into: &result)
+        for key in retiredKeys {
+            result.removeValue(forKey: key)
+        }
 
         guard !result.isEmpty else { return [:] }
         for field in fields where !field.defaultValue.isEmpty {
@@ -541,10 +584,10 @@ enum KeychainService {
         return result
     }
 
+    /// Only `resourceId` carries over: `tf_appKey` / `tf_accessKey` held the
+    /// retired App ID + Access Token pair.
     private static func legacyVolcanoASRCredentials(in dict: [String: Any]) -> [String: String] {
         var values: [String: String] = [:]
-        setLegacyValue("tf_appKey", as: "appKey", in: dict, values: &values)
-        setLegacyValue("tf_accessKey", as: "accessKey", in: dict, values: &values)
         setLegacyValue("tf_resourceId", as: "resourceId", in: dict, values: &values)
         return values
     }

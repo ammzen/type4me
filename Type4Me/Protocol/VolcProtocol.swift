@@ -22,6 +22,20 @@ struct VolcServerResponse: Sendable, Equatable {
 
 enum VolcProtocol: Sendable {
 
+    // MARK: - Auth Headers
+
+    /// Builds the WebSocket handshake auth headers.
+    ///
+    /// New-console auth takes a single `X-Api-Key`. The former
+    /// `X-Api-App-Key` + `X-Api-Access-Key` pair is retired.
+    static func authHeaders(apiKey: String, resourceId: String, connectId: String) -> [String: String] {
+        [
+            "X-Api-Key": apiKey,
+            "X-Api-Resource-Id": resourceId,
+            "X-Api-Connect-Id": connectId,
+        ]
+    }
+
     // MARK: - Build Client Request JSON
 
     static func buildClientRequest(

@@ -12,9 +12,11 @@ struct VolcanoASRConfig: ASRProviderConfig, Sendable {
     /// Auto: prefer 2.0, fall back to 1.0
     static let resourceIdAuto = "auto"
 
+    /// Credential keys retired when Volcengine moved to single-API-Key auth.
+    static let retiredCredentialKeys = ["appKey", "accessKey"]
+
     static var credentialFields: [CredentialField] {[
-        CredentialField(key: "appKey", label: L("App ID", "App ID"), placeholder: "APPID", isSecure: false, isOptional: false, defaultValue: ""),
-        CredentialField(key: "accessKey", label: L("访问令牌", "Access Token"), placeholder: L("访问令牌", "Access token"), isSecure: true, isOptional: false, defaultValue: ""),
+        CredentialField(key: "apiKey", label: "API Key", placeholder: L("粘贴 API Key", "Paste your API Key"), isSecure: true, isOptional: false, defaultValue: ""),
         CredentialField(
             key: "resourceId",
             label: L("识别模型", "Model"),
@@ -30,17 +32,13 @@ struct VolcanoASRConfig: ASRProviderConfig, Sendable {
         ),
     ]}
 
-    let appKey: String
-    let accessKey: String
+    let apiKey: String
     let resourceId: String
     let uid: String
 
     init?(credentials: [String: String]) {
-        guard let appKey = credentials["appKey"], !appKey.isEmpty,
-              let accessKey = credentials["accessKey"], !accessKey.isEmpty
-        else { return nil }
-        self.appKey = appKey
-        self.accessKey = accessKey
+        guard let apiKey = credentials["apiKey"], !apiKey.isEmpty else { return nil }
+        self.apiKey = apiKey
         let raw = credentials["resourceId"] ?? Self.resourceIdAuto
         if raw == Self.resourceIdAuto || raw.isEmpty {
             // Use resolved value from auto-detect, or default to seed
@@ -54,10 +52,10 @@ struct VolcanoASRConfig: ASRProviderConfig, Sendable {
     }
 
     func toCredentials() -> [String: String] {
-        ["appKey": appKey, "accessKey": accessKey, "resourceId": resourceId]
+        ["apiKey": apiKey, "resourceId": resourceId]
     }
 
     var isValid: Bool {
-        !appKey.isEmpty && !accessKey.isEmpty
+        !apiKey.isEmpty
     }
 }
