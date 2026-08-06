@@ -365,7 +365,7 @@ Steps 2-3 are optional. Skipping them disables local ASR, but cloud ASR works fi
 
 - **Swift Package Manager** project, no `.xcodeproj` needed
 - **Local ASR**: dual-engine design. SenseVoice (streaming partial results) + Qwen3-ASR (final calibration via MLX/Metal). Both run as Python WebSocket servers managed by `SenseVoiceServerManager`
-- **Cloud ASR**: 7 providers implemented (Volcano, OpenAI, Deepgram, AssemblyAI, Soniox, Bailian, Baidu)
+- **Cloud ASR**: 9 providers implemented (Volcano, StepFun batch, OpenAI, Deepgram, AssemblyAI, ElevenLabs, Soniox, Bailian, Baidu)
 - **Credentials**: stored at `~/Library/Application Support/Type4Me/credentials.json` (mode 0600), never in code or environment variables. GUI apps cannot read shell env vars from `~/.zshrc`
 - **ASR provider architecture**: plugin-based. To add a new provider: implement `ASRProviderConfig` + `SpeechRecognizer` protocol, register in `ASRProviderRegistry.all`. See `CLAUDE.md` for details
 - **Audio format**: 16kHz mono PCM16-LE, 200ms chunks (6400 bytes)

@@ -58,6 +58,11 @@ enum ASRProviderRegistry {
                 createClient: { VolcASRClient() },
                 capabilities: .streaming()
             ),
+            .stepfunBatch: ProviderEntry(
+                configType: StepFunBatchASRConfig.self,
+                createClient: { StepFunBatchASRClient() },
+                capabilities: .batch()
+            ),
             .deepgram: ProviderEntry(
                 configType: DeepgramASRConfig.self,
                 createClient: { DeepgramASRClient() },
