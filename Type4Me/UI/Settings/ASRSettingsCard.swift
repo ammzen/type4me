@@ -80,6 +80,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             return [
                 (L("API Key", "API Key"), L("获取", "get"), URL(string: "https://elevenlabs.io/app/settings/api-keys")!),
             ]
+        case .grok:
+            return [
+                ("API Key", L("获取", "get"), URL(string: "https://console.x.ai/team/default/api-keys")!),
+                (L("文档", "Docs"), L("查看", "view"), URL(string: "https://docs.x.ai/developers/model-capabilities/audio/speech-to-text")!),
+            ]
         case .soniox:
             return [
                 (L("API Key", "API Key"), L("获取", "get"), URL(string: "https://console.soniox.com")!),
@@ -175,34 +180,37 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                     dynamicCredentialFields
                 }
 
-                HStack(spacing: 8) {
-                    Spacer()
-                    testButton(
-                        L("测试连接", "Test"),
-                        status: asrTestStatus,
-                        isEnabled: hasASRCredentials && isASRProviderAvailable
-                    ) { testASRConnection() }
-                    if isZeroCredentialProvider {
-                        EmptyView()
-                    } else if hasASRCredentials && !isEditingASR {
-                        secondaryButton(L("修改", "Edit")) {
-                            testTask?.cancel()
-                            asrTestStatus = .idle
-                            asrCredentialValues = [:]
-                            editedFields = []
-                            isEditingASR = true
-                        }
-                    } else {
-                        if hasASRCredentials && hasStoredASR {
-                            secondaryButton(L("取消", "Cancel")) {
+                VStack(alignment: .trailing, spacing: 0) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Spacer()
+                        testButton(
+                            L("测试连接", "Test"),
+                            status: asrTestStatus,
+                            isEnabled: hasASRCredentials && isASRProviderAvailable
+                        ) { testASRConnection() }
+                        if isZeroCredentialProvider {
+                            EmptyView()
+                        } else if hasASRCredentials && !isEditingASR {
+                            secondaryButton(L("修改", "Edit")) {
                                 testTask?.cancel()
                                 asrTestStatus = .idle
-                                loadASRCredentials()
+                                asrCredentialValues = [:]
+                                editedFields = []
+                                isEditingASR = true
                             }
+                        } else {
+                            if hasASRCredentials && hasStoredASR {
+                                secondaryButton(L("取消", "Cancel")) {
+                                    testTask?.cancel()
+                                    asrTestStatus = .idle
+                                    loadASRCredentials()
+                                }
+                            }
+                            primaryButton(L("保存", "Save")) { saveASRCredentials() }
+                                .disabled(!hasASRCredentials)
                         }
-                        primaryButton(L("保存", "Save")) { saveASRCredentials() }
-                            .disabled(!hasASRCredentials)
                     }
+                    testStatusMessage(status: asrTestStatus)
                 }
                 .padding(.top, 12)
 
@@ -849,6 +857,9 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     }
 
     private static func describeConnectionError(_ error: Error) -> String {
+        if let localized = (error as? LocalizedError)?.errorDescription, !localized.isEmpty {
+            return localized
+        }
         if let volc = error as? VolcASRError, case .serverRejected(_, let message) = volc {
             return message ?? L("服务器拒绝连接", "Server rejected")
         }
@@ -857,14 +868,33 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             return code.map { "\(desc) (\($0))" } ?? desc
         }
         if let urlError = error as? URLError {
+            if let response = (urlError as NSError).userInfo["NSErrorFailingURLResponseKey"] as? HTTPURLResponse {
+                return httpStatusMessage(statusCode: response.statusCode)
+            }
             switch urlError.code {
             case .notConnectedToInternet: return L("网络未连接", "No internet")
             case .timedOut: return L("连接超时", "Timed out")
             case .cannotFindHost, .cannotConnectToHost: return L("无法连接服务器", "Cannot reach server")
+            case .badServerResponse:
+                return L("服务器响应异常，请检查 API Key 是否正确", "Bad server response — check your API key")
             default: return urlError.localizedDescription
             }
         }
         return L("连接失败", "Connection failed") + ": " + error.localizedDescription
+    }
+
+    private static func httpStatusMessage(statusCode: Int) -> String {
+        switch statusCode {
+        case 401:
+            return L("API Key 无效或已禁用", "Invalid or disabled API key") + " (HTTP 401)"
+        case 403:
+            return L("API Key 无权限访问该服务", "API key not authorized for this service") + " (HTTP 403)"
+        case 429:
+            return L("请求过于频繁", "Too many requests") + " (HTTP 429)"
+        default:
+            let reason = HTTPURLResponse.localizedString(forStatusCode: statusCode)
+            return L("服务器拒绝连接", "Server rejected connection") + " (HTTP \(statusCode): \(reason))"
+        }
     }
 
     private func currentASRRequestOptions(enablePunc: Bool) -> ASRRequestOptions {

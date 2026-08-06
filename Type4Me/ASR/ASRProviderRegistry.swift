@@ -78,6 +78,11 @@ enum ASRProviderRegistry {
                 createClient: { ElevenLabsASRClient() },
                 capabilities: .streaming()
             ),
+            .grok: ProviderEntry(
+                configType: GrokASRConfig.self,
+                createClient: { GrokASRClient() },
+                capabilities: .streaming()
+            ),
             .soniox: ProviderEntry(
                 configType: SonioxASRConfig.self,
                 createClient: { SonioxASRClient() },

@@ -1473,7 +1473,7 @@ actor RecognitionSession {
                     NSLog("[Session] Server closed ASR after interruption, initiating recovery")
                     DebugFileLogger.log("server completed after streaming interruption")
                     Task { await self.beginStreamRecovery(trigger: "ASR completed after interruption") }
-                } else {
+                } else if activeProvider != .grok {
                     NSLog("[Session] Server closed ASR while recording, initiating stop")
                     DebugFileLogger.log("server-initiated stop from recording state")
                     Task { await self.stopRecording() }
