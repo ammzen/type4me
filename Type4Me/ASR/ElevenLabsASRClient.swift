@@ -38,6 +38,7 @@ actor ElevenLabsASRClient: SpeechRecognizer {
     private var audioPacketCount = 0
     private var didRequestClose = false
     private var pendingFinalCommit = false   // true after endAudio() sends commit
+    private var languageCode = ""
     private var connectionGate: ElevenLabsConnectionGate?
 
     var events: AsyncStream<RecognitionEvent> {
@@ -71,6 +72,7 @@ actor ElevenLabsASRClient: SpeechRecognizer {
         self.sessionDelegate = delegate
         self.session = session
         self.webSocketTask = task
+        self.languageCode = elevenConfig.language
         confirmedSegments = []
         lastTranscript = .empty
         audioPacketCount = 0
@@ -108,6 +110,7 @@ actor ElevenLabsASRClient: SpeechRecognizer {
         eventContinuation = nil
         _events = nil
         connectionGate = nil
+        languageCode = ""
         confirmedSegments = []
         lastTranscript = .empty
         audioPacketCount = 0
@@ -155,7 +158,8 @@ actor ElevenLabsASRClient: SpeechRecognizer {
             if let update = try ElevenLabsProtocol.makeTranscriptUpdate(
                 from: data,
                 confirmedSegments: confirmedSegments,
-                isFinalCommit: pendingFinalCommit
+                isFinalCommit: pendingFinalCommit,
+                languageCode: languageCode
             ) {
                 confirmedSegments = update.confirmedSegments
                 guard update.transcript != lastTranscript else { return }
