@@ -214,7 +214,7 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(byModel["ElevenLabs"]?.recordCount, 2)
         XCTAssertEqual(byModel["ElevenLabs"]?.last30DaysDuration ?? 0, 45, accuracy: 0.01)
         XCTAssertEqual(byModel["ElevenLabs"]?.allTimeDuration ?? 0, 120, accuracy: 0.01)
-        XCTAssertEqual(rows.last?.modelName, "Unknown")
+        XCTAssertEqual(rows.last?.modelName, L("未知", "Unknown"))
         XCTAssertEqual(rows.dropLast().map(\.allTimeDuration), rows.dropLast().map(\.allTimeDuration).sorted(by: >))
     }
 }
