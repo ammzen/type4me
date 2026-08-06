@@ -173,6 +173,23 @@ final class HistoryStoreTests: XCTestCase {
                 id: "old", createdAt: now.addingTimeInterval(-40 * 24 * 60 * 60), durationSeconds: 300,
                 rawText: "d", processingMode: nil, processedText: nil,
                 finalText: "d", status: "completed", characterCount: 1, asrProvider: "Old"
+            ),
+            HistoryRecord(
+                id: "elevenlabs-scribe", createdAt: now.addingTimeInterval(-2 * 24 * 60 * 60), durationSeconds: 45,
+                rawText: "e", processingMode: nil, processedText: nil,
+                finalText: "e", status: "completed", characterCount: 1, asrProvider: "ElevenLabs",
+                asrModel: "ElevenLabs · scribe_v2_realtime"
+            ),
+            HistoryRecord(
+                id: "elevenlabs-default", createdAt: now.addingTimeInterval(-40 * 24 * 60 * 60), durationSeconds: 75,
+                rawText: "f", processingMode: nil, processedText: nil,
+                finalText: "f", status: "completed", characterCount: 1, asrProvider: "ElevenLabs",
+                asrModel: "ElevenLabs"
+            ),
+            HistoryRecord(
+                id: "unknown", createdAt: now.addingTimeInterval(-60), durationSeconds: 60,
+                rawText: "g", processingMode: nil, processedText: nil,
+                finalText: "g", status: "completed", characterCount: 1, asrProvider: nil
             )
         ]
 
@@ -186,9 +203,18 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(byModel["Soniox · stt-rt-v5"]?.lastDayDuration ?? 0, 30, accuracy: 0.01)
         XCTAssertEqual(byModel["Soniox · stt-rt-v5"]?.last7DaysDuration ?? 0, 120, accuracy: 0.01)
         XCTAssertEqual(byModel["Soniox · stt-rt-v5"]?.last30DaysDuration ?? 0, 120, accuracy: 0.01)
+        XCTAssertEqual(byModel["Soniox · stt-rt-v5"]?.allTimeDuration ?? 0, 120, accuracy: 0.01)
         XCTAssertEqual(byModel["OpenAI"]?.lastDayDuration ?? 0, 0, accuracy: 0.01)
         XCTAssertEqual(byModel["OpenAI"]?.last7DaysDuration ?? 0, 0, accuracy: 0.01)
         XCTAssertEqual(byModel["OpenAI"]?.last30DaysDuration ?? 0, 120, accuracy: 0.01)
+        XCTAssertEqual(byModel["OpenAI"]?.allTimeDuration ?? 0, 120, accuracy: 0.01)
         XCTAssertEqual(byModel["Old"]?.last30DaysDuration ?? 0, 0, accuracy: 0.01)
+        XCTAssertEqual(byModel["Old"]?.allTimeDuration ?? 0, 300, accuracy: 0.01)
+        XCTAssertEqual(rows.filter { $0.modelName == "ElevenLabs" }.count, 1)
+        XCTAssertEqual(byModel["ElevenLabs"]?.recordCount, 2)
+        XCTAssertEqual(byModel["ElevenLabs"]?.last30DaysDuration ?? 0, 45, accuracy: 0.01)
+        XCTAssertEqual(byModel["ElevenLabs"]?.allTimeDuration ?? 0, 120, accuracy: 0.01)
+        XCTAssertEqual(rows.last?.modelName, "Unknown")
+        XCTAssertEqual(rows.dropLast().map(\.allTimeDuration), rows.dropLast().map(\.allTimeDuration).sorted(by: >))
     }
 }

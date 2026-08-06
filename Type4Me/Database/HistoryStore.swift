@@ -302,6 +302,7 @@ actor HistoryStore {
         let lastDayDuration: Double
         let last7DaysDuration: Double
         let last30DaysDuration: Double
+        let allTimeDuration: Double
         let recordCount: Int
 
         var id: String { modelName }
@@ -349,18 +350,24 @@ actor HistoryStore {
         let lastDay = iso.string(from: now.addingTimeInterval(-24 * 60 * 60))
         let last7Days = iso.string(from: now.addingTimeInterval(-7 * 24 * 60 * 60))
         let last30Days = iso.string(from: now.addingTimeInterval(-30 * 24 * 60 * 60))
-        let unknown = L("未知模型/引擎", "Unknown model/engine")
+        let unknown = L("未知", "Unknown")
 
         let sql = """
         SELECT
-            COALESCE(NULLIF(asr_model, ''), NULLIF(asr_provider, ''), ?) AS model_name,
+            CASE
+                WHEN lower(trim(COALESCE(asr_provider, ''))) = 'elevenlabs' THEN 'ElevenLabs'
+                ELSE COALESCE(NULLIF(asr_model, ''), NULLIF(asr_provider, ''), ?)
+            END AS model_name,
             COALESCE(SUM(CASE WHEN created_at >= ? THEN duration_seconds ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN created_at >= ? THEN duration_seconds ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN created_at >= ? THEN duration_seconds ELSE 0 END), 0),
+            COALESCE(SUM(duration_seconds), 0),
             COUNT(*)
         FROM recognition_history
         GROUP BY 1
-        ORDER BY 4 DESC, 2 DESC, model_name COLLATE NOCASE ASC;
+        ORDER BY CASE WHEN model_name = ? THEN 1 ELSE 0 END,
+                 5 DESC,
+                 model_name COLLATE NOCASE ASC;
         """
 
         var stmt: OpaquePointer?
@@ -371,6 +378,7 @@ actor HistoryStore {
         bind(stmt, 2, lastDay)
         bind(stmt, 3, last7Days)
         bind(stmt, 4, last30Days)
+        bind(stmt, 5, unknown)
 
         var rows: [UsageBreakdown] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -379,7 +387,8 @@ actor HistoryStore {
                 lastDayDuration: sqlite3_column_double(stmt, 1),
                 last7DaysDuration: sqlite3_column_double(stmt, 2),
                 last30DaysDuration: sqlite3_column_double(stmt, 3),
-                recordCount: Int(sqlite3_column_int(stmt, 4))
+                allTimeDuration: sqlite3_column_double(stmt, 4),
+                recordCount: Int(sqlite3_column_int(stmt, 5))
             ))
         }
         return rows
