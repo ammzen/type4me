@@ -118,17 +118,24 @@ struct ModeStorage {
             }
         }
 
-        // One-time seed of agentMode for existing installs
-        // (custom defaults are not auto-injected like builtins, so we seed once then respect the user's edits)
-        let agentSeedKey = "tf_agentModeSeeded"
-        if !UserDefaults.standard.bool(forKey: agentSeedKey) {
-            if !result.contains(where: { $0.id == ProcessingMode.agentModeId }) {
-                result.append(ProcessingMode.agentMode)
-                // Persist immediately so the seeded mode survives even if the
-                // user quits before triggering any save path.
-                try? save(result)
+        // One-time seeds for deletable default modes on existing installs.
+        // Once seeded, deleting one is respected and will not re-inject it.
+        let seededDefaults: [(mode: ProcessingMode, key: String)] = [
+            (.translateToChinese, "tf_translateToChineseModeSeeded"),
+            (.agentMode, "tf_agentModeSeeded"),
+        ]
+        var seededAnyMode = false
+        for seed in seededDefaults where !UserDefaults.standard.bool(forKey: seed.key) {
+            if !result.contains(where: { $0.id == seed.mode.id }) {
+                result.append(seed.mode)
+                seededAnyMode = true
             }
-            UserDefaults.standard.set(true, forKey: agentSeedKey)
+            UserDefaults.standard.set(true, forKey: seed.key)
+        }
+        if seededAnyMode {
+            // Persist immediately so seeded modes survive even if the user
+            // quits before triggering another save path.
+            try? save(result)
         }
 
         return result

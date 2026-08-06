@@ -13,8 +13,8 @@ struct VolcanoASRConfig: ASRProviderConfig, Sendable {
     static let resourceIdAuto = "auto"
 
     static var credentialFields: [CredentialField] {[
-        CredentialField(key: "appKey", label: "App ID", placeholder: "APPID", isSecure: false, isOptional: false, defaultValue: ""),
-        CredentialField(key: "accessKey", label: "Access Token", placeholder: L("访问令牌", "Access token"), isSecure: true, isOptional: false, defaultValue: ""),
+        CredentialField(key: "appKey", label: L("App ID", "App ID"), placeholder: "APPID", isSecure: false, isOptional: false, defaultValue: ""),
+        CredentialField(key: "accessKey", label: L("访问令牌", "Access Token"), placeholder: L("访问令牌", "Access token"), isSecure: true, isOptional: false, defaultValue: ""),
         CredentialField(
             key: "resourceId",
             label: L("识别模型", "Model"),

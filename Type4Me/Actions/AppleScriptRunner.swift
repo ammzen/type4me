@@ -8,11 +8,11 @@ enum AppleScriptError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .nonZeroExit(let code, let stderr):
-            return "Process exited \(code): \(stderr)"
+            return L("操作退出（\(code)）：\(stderr)", "Process exited \(code): \(stderr)")
         case .timeout:
-            return "Action timed out"
+            return L("操作超时", "Action timed out")
         case .launchFailed(let msg):
-            return "Failed to launch process: \(msg)"
+            return L("无法启动操作：\(msg)", "Failed to launch process: \(msg)")
         }
     }
 }

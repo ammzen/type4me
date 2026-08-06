@@ -122,7 +122,7 @@ actor DoubaoChatClient: LLMClient {
 
         if result.isEmpty && lineCount > 0 {
             DebugFileLogger.log("LLM[\(model)]: \(lineCount) lines but 0 content chars")
-            throw LLMError.emptyResponse("stream contained no text")
+            throw LLMError.emptyResponse(L("流式响应没有文本", "stream contained no text"))
         }
         if result.isEmpty {
             DebugFileLogger.log("LLM[\(model)]: 0 lines received (connection closed immediately)")
@@ -149,7 +149,7 @@ actor DoubaoChatClient: LLMClient {
               let content = json.choices.first?.message.content, !content.isEmpty
         else {
             DebugFileLogger.log("LLM[\(model)]: non-streaming empty response")
-            throw LLMError.emptyResponse("empty response body")
+            throw LLMError.emptyResponse(L("响应正文为空", "empty response body"))
         }
         return content
     }

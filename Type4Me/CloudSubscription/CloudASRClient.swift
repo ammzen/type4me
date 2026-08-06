@@ -9,9 +9,9 @@ enum CloudASRError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedProvider: return "CloudASRClient requires CloudASRConfig"
-        case .notAuthenticated: return "Please log in to Type4Me Cloud"
-        case .invalidRegion: return "Could not determine region"
+        case .unsupportedProvider: return L("Type4Me Cloud 识别配置无效", "CloudASRClient requires CloudASRConfig")
+        case .notAuthenticated: return L("请先登录 Type4Me Cloud", "Please log in to Type4Me Cloud")
+        case .invalidRegion: return L("无法确定服务区域", "Could not determine region")
         }
     }
 }

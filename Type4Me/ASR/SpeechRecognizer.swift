@@ -99,6 +99,11 @@ enum RecognitionEvent: Sendable {
     case completed
     case processingResult(text: String)
     case processingLabelOverride(String)
+    case recoveryStarted(text: String, message: String)
+    case recoveryPrompt(text: String, message: String)
+    case recoverySucceeded(text: String, message: String)
+    case recoveryFailed(text: String, message: String)
+    case recoveryInterrupted(text: String, message: String)
     case finalized(text: String, injection: InjectionOutcome)
     /// Mac Action mode: action result to surface in the floating bar with
     /// status-specific icon and color, holding for ~3 seconds.

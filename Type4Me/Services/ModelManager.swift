@@ -273,9 +273,9 @@ actor ModelManager {
 
         var displayName: String {
             switch self {
-            case .onlineParaformer:  return "Streaming ASR"
-            case .offlineParaformer: return "Offline ASR"
-            case .punctuation:       return "Punctuation"
+            case .onlineParaformer:  return L("流式识别", "Streaming ASR")
+            case .offlineParaformer: return L("离线识别", "Offline ASR")
+            case .punctuation:       return L("标点恢复", "Punctuation")
             }
         }
     }

@@ -10,6 +10,7 @@ final class SonioxASRConfigTests: XCTestCase {
 
         XCTAssertEqual(config.apiKey, "soniox_test_key")
         XCTAssertEqual(config.model, SonioxASRConfig.defaultModel)
+        XCTAssertEqual(config.endpointSensitivity, SonioxASRConfig.defaultEndpointSensitivity)
         XCTAssertTrue(config.isValid)
     }
 
@@ -21,10 +22,23 @@ final class SonioxASRConfigTests: XCTestCase {
         let config = try XCTUnwrap(SonioxASRConfig(credentials: [
             "apiKey": "soniox_test_key",
             "model": "stt-rt-v5",
+            "endpointSensitivity": "-0.5",
         ]))
 
         XCTAssertEqual(config.toCredentials()["apiKey"], "soniox_test_key")
         XCTAssertEqual(config.toCredentials()["model"], "stt-rt-v5")
+        XCTAssertEqual(config.toCredentials()["endpointSensitivity"], "-0.5")
+    }
+
+    func testInit_invalidEndpointSensitivityFallsBackToDictationDefault() throws {
+        for value in ["invalid", "1.1", "-1.1"] {
+            let config = try XCTUnwrap(SonioxASRConfig(credentials: [
+                "apiKey": "soniox_test_key",
+                "endpointSensitivity": value,
+            ]))
+
+            XCTAssertEqual(config.endpointSensitivity, SonioxASRConfig.defaultEndpointSensitivity)
+        }
     }
 
     func testInitMigratesLegacyRealtimeModelsToV5() throws {

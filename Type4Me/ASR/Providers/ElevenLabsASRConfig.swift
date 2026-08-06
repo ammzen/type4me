@@ -17,8 +17,8 @@ struct ElevenLabsASRConfig: ASRProviderConfig, Sendable {
     ]
 
     static var credentialFields: [CredentialField] {[
-        CredentialField(key: "apiKey", label: "API Key", placeholder: L("粘贴 API Key", "Paste your API Key"), isSecure: true, isOptional: false, defaultValue: ""),
-        CredentialField(key: "model", label: "Model", placeholder: defaultModel, isSecure: false, isOptional: false, defaultValue: defaultModel,
+        CredentialField(key: "apiKey", label: L("API Key", "API Key"), placeholder: L("粘贴 API Key", "Paste your API Key"), isSecure: true, isOptional: false, defaultValue: ""),
+        CredentialField(key: "model", label: L("模型", "Model"), placeholder: defaultModel, isSecure: false, isOptional: false, defaultValue: defaultModel,
             options: supportedModels.map { FieldOption(value: $0, label: $0) }),
         CredentialField(key: "language", label: L("语言", "Language"), placeholder: "auto", isSecure: false, isOptional: true, defaultValue: "",
             options: supportedLanguages.map { FieldOption(value: $0, label: $0.isEmpty ? L("自动检测", "auto-detect") : $0) }),

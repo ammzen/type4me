@@ -15,7 +15,7 @@ enum SherpaASRError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedConfig:
-            return "SenseVoiceASRClient requires SherpaASRConfig"
+            return L("SenseVoice 本地识别配置无效", "SenseVoiceASRClient requires SherpaASRConfig")
         case .modelNotFound(let path):
             return L("模型未找到: \(path)", "Model not found: \(path)")
         case .modelFileMissing(let file, let dir):

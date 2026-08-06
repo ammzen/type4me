@@ -134,5 +134,6 @@ final class DemoState {
 // MARK: - FloatingBarState Conformance
 
 extension DemoState: FloatingBarState {
+    var pinsTranscriptPopup: Bool { false }
     var isQwen3OnlyMode: Bool { false }
 }

@@ -23,7 +23,7 @@ struct ModesSettingsTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsSectionHeader(
-                label: "MODES",
+                label: L("模式", "MODES"),
                 title: L("处理模式", "Modes"),
                 description: L("配置语音转写与后处理流水线。快速模式实时输出，自定义模式可经 LLM 加工。", "Configure speech-to-text and post-processing pipelines. Quick Mode outputs live text, and custom modes can use LLM processing.")
             )

@@ -272,6 +272,9 @@ WRAPPER
 
     echo "Local variant: all models bundled."
 else
+    rm -rf "$APP_PATH/Contents/Resources/Models" \
+           "$APP_PATH/Contents/Resources/qwen3-asr-server-dist" \
+           "$APP_PATH/Contents/MacOS/qwen3-asr-server"
     echo "Cloud variant: skipping model bundling."
 fi
 

@@ -221,7 +221,7 @@ struct HistoryTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsSectionHeader(
-                label: "HISTORY",
+                label: L("历史", "HISTORY"),
                 title: L("识别历史", "History"),
                 description: L("浏览和管理语音识别记录。", "Browse and manage speech recognition records.")
             )

@@ -7,9 +7,9 @@ enum VolcASRError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedProvider: return "VolcASRClient requires VolcanoASRConfig"
+        case .unsupportedProvider: return L("火山引擎识别配置无效", "VolcASRClient requires VolcanoASRConfig")
         case .serverRejected(let code, let message):
-            return message ?? "HTTP \(code)"
+            return message ?? L("HTTP \(code)", "HTTP \(code)")
         }
     }
 

@@ -52,6 +52,46 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.barPhase, .processing)
     }
 
+    func testShowRecoveryDisplaysPartialTextAndStatus() {
+        let appState = AppState()
+
+        appState.showRecovery(
+            text: "已经识别的文字",
+            message: "连接中断，已保留当前文字，正在用整段录音重试"
+        )
+
+        XCTAssertEqual(appState.barPhase, .recovering)
+        XCTAssertEqual(appState.transcriptionText, "已经识别的文字")
+        XCTAssertEqual(appState.effectiveProcessingLabel, "连接中断，已保留当前文字，正在用整段录音重试")
+    }
+
+    func testRecoveryPromptKeepsPartialTextVisible() {
+        let appState = AppState()
+        appState.showRecovery(
+            text: "已经识别的文字",
+            message: "连接中断，已保留当前文字，正在用整段录音重试"
+        )
+
+        appState.showRecoveryPrompt(
+            text: "已经识别的文字",
+            message: "正在恢复上一次识别。继续按下将打断当前恢复并重新开始录音。"
+        )
+
+        XCTAssertEqual(appState.barPhase, .recovering)
+        XCTAssertEqual(appState.transcriptionText, "已经识别的文字")
+        XCTAssertEqual(appState.effectiveProcessingLabel, "正在恢复上一次识别。继续按下将打断当前恢复并重新开始录音。")
+    }
+
+    func testRecoveryResultPinsTranscriptPopup() {
+        let appState = AppState()
+
+        appState.showRecoveryResult(text: "完整识别文字", message: "已恢复完整识别")
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.transcriptionText, "完整识别文字")
+        XCTAssertTrue(appState.pinsTranscriptPopup)
+    }
+
     func testHiddenRecordingVisualDoesNotShowPanelUntilProcessing() {
         let previousStyle = UserDefaults.standard.string(forKey: RecordingVisualStyle.storageKey)
         UserDefaults.standard.set(RecordingVisualStyle.hidden.rawValue, forKey: RecordingVisualStyle.storageKey)

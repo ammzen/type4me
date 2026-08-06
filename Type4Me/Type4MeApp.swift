@@ -147,6 +147,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case .processingResult(let text):
                         appState.showProcessingResult(text)
                         self.hotkeyManager.isProcessing = true
+                    case .recoveryStarted(let text, let message):
+                        appState.showRecovery(text: text, message: message)
+                        self.hotkeyManager.isProcessing = false
+                        self.hotkeyManager.resetActiveState()
+                    case .recoveryPrompt(let text, let message):
+                        appState.showRecoveryPrompt(text: text, message: message)
+                        self.hotkeyManager.isProcessing = false
+                        self.hotkeyManager.resetActiveState()
+                    case .recoverySucceeded(let text, let message):
+                        appState.showRecoveryResult(text: text, message: message)
+                        self.hotkeyManager.isProcessing = false
+                        self.safeResetHotkeyState()
+                    case .recoveryFailed(let text, let message):
+                        appState.showRecoveryResult(text: text, message: message)
+                        self.hotkeyManager.isProcessing = false
+                        self.safeResetHotkeyState()
+                    case .recoveryInterrupted(let text, let message):
+                        if appState.barPhase == .recovering {
+                            appState.showRecoveryResult(text: text, message: message)
+                        }
+                        self.hotkeyManager.isProcessing = false
+                        self.hotkeyManager.resetActiveState()
                     case .finalized(let text, let injection):
                         appState.finalize(text: text, outcome: injection)
                         self.hotkeyManager.isProcessing = false
@@ -299,6 +321,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         return
                     }
 
+                    if phase == .recovering {
+                        NSLog("[Type4Me] >>> HOTKEY: recovery press")
+                        DebugFileLogger.log("hotkey recovery press")
+                        MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
+                        let selectedProvider = KeychainService.selectedASRProvider
+                        let resolvedMode = ASRProviderRegistry.resolvedMode(for: capturedMode, provider: selectedProvider)
+                        let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
+                        Task {
+                            let action = await self.session.handleRecoveryHotkeyPress()
+                            guard action == .interrupted else { return }
+                            await MainActor.run {
+                                self.appState.currentMode = effectiveMode
+                                self.appState.startRecording()
+                            }
+                            await self.session.startRecording(mode: effectiveMode)
+                        }
+                        return
+                    }
+
                     // Block new recording while LLM/injection is still in progress.
                     // The current session must finish (paste + history save) before a new one can start.
                     if phase == .processing {
@@ -333,6 +374,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let phase = MainActor.assumeIsolated { self.appState.barPhase }
                     NSLog("[Type4Me] >>> HOTKEY: Record STOP (phase=%@)", String(describing: phase))
                     DebugFileLogger.log("hotkey record stop phase=\(phase)")
+                    if phase == .recovering {
+                        MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
+                        Task { _ = await self.session.handleRecoveryHotkeyPress() }
+                        return
+                    }
                     MainActor.assumeIsolated { self.appState.stopRecording() }
                     if phase == .preparing {
                         Task { await self.session.cancelRecording() }
@@ -349,6 +395,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyManager.onCrossModeStop = { [weak self] newModeId in
             guard let self else { return }
             guard let newMode = availableModes.first(where: { $0.id == newModeId }) else { return }
+            let phase = MainActor.assumeIsolated { self.appState.barPhase }
+            if phase == .recovering {
+                MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
+                Task { _ = await self.session.handleRecoveryHotkeyPress() }
+                return
+            }
             let selectedProvider = KeychainService.selectedASRProvider
             let resolvedMode = ASRProviderRegistry.resolvedMode(for: newMode, provider: selectedProvider)
             let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
@@ -466,13 +518,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showRestartAlert() {
         let alert = NSAlert()
-        alert.messageText = NSLocalizedString("辅助功能权限已开启，但快捷键未生效", comment: "")
-        alert.informativeText = NSLocalizedString(
+        alert.messageText = L("辅助功能权限已开启，但快捷键未生效", "Accessibility is enabled, but the hotkey is not working")
+        alert.informativeText = L(
             "macOS 有时需要重启应用才能激活全局快捷键。点击「重启」自动重启 Type4Me。",
-            comment: ""
+            "macOS sometimes requires an app restart before global hotkeys take effect. Click Restart to relaunch Type4Me."
         )
-        alert.addButton(withTitle: NSLocalizedString("重启", comment: ""))
-        alert.addButton(withTitle: NSLocalizedString("稍后", comment: ""))
+        alert.addButton(withTitle: L("重启", "Restart"))
+        alert.addButton(withTitle: L("稍后", "Later"))
         alert.alertStyle = .informational
 
         if alert.runModal() == .alertFirstButtonReturn {
@@ -741,6 +793,7 @@ struct MenuBarContent: View {
         case .preparing: return TF.recording
         case .recording: return TF.recording
         case .processing: return TF.amber
+        case .recovering: return TF.amber
         case .done: return TF.success
         case .error: return TF.settingsAccentRed
         case .hidden: return .secondary.opacity(0.4)
@@ -752,6 +805,7 @@ struct MenuBarContent: View {
         case .preparing: return L("录制中", "Recording")
         case .recording: return L("录制中", "Recording")
         case .processing: return appState.effectiveProcessingLabel
+        case .recovering: return appState.effectiveProcessingLabel
         case .done: return L("完成", "Done")
         case .error: return L("错误", "Error")
         case .hidden: return L("就绪", "Ready")

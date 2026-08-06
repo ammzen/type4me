@@ -7,19 +7,19 @@ enum ElevenLabsProtocolError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
-            return "Failed to build ElevenLabs WebSocket URL"
+            return L("无法生成 ElevenLabs WebSocket URL", "Failed to build ElevenLabs WebSocket URL")
         case .serverError(let type, let message):
             if let message, !message.isEmpty {
-                return "ElevenLabs error (\(type)): \(message)"
+                return L("ElevenLabs 错误（\(type)）：\(message)", "ElevenLabs error (\(type)): \(message)")
             }
-            return "ElevenLabs error: \(type)"
+            return L("ElevenLabs 错误：\(type)", "ElevenLabs error: \(type)")
         }
     }
 }
 
 struct ElevenLabsTermsError: Error, LocalizedError {
     var errorDescription: String? {
-        "ElevenLabs terms not accepted. Please visit elevenlabs.io/app/product-terms to enable Speech-to-Text."
+        L("ElevenLabs 条款尚未接受。请访问 elevenlabs.io/app/product-terms 启用 Speech-to-Text。", "ElevenLabs terms not accepted. Please visit elevenlabs.io/app/product-terms to enable Speech-to-Text.")
     }
 }
 

@@ -21,6 +21,13 @@ actor RecognitionSession {
         case finishing
         case injecting
         case postProcessing  // Phase 3
+        case recovering
+    }
+
+    enum RecoveryHotkeyAction: Equatable, Sendable {
+        case notRecovering
+        case prompted
+        case interrupted
     }
 
     private(set) var state: SessionState = .idle
@@ -191,6 +198,15 @@ actor RecognitionSession {
     private var audioChunkSenderTask: Task<Void, Never>?
     private var uploadFailureFlag: UploadFailureFlag?
     private var lastStreamingError: Error?
+    private var recoveryTask: Task<Void, Never>?
+    private var recoveryInterruptPromptShown = false
+    private var recoveryRecordId: String?
+    private var recoveryCreatedAt: Date?
+    private var recoveryPartialText = ""
+    private var recoveryDuration: Double = 0
+    private var recoveryModeName: String?
+    private var recoveryProvider: ASRProvider = .volcano
+    private var recoveryASRModel: String?
 
     /// Flipped to true when mic level exceeds threshold during recording.
     /// When false at stop time, we skip the full ASR teardown (no speech = nothing to finalize).
@@ -234,15 +250,53 @@ actor RecognitionSession {
             await startRecording()
         case .recording:
             await stopRecording()
+        case .recovering:
+            _ = await handleRecoveryHotkeyPress()
         default:
             logger.warning("toggleRecording ignored in state: \(String(describing: self.state))")
         }
     }
 
+    func handleRecoveryHotkeyPress() async -> RecoveryHotkeyAction {
+        guard state == .recovering else { return .notRecovering }
+
+        if !recoveryInterruptPromptShown {
+            recoveryInterruptPromptShown = true
+            onASREvent?(.recoveryPrompt(
+                text: recoveryPartialText,
+                message: L(
+                    "正在恢复上一次识别。继续按下将打断当前恢复并重新开始录音。",
+                    "Recovering the previous dictation. Press again to interrupt recovery and start a new recording."
+                )
+            ))
+            return .prompted
+        }
+
+        await interruptRecoveryForRestart()
+        return .interrupted
+    }
+
+    private func interruptRecoveryForRestart() async {
+        DebugFileLogger.log("recovery interrupted by hotkey")
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        if !recoveryPartialText.isEmpty {
+            await saveRecoveryHistory(status: "recovery_interrupted", finalText: recoveryPartialText)
+        }
+        onASREvent?(.recoveryInterrupted(
+            text: recoveryPartialText,
+            message: L("已停止恢复，开始新的录音", "Recovery stopped. Starting a new recording.")
+        ))
+        clearRecoveryState()
+        state = .idle
+        currentTranscript = .empty
+        warmUpASRConnection()
+    }
+
     // MARK: - Start
 
     func startRecording(mode: ProcessingMode = .direct) async {
-        if state == .finishing || state == .injecting || state == .postProcessing {
+        if state == .finishing || state == .injecting || state == .postProcessing || state == .recovering {
             NSLog("[Session] startRecording: blocked, current session still processing (state=%@)", String(describing: state))
             DebugFileLogger.log("startRecording blocked: still processing state=\(state)")
             return
@@ -909,8 +963,8 @@ actor RecognitionSession {
             )
             let fullAudio = audioEngine.getRecordedAudio()
             if !fullAudio.isEmpty, let config = currentConfig {
-                onASREvent?(.processingResult(text: partialText.isEmpty ? "重新识别中..." : partialText))
-                if let batchText = await attemptBatchFallback(audio: fullAudio, config: config) {
+                onASREvent?(.processingResult(text: partialText.isEmpty ? L("重新识别中...", "Retrying recognition...") : partialText))
+                if let batchText = await attemptBatchFallback(audio: fullAudio, config: config, provider: activeProvider) {
                     currentTranscript = RecognitionTranscript(
                         confirmedSegments: [batchText],
                         partialText: "",
@@ -1159,6 +1213,186 @@ actor RecognitionSession {
         logger.info("Session complete, injected \(effectiveText.count) chars")
     }
 
+    // MARK: - Stream interruption recovery
+
+    private func beginStreamRecovery(trigger: String) async {
+        guard state == .recording else {
+            DebugFileLogger.log("recovery ignored: state=\(state) trigger=\(trigger)")
+            return
+        }
+
+        let myGeneration = sessionGeneration
+        let provider = activeProvider
+        let config = currentConfig
+        let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        let partialText = normalizedRecoveryText(currentTranscript.displayText)
+        let asrModel = currentASRModelLabel(for: provider)
+
+        DebugFileLogger.log("recovery started trigger=\(trigger) partial=\(partialText.count) chars")
+        state = .recovering
+        recoveryInterruptPromptShown = false
+        recoveryRecordId = UUID().uuidString
+        recoveryCreatedAt = Date()
+        recoveryPartialText = partialText
+        recoveryDuration = duration
+        recoveryModeName = currentMode == .direct ? nil : currentMode.name
+        recoveryProvider = provider
+        recoveryASRModel = asrModel
+
+        maxDurationTask?.cancel()
+        maxDurationTask = nil
+        cancelSpeculativeLLM()
+        SystemVolumeManager.restore()
+
+        audioEngine.stop()
+        audioEngine.onAudioChunk = nil
+        audioEngine.onAudioLevel = nil
+        await finishAudioChunkPipeline(timeout: .milliseconds(250))
+        let fullAudio = audioEngine.getRecordedAudio()
+
+        eventConsumptionTask?.cancel()
+        eventConsumptionTask = nil
+        if let client = asrClient {
+            Task.detached { await client.disconnect() }
+        }
+        asrClient = nil
+        uploadFailureFlag = nil
+        lastStreamingError = nil
+
+        if !partialText.isEmpty {
+            await saveRecoveryHistory(status: "stream_partial_saved", finalText: partialText)
+            injectRecoveryPartial(partialText)
+        }
+
+        onASREvent?(.recoveryStarted(
+            text: partialText,
+            message: L(
+                "连接中断，已保留当前文字，正在用整段录音重试",
+                "Connection interrupted. Current text was saved; retrying with the full recording."
+            )
+        ))
+
+        guard sessionGeneration == myGeneration, state == .recovering else { return }
+        guard !fullAudio.isEmpty, let config else {
+            await finishRecovery(
+                recoveredText: nil,
+                generation: myGeneration,
+                failureMessage: L(
+                    "连接中断，已保留部分识别结果",
+                    "Connection interrupted. Partial recognition was saved."
+                )
+            )
+            return
+        }
+
+        recoveryTask?.cancel()
+        recoveryTask = Task {
+            let recovered = await self.attemptBatchFallback(
+                audio: fullAudio,
+                config: config,
+                provider: provider
+            )
+            await self.finishRecovery(
+                recoveredText: recovered,
+                generation: myGeneration,
+                failureMessage: L(
+                    "连接中断，已保留部分识别结果",
+                    "Connection interrupted. Partial recognition was saved."
+                )
+            )
+        }
+    }
+
+    private func finishRecovery(
+        recoveredText: String?,
+        generation: Int,
+        failureMessage: String
+    ) async {
+        guard state == .recovering, generation == sessionGeneration, !Task.isCancelled else {
+            return
+        }
+
+        let recovered = recoveredText.map(normalizedRecoveryText)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let recovered, !recovered.isEmpty {
+            injectionEngine.copyToClipboard(recovered)
+            currentTranscript = RecognitionTranscript(
+                confirmedSegments: [recovered],
+                partialText: "",
+                authoritativeText: recovered,
+                isFinal: true
+            )
+            await saveRecoveryHistory(status: "stream_recovered", finalText: recovered)
+            KeychainService.addASRUsage(seconds: recoveryDuration)
+            onASREvent?(.recoverySucceeded(
+                text: recovered,
+                message: L("已恢复完整识别", "Full recognition recovered")
+            ))
+            DebugFileLogger.log("recovery succeeded \(recovered.count) chars")
+        } else {
+            if !recoveryPartialText.isEmpty {
+                await saveRecoveryHistory(status: "stream_partial_saved", finalText: recoveryPartialText)
+                KeychainService.addASRUsage(seconds: recoveryDuration)
+            }
+            onASREvent?(.recoveryFailed(text: recoveryPartialText, message: failureMessage))
+            DebugFileLogger.log("recovery failed, partial=\(recoveryPartialText.count) chars")
+        }
+
+        clearRecoveryState()
+        state = .idle
+        currentTranscript = .empty
+        resetSpeculativeLLM()
+        SystemVolumeManager.restore()
+        warmUpASRConnection()
+    }
+
+    private func normalizedRecoveryText(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .removingCJKLatinSpaces
+            .strippingTrailingPunctuation
+    }
+
+    private func injectRecoveryPartial(_ text: String) {
+        let engine = injectionEngine
+        Task.detached {
+            engine.preserveClipboard = false
+            _ = engine.inject(text)
+        }
+    }
+
+    private func saveRecoveryHistory(status: String, finalText: String) async {
+        let recordId = recoveryRecordId ?? UUID().uuidString
+        recoveryRecordId = recordId
+        await historyStore.insert(HistoryRecord(
+            id: recordId,
+            createdAt: recoveryCreatedAt ?? Date(),
+            durationSeconds: recoveryDuration,
+            rawText: recoveryPartialText,
+            processingMode: recoveryModeName,
+            processedText: nil,
+            finalText: finalText,
+            status: status,
+            characterCount: finalText.count,
+            asrProvider: recoveryProvider.displayName,
+            asrModel: recoveryASRModel
+        ))
+    }
+
+    private func clearRecoveryState() {
+        recoveryTask?.cancel()
+        recoveryTask = nil
+        recoveryInterruptPromptShown = false
+        recoveryRecordId = nil
+        recoveryCreatedAt = nil
+        recoveryPartialText = ""
+        recoveryDuration = 0
+        recoveryModeName = nil
+        recoveryProvider = .volcano
+        recoveryASRModel = nil
+        currentConfig = nil
+    }
+
     // MARK: - ASR Events
 
     private func handleASREvent(_ event: RecognitionEvent, expectedGeneration: Int) {
@@ -1178,8 +1412,13 @@ actor RecognitionSession {
             break
         }
 
-        // Notify UI layer for all non-ready events
-        onASREvent?(event)
+        // Notify UI layer for all non-ready events. Streaming errors during
+        // recording become recoverable interruptions, not red error toasts.
+        if case .error = event, state == .recording {
+            // beginStreamRecovery surfaces the user-facing state.
+        } else {
+            onASREvent?(event)
+        }
 
         switch event {
         case .ready:
@@ -1210,6 +1449,9 @@ actor RecognitionSession {
         case .error(let error):
             lastStreamingError = error
             logger.error("ASR error: \(error)")
+            if state == .recording {
+                Task { await self.beginStreamRecovery(trigger: "ASR error: \(error)") }
+            }
 
         case .completed:
             logger.info("ASR stream completed")
@@ -1225,12 +1467,20 @@ actor RecognitionSession {
                 cont.resume(returning: text.isEmpty ? nil : text)
             }
             if state == .recording {
-                NSLog("[Session] Server closed ASR while recording, initiating stop")
-                DebugFileLogger.log("server-initiated stop from recording state")
-                Task { await self.stopRecording() }
+                if lastStreamingError != nil || uploadFailureFlag?.failed == true {
+                    NSLog("[Session] Server closed ASR after interruption, initiating recovery")
+                    DebugFileLogger.log("server completed after streaming interruption")
+                    Task { await self.beginStreamRecovery(trigger: "ASR completed after interruption") }
+                } else {
+                    NSLog("[Session] Server closed ASR while recording, initiating stop")
+                    DebugFileLogger.log("server-initiated stop from recording state")
+                    Task { await self.stopRecording() }
+                }
             }
 
-        case .processingResult, .processingLabelOverride, .finalized, .macActionResult:
+        case .processingResult, .processingLabelOverride, .recoveryStarted,
+             .recoveryPrompt, .recoverySucceeded, .recoveryFailed,
+             .recoveryInterrupted, .finalized, .macActionResult:
             break
         }
     }
@@ -1306,6 +1556,7 @@ actor RecognitionSession {
                 } catch {
                     DebugFileLogger.log("audio chunk send failed: \(error)")
                     failureFlag.failed = true
+                    Task { await self.beginStreamRecovery(trigger: "audio chunk send failed: \(error)") }
                     // If send fails, stop pumping — connection is dead.
                     break
                 }
@@ -1573,9 +1824,11 @@ actor RecognitionSession {
 
     /// Try to transcribe full audio via the same provider.
     /// Soniox uses its async REST API (faster for complete audio); others use a fresh streaming connection.
-    private func attemptBatchFallback(audio: Data, config: any ASRProviderConfig) async -> String? {
-        let provider = activeProvider
-
+    private func attemptBatchFallback(
+        audio: Data,
+        config: any ASRProviderConfig,
+        provider: ASRProvider
+    ) async -> String? {
         // Soniox: use async REST API instead of re-streaming
         if provider == .soniox, let sonioxConfig = config as? SonioxASRConfig {
             let bypass = ProxyBypassMode.current.bypassASR
@@ -1693,6 +1946,8 @@ actor RecognitionSession {
         asrCleanupTask?.cancel()
         asrCleanupTask = nil
         asrCleanupGeneration = nil
+        recoveryTask?.cancel()
+        recoveryTask = nil
         resetSpeculativeLLM()
 
         audioEngine.stop()
@@ -1712,6 +1967,7 @@ actor RecognitionSession {
         currentConfig = nil
         uploadFailureFlag = nil
         lastStreamingError = nil
+        clearRecoveryState()
         SystemVolumeManager.restore()
     }
 

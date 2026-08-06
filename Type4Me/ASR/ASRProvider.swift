@@ -32,7 +32,7 @@ enum ASRProvider: String, CaseIterable, Codable, Sendable {
     var displayName: String {
         switch self {
         case .sherpa:   return L("SenseVoice 流式 + Qwen3 ASR 校准", "SenseVoice Streaming + Qwen3 ASR")
-        case .apple:    return "Apple Speech"
+        case .apple:    return L("Apple 语音识别", "Apple Speech")
         case .openai:   return "OpenAI"
         case .azure:    return "Azure Speech"
         case .google:   return "Google Cloud STT"
@@ -48,7 +48,7 @@ enum ASRProvider: String, CaseIterable, Codable, Sendable {
         case .baidu:    return L("百度智能云", "Baidu AI Cloud")
         case .iflytek:  return L("讯飞", "iFLYTEK")
         #if HAS_CLOUD_SUBSCRIPTION
-        case .cloud:    return "Type4Me Cloud"
+        case .cloud:    return L("Type4Me Cloud", "Type4Me Cloud")
         #endif
         case .custom:   return L("自定义", "Custom")
         }
