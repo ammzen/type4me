@@ -63,7 +63,7 @@ actor CloudASRClient: SpeechRecognizer {
         if region == .cn {
             // China: speak Volcengine protocol through our proxy
             let volcConfig = VolcanoASRConfig(credentials: [
-                "appKey": "cloud", "accessKey": "cloud", "resourceId": VolcanoASRConfig.resourceIdSeedASR
+                "apiKey": "cloud", "resourceId": VolcanoASRConfig.resourceIdSeedASR
             ])!
             let client = VolcASRClient()
             try await client.connect(config: volcConfig, options: proxyOptions)

@@ -803,7 +803,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         }
 
         // Both failed
-        asrTestStatus = .failed(L("连接失败，请检查 App ID 和 Access Token", "Connection failed, check App ID & Access Token"))
+        asrTestStatus = .failed(L("连接失败，请检查 API Key", "Connection failed, check API Key"))
     }
 
     private func testVolcResource(baseValues: [String: String], resourceId: String, options: ASRRequestOptions) async -> Bool {
