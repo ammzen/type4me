@@ -79,7 +79,7 @@ actor VolcASRClient: SpeechRecognizer {
         if !isCloudProxy {
             // Direct connection: inject vendor credentials
             let headers = VolcProtocol.authHeaders(
-                apiKey: volcConfig.apiKey,
+                authentication: volcConfig.authentication,
                 resourceId: volcConfig.resourceId,
                 connectId: connectId
             )

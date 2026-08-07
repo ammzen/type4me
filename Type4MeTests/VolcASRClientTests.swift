@@ -4,7 +4,7 @@ import XCTest
 final class VolcASRClientTests: XCTestCase {
     func testAuthHeadersUseSingleAPIKey() {
         let headers = VolcProtocol.authHeaders(
-            apiKey: "my-api-key",
+            authentication: .apiKey("my-api-key"),
             resourceId: VolcanoASRConfig.resourceIdSeedASR,
             connectId: "connect-123"
         )
@@ -14,9 +14,9 @@ final class VolcASRClientTests: XCTestCase {
         XCTAssertEqual(headers["X-Api-Connect-Id"], "connect-123")
     }
 
-    func testAuthHeadersOmitRetiredCredentialHeaders() {
+    func testAPIKeyHeadersOmitLegacyCredentialHeaders() {
         let headers = VolcProtocol.authHeaders(
-            apiKey: "my-api-key",
+            authentication: .apiKey("my-api-key"),
             resourceId: VolcanoASRConfig.resourceIdSeedASR,
             connectId: "connect-123"
         )
@@ -24,6 +24,46 @@ final class VolcASRClientTests: XCTestCase {
         XCTAssertNil(headers["X-Api-App-Key"])
         XCTAssertNil(headers["X-Api-Access-Key"])
         XCTAssertEqual(headers.count, 3)
+    }
+
+    func testLegacyAuthHeadersUseAppIDAndAccessToken() {
+        let headers = VolcProtocol.authHeaders(
+            authentication: .legacy(appKey: "my-app-id", accessKey: "my-access-token"),
+            resourceId: VolcanoASRConfig.resourceIdSeedASR,
+            connectId: "connect-123"
+        )
+
+        XCTAssertNil(headers["X-Api-Key"])
+        XCTAssertEqual(headers["X-Api-App-Key"], "my-app-id")
+        XCTAssertEqual(headers["X-Api-Access-Key"], "my-access-token")
+        XCTAssertEqual(headers.count, 4)
+    }
+
+    func testConfigInfersLegacyAuthForExistingCredentials() throws {
+        let config = try XCTUnwrap(VolcanoASRConfig(credentials: [
+            "appKey": "my-app-id",
+            "accessKey": "my-access-token",
+            "resourceId": VolcanoASRConfig.resourceIdSeedASR,
+        ]))
+
+        XCTAssertEqual(config.authMode, VolcanoASRConfig.authModeLegacy)
+        XCTAssertEqual(config.appKey, "my-app-id")
+        XCTAssertEqual(config.accessKey, "my-access-token")
+        XCTAssertNil(config.apiKey)
+    }
+
+    func testExplicitAPIKeyModeWinsWhenBothCredentialSetsExist() throws {
+        let config = try XCTUnwrap(VolcanoASRConfig(credentials: [
+            "authMode": VolcanoASRConfig.authModeAPIKey,
+            "apiKey": "my-api-key",
+            "appKey": "my-app-id",
+            "accessKey": "my-access-token",
+        ]))
+
+        XCTAssertEqual(config.authMode, VolcanoASRConfig.authModeAPIKey)
+        XCTAssertEqual(config.apiKey, "my-api-key")
+        XCTAssertNil(config.appKey)
+        XCTAssertNil(config.accessKey)
     }
 
     func testWebSocketUpgradeProbeMessageIsIgnored() {

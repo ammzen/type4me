@@ -111,6 +111,39 @@ actor RecognitionSession {
         return "\(providerName) · \(model)"
     }
 
+    private static func volcanoConfigFromEnvironment(
+        _ environment: [String: String]
+    ) -> VolcanoASRConfig? {
+        var credentials = [
+            "resourceId": environment["VOLC_RESOURCE_ID"]
+                ?? VolcanoASRConfig.resourceIdSeedASR,
+        ]
+
+        if let apiKey = nonEmptyEnvironmentValue("VOLC_API_KEY", in: environment) {
+            credentials["authMode"] = VolcanoASRConfig.authModeAPIKey
+            credentials["apiKey"] = apiKey
+        } else if let appKey = nonEmptyEnvironmentValue("VOLC_APP_KEY", in: environment),
+                  let accessKey = nonEmptyEnvironmentValue("VOLC_ACCESS_KEY", in: environment) {
+            credentials["authMode"] = VolcanoASRConfig.authModeLegacy
+            credentials["appKey"] = appKey
+            credentials["accessKey"] = accessKey
+        } else {
+            return nil
+        }
+
+        return VolcanoASRConfig(credentials: credentials)
+    }
+
+    private static func nonEmptyEnvironmentValue(
+        _ key: String,
+        in environment: [String: String]
+    ) -> String? {
+        guard let value = environment[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty
+        else { return nil }
+        return value
+    }
+
     /// Pre-initialize audio subsystem so the first recording starts instantly.
     func warmUp() { audioEngine.warmUp() }
 
@@ -381,12 +414,9 @@ actor RecognitionSession {
             config = savedConfig
             NSLog("[Session] Loaded %@ credentials from file store", provider.rawValue)
         } else if provider == .volcano,
-                  let apiKey = ProcessInfo.processInfo.environment["VOLC_API_KEY"],
-                  let volcConfig = VolcanoASRConfig(credentials: [
-                      "apiKey": apiKey,
-                      "resourceId": ProcessInfo.processInfo.environment["VOLC_RESOURCE_ID"]
-                          ?? VolcanoASRConfig.resourceIdSeedASR,
-                  ]) {
+                  let volcConfig = Self.volcanoConfigFromEnvironment(
+                      ProcessInfo.processInfo.environment
+                  ) {
             // Env var fallback (volcano only, for dev convenience)
             do {
                 try KeychainService.saveASRCredentials(for: .volcano, values: volcConfig.toCredentials())

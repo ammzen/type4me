@@ -82,6 +82,7 @@ final class KeychainServiceTests: XCTestCase {
         let config = KeychainService.loadASRConfig()
         XCTAssertNotNil(config)
         XCTAssertEqual(config?.apiKey, "myApiKey")
+        XCTAssertEqual(config?.authMode, VolcanoASRConfig.authModeAPIKey)
         XCTAssertEqual(config?.resourceId, "myResource")
     }
 
@@ -98,21 +99,19 @@ final class KeychainServiceTests: XCTestCase {
         XCTAssertNotNil(VolcanoASRConfig(credentials: values))
     }
 
-    /// Volcano switched to a single API Key; the retired App ID / Access Token
-    /// fields must not survive into the loaded credential set.
-    func testCompatibleASRCredentials_dropsRetiredVolcanoAuthFields() throws {
+    func testCompatibleASRCredentials_preservesLegacyVolcanoAuthFields() throws {
         let values = KeychainService.compatibleASRCredentials(
             for: .volcano,
             stored: [
-                "apiKey": "myApiKey",
-                "appKey": "staleAppID",
-                "accessKey": "staleAccessToken",
+                "appKey": "legacyAppID",
+                "accessKey": "legacyAccessToken",
             ]
         )
 
-        XCTAssertEqual(values["apiKey"], "myApiKey")
-        XCTAssertNil(values["appKey"])
-        XCTAssertNil(values["accessKey"])
+        XCTAssertEqual(values["authMode"], VolcanoASRConfig.authModeLegacy)
+        XCTAssertEqual(values["appKey"], "legacyAppID")
+        XCTAssertEqual(values["accessKey"], "legacyAccessToken")
+        XCTAssertNotNil(VolcanoASRConfig(credentials: values))
     }
 
     func testCompatibleLLMCredentials_backfillsModelAndBaseURLForOldValues() throws {
@@ -209,11 +208,10 @@ final class KeychainServiceTests: XCTestCase {
         KeychainService.migrateStoredCredentials()
 
         let values = try XCTUnwrap(KeychainService.loadASRCredentials(for: .volcano))
-        // Only resourceId carries over — the flat App ID / Access Token keys
-        // hold retired credentials and are dropped, not migrated.
         XCTAssertEqual(values["resourceId"], "legacyResource")
-        XCTAssertNil(values["appKey"])
-        XCTAssertNil(values["accessKey"])
+        XCTAssertEqual(values["authMode"], VolcanoASRConfig.authModeLegacy)
+        XCTAssertEqual(values["appKey"], "legacyAppKey")
+        XCTAssertEqual(values["accessKey"], "legacyAccessKey")
         XCTAssertNil(UserDefaults.standard.object(forKey: "tf_appKey"))
         XCTAssertNil(UserDefaults.standard.object(forKey: "tf_resourceId"))
         XCTAssertNil(KeychainService.load(key: "tf_accessKey"))

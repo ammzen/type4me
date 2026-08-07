@@ -31,6 +31,21 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         ASRProviderRegistry.configType(for: selectedASRProvider)?.credentialFields ?? []
     }
 
+    private var displayedASRFields: [CredentialField] {
+        guard selectedASRProvider == .volcano else { return currentASRFields }
+        let authMode = VolcanoASRConfig.inferredAuthMode(in: effectiveASRValues)
+        return currentASRFields.filter { field in
+            switch field.key {
+            case "apiKey":
+                return authMode == VolcanoASRConfig.authModeAPIKey
+            case "appKey", "accessKey":
+                return authMode == VolcanoASRConfig.authModeLegacy
+            default:
+                return true
+            }
+        }
+    }
+
     private var isZeroCredentialProvider: Bool {
         currentASRFields.isEmpty && !selectedASRProvider.isLocal
     }
@@ -49,8 +64,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     }
 
     private var hasASRCredentials: Bool {
-        let required = currentASRFields.filter { !$0.isOptional }
         let effective = effectiveASRValues
+        if selectedASRProvider == .volcano {
+            return VolcanoASRConfig(credentials: effective) != nil
+        }
+        let required = currentASRFields.filter { !$0.isOptional }
         return required.allSatisfy { field in
             !(effective[field.key] ?? "").isEmpty
         }
@@ -65,6 +83,8 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         case .volcano:
             return [
                 (L("配置指南", "Setup guide"), L("查看", "view"), URL(string: "https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr")!),
+                ("API Key", L("获取", "get"), URL(string: "https://console.volcengine.com/speech/new/setting/apikeys?projectName=default")!),
+                (L("官方文档", "Docs"), L("查看", "view"), URL(string: "https://www.volcengine.com/docs/6561/1354869?lang=zh")!),
             ]
         case .deepgram:
             return [
@@ -116,6 +136,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
 
     private var currentProviderNote: String? {
         switch selectedASRProvider {
+        case .volcano:
+            return L(
+                "新版控制台使用 API Key；旧版控制台继续使用 App ID + Access Token。选择 API Key 时优先走新版鉴权。",
+                "Use an API Key with the new console, or App ID + Access Token with the legacy console. API Key mode uses the new authentication flow."
+            )
         case .deepgram:
             return L("受接口限制，热词仅取前 30 个", "Due to API limits, only the first 30 hotwords are used")
         case .stepfunBatch:
@@ -341,7 +366,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     // MARK: - Credential Fields
 
     private var dynamicCredentialFields: some View {
-        let fields = currentASRFields
+        let fields = displayedASRFields
         let rows = stride(from: 0, to: fields.count, by: 2).map { i in
             Array(fields[i..<min(i+2, fields.count)])
         }
@@ -406,7 +431,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
 
     private var asrSummaryRows: [(String, String)] {
         var rows: [(String, String)] = []
-        for field in currentASRFields {
+        for field in displayedASRFields {
             let val = asrCredentialValues[field.key] ?? ""
             guard !val.isEmpty else { continue }
             let displayValue: String
@@ -845,7 +870,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         }
 
         // Both failed
-        asrTestStatus = .failed(L("连接失败，请检查 API Key", "Connection failed, check API Key"))
+        asrTestStatus = .failed(L("连接失败，请检查鉴权凭证", "Connection failed, check credentials"))
     }
 
     private func testVolcResource(baseValues: [String: String], resourceId: String, options: ASRRequestOptions) async -> Bool {
@@ -894,7 +919,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             case .timedOut: return L("连接超时", "Timed out")
             case .cannotFindHost, .cannotConnectToHost: return L("无法连接服务器", "Cannot reach server")
             case .badServerResponse:
-                return L("服务器响应异常，请检查 API Key 是否正确", "Bad server response — check your API key")
+                return L("服务器响应异常，请检查鉴权凭证是否正确", "Bad server response — check your credentials")
             default: return urlError.localizedDescription
             }
         }
@@ -904,9 +929,9 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     private static func httpStatusMessage(statusCode: Int) -> String {
         switch statusCode {
         case 401:
-            return L("API Key 无效或已禁用", "Invalid or disabled API key") + " (HTTP 401)"
+            return L("鉴权凭证无效或已禁用", "Invalid or disabled credentials") + " (HTTP 401)"
         case 403:
-            return L("API Key 无权限访问该服务", "API key not authorized for this service") + " (HTTP 403)"
+            return L("鉴权凭证无权限访问该服务", "Credentials not authorized for this service") + " (HTTP 403)"
         case 429:
             return L("请求过于频繁", "Too many requests") + " (HTTP 429)"
         default:
