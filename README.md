@@ -39,12 +39,12 @@
 ## 界面预览
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/80b7e36d-92a4-40fb-84d6-d0b9da49bbcc" width="400" />
-  <img src="https://github.com/user-attachments/assets/480df251-cd5f-462f-a574-ad0f5abd328a" width="400" />
+  <img src="docs/images/screenshot-1.webp" width="400" />
+  <img src="docs/images/screenshot-2.webp" width="400" />
 </p>
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/84a531be-b6d1-44e6-8dff-6763e9298ac1" width="400" />
-  <img src="https://github.com/user-attachments/assets/ab2eecbb-62f1-4895-bd7c-49c138ef6da0" width="400" />
+  <img src="docs/images/screenshot-3.webp" width="400" />
+  <img src="docs/images/screenshot-4.webp" width="400" />
 </p>
 
 
