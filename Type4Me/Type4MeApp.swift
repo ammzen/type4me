@@ -249,8 +249,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // UI iteration can open Settings directly without depending on the menu bar
+        // status item's visibility. This launch argument is Debug-only and has no
+        // effect on normal or release launches.
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--open-settings") {
+            NSApp.setActivationPolicy(.regular)
+            presentSettingsWhenReady(remainingAttempts: 20)
+        } else {
+            checkMenuBarVisibility()
+        }
+        #else
         // Check if menu bar icon is hidden by macOS 26+ "Allow in Menu Bar" setting
         checkMenuBarVisibility()
+        #endif
 
         // Listen for Dock icon preference changes
         NotificationCenter.default.addObserver(
@@ -590,6 +602,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.presentPermissionGuide()
         }
     }
+
+    #if DEBUG
+    private func presentSettingsWhenReady(remainingAttempts: Int) {
+        let hasVisibleAppWindow = NSApp.windows.contains {
+            $0.isVisible && !$0.className.contains("NSStatusBar")
+        }
+        if hasVisibleAppWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        _ = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        if let action = Self.openSettingsAction {
+            action()
+        }
+        guard remainingAttempts > 1 else {
+            NSLog("[Type4Me] Timed out while opening Settings for UI preview")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.presentSettingsWhenReady(remainingAttempts: remainingAttempts - 1)
+        }
+    }
+    #endif
 
     func applicationWillTerminate(_ notification: Notification) {
         SystemVolumeManager.restore()

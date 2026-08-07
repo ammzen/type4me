@@ -13,13 +13,26 @@ final class ModeStorageTests: XCTestCase {
     func testSaveAndLoad() throws {
         let storage = ModeStorage(fileURL: testURL)
         let modes = ProcessingMode.builtins + [
-            ProcessingMode(id: UUID(), name: "Custom", prompt: "Do {text}", isBuiltin: false)
+            ProcessingMode(
+                id: UUID(),
+                name: "Custom",
+                description: "A concise homepage summary",
+                prompt: "Do {text}",
+                isBuiltin: false
+            )
         ]
         try storage.save(modes)
         let loaded = storage.load()
         // built-in modes are auto-injected if missing
         XCTAssertTrue(loaded.contains { $0.name == "Custom" })
+        XCTAssertEqual(
+            loaded.first(where: { $0.name == "Custom" })?.description,
+            "A concise homepage summary"
+        )
         XCTAssertTrue(loaded.contains { $0.id == ProcessingMode.direct.id })
+
+        let savedJSON = try String(contentsOf: testURL, encoding: .utf8)
+        XCTAssertTrue(savedJSON.contains("\"description\""))
     }
 
     func testLoadMissing_returnsBuiltins() {
@@ -169,6 +182,28 @@ final class ModeStorageTests: XCTestCase {
 
         // Old JSON has no hotkey fields - should decode gracefully to today's builtin default.
         XCTAssertEqual(direct?.hotkeyStyle, ProcessingMode.direct.hotkeyStyle)
+    }
+
+    func testMissingDescriptionMigratesOfficialModesAndKeepsCustomModesBlank() throws {
+        let customId = UUID()
+        let json = """
+        [
+          {"id":"00000000-0000-0000-0000-000000000001","name":"快速模式","prompt":"","isBuiltin":true,"processingLabel":"处理中"},
+          {"id":"\(customId.uuidString)","name":"Legacy Custom","prompt":"Do {text}","isBuiltin":false,"processingLabel":"处理中"}
+        ]
+        """
+        try json.data(using: .utf8)!.write(to: testURL)
+
+        let loaded = ModeStorage(fileURL: testURL).load()
+
+        XCTAssertEqual(
+            loaded.first(where: { $0.id == ProcessingMode.direct.id })?.description,
+            ProcessingMode.direct.description
+        )
+        XCTAssertEqual(
+            loaded.first(where: { $0.id == customId })?.description,
+            ""
+        )
     }
 
     func testToggleStyleIsPersisted() throws {

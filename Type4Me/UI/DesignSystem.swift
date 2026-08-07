@@ -48,17 +48,29 @@ enum TF {
 
     // MARK: Settings Palette
 
-    static let settingsBg = Color(red: 0.95, green: 0.92, blue: 0.88)
-    static let settingsCard = Color(red: 0.98, green: 0.96, blue: 0.93)
-    static let settingsCardAlt = Color(red: 0.91, green: 0.89, blue: 0.85)
+    // The settings window deliberately uses a quiet, neutral palette.  It keeps
+    // the sidebar visually separate without drawing a hard divider through the
+    // window, and lets the content read as a clean white canvas.
+    static let settingsBg = Color(red: 0.965, green: 0.965, blue: 0.965)
+    static let settingsCard = Color.white
+    static let settingsCardAlt = Color(red: 0.935, green: 0.935, blue: 0.935)
+    static let settingsWindowBackground = Color.white
+    static let settingsSidebar = Color(red: 0.975, green: 0.975, blue: 0.975)
+    static let settingsSidebarActive = Color(red: 0.895, green: 0.895, blue: 0.895)
+    static let settingsSidebarHover = Color(red: 0.935, green: 0.935, blue: 0.935)
+    /// Default, hover, and row-hover fills shared by settings controls.
+    static let settingsControl = Color(red: 241 / 255, green: 241 / 255, blue: 241 / 255)
+    static let settingsControlHover = Color(red: 232 / 255, green: 232 / 255, blue: 232 / 255)
+    static let settingsRowHover = Color(red: 248 / 255, green: 248 / 255, blue: 248 / 255)
+    static let settingsBorder = Color.black.opacity(0.075)
     static let settingsNavActive = Color(red: 0.10, green: 0.10, blue: 0.10)
-    static let settingsText = Color(red: 0.10, green: 0.10, blue: 0.10)
-    static let settingsTextSecondary = Color(red: 0.24, green: 0.24, blue: 0.24)
-    static let settingsTextTertiary = Color(red: 0.42, green: 0.42, blue: 0.42)
+    static let settingsText = Color(red: 0.075, green: 0.075, blue: 0.075)
+    static let settingsTextSecondary = Color(red: 0.30, green: 0.30, blue: 0.30)
+    static let settingsTextTertiary = Color(red: 0.48, green: 0.48, blue: 0.48)
     static let settingsAccentGreen = Color(red: 0.30, green: 0.62, blue: 0.35)
     static let settingsAccentAmber = Color(red: 0.78, green: 0.55, blue: 0.15)
     static let settingsAccentRed = Color(red: 0.80, green: 0.28, blue: 0.22)
-    static let settingsAccentBlue = Color(red: 0.20, green: 0.45, blue: 0.75)
+    static let settingsAccentBlue = Color(red: 0.15, green: 0.36, blue: 0.94)
 
     // MARK: Spacing
 

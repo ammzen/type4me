@@ -61,6 +61,7 @@ struct ModeStorage {
                 d.hotkeyCode = mode.hotkeyCode
                 d.hotkeyModifiers = mode.hotkeyModifiers
                 d.hotkeyStyle = mode.hotkeyStyle
+                d.description = mode.description
                 // If user customized the prompt, keep theirs
                 if !isLegacy {
                     d.name = mode.name
@@ -85,6 +86,7 @@ struct ModeStorage {
                     migrated.hotkeyCode = mode.hotkeyCode
                     migrated.hotkeyModifiers = mode.hotkeyModifiers
                     migrated.hotkeyStyle = mode.hotkeyStyle
+                    migrated.description = mode.description
                     return migrated
                 }
                 return mode
@@ -143,6 +145,9 @@ struct ModeStorage {
         }
         if !mode.processingLabel.isEmpty {
             migrated.processingLabel = mode.processingLabel
+        }
+        if !mode.description.isEmpty {
+            migrated.description = mode.description
         }
         migrated.hotkeyCode = mode.hotkeyCode
         migrated.hotkeyModifiers = mode.hotkeyModifiers

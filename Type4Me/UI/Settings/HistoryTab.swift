@@ -95,6 +95,173 @@ enum DateFilter: Equatable, Hashable {
     }
 }
 
+// MARK: - History Controls
+
+/// Presents record-action tooltips in a tiny non-activating AppKit panel.
+/// Because the panel is not a child of the ScrollView, it can extend beyond
+/// the list viewport without clipping or per-frame scroll geometry work.
+@MainActor
+private final class HistoryFloatingTooltipController {
+    static let shared = HistoryFloatingTooltipController()
+
+    private var panel: NSPanel?
+    private var activeOwner: UUID?
+
+    func show(text: String, owner: UUID) {
+        hide()
+
+        let hostingView = NSHostingView(rootView: SettingsTooltipBubble(text: text))
+        hostingView.layoutSubtreeIfNeeded()
+        var size = hostingView.fittingSize
+        size.width = max(size.width, 44)
+        size.height = 34
+        hostingView.frame = NSRect(origin: .zero, size: size)
+
+        let tooltipPanel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        tooltipPanel.backgroundColor = .clear
+        tooltipPanel.isOpaque = false
+        tooltipPanel.hasShadow = true
+        tooltipPanel.level = .floating
+        tooltipPanel.ignoresMouseEvents = true
+        tooltipPanel.collectionBehavior = [.transient, .ignoresCycle]
+        tooltipPanel.contentView = hostingView
+
+        let mouse = NSEvent.mouseLocation
+        let screenFrame = NSScreen.screens
+            .first(where: { $0.frame.contains(mouse) })?
+            .visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        var origin = NSPoint(
+            x: mouse.x - size.width / 2,
+            y: mouse.y - size.height - 18
+        )
+        origin.x = min(max(origin.x, screenFrame.minX + 8), screenFrame.maxX - size.width - 8)
+        if origin.y < screenFrame.minY + 8 {
+            origin.y = mouse.y + 18
+        }
+        origin.y = min(
+            max(origin.y, screenFrame.minY + 8),
+            screenFrame.maxY - size.height - 8
+        )
+
+        tooltipPanel.setFrameOrigin(origin)
+        tooltipPanel.orderFrontRegardless()
+        panel = tooltipPanel
+        activeOwner = owner
+    }
+
+    func hide(owner: UUID? = nil) {
+        if let owner, owner != activeOwner { return }
+        panel?.orderOut(nil)
+        panel = nil
+        activeOwner = nil
+    }
+}
+
+private struct HistoryFloatingTooltipModifier: ViewModifier {
+    let text: String
+    @State private var owner = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                if hovering {
+                    HistoryFloatingTooltipController.shared.show(text: text, owner: owner)
+                } else {
+                    HistoryFloatingTooltipController.shared.hide(owner: owner)
+                }
+            }
+            .onDisappear {
+                HistoryFloatingTooltipController.shared.hide(owner: owner)
+            }
+    }
+}
+
+private extension View {
+    func historyFloatingTooltip(_ text: String) -> some View {
+        modifier(HistoryFloatingTooltipModifier(text: text))
+    }
+}
+
+private struct HistoryToolbarButton: View {
+    let icon: String
+    let tooltip: String
+    var isEnabled = true
+    var tooltipEnabled = true
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(TF.settingsTextSecondary)
+                .frame(width: 34, height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isHovered && isEnabled
+                              ? TF.settingsControlHover
+                              : TF.settingsControl)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(TF.settingsBorder, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.4)
+        .settingsTooltip(tooltip, isEnabled: tooltipEnabled)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.1)) {
+                isHovered = hovering
+            }
+            if hovering && isEnabled {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+    }
+}
+
+/// Keeps row hover state local to the visible row. The content always reserves
+/// the same trailing action area, so moving across rows never invalidates the
+/// entire history page or changes text layout during scrolling.
+private struct HistoryHoverSurface<Content: View, Controls: View>: View {
+    let isSelectionMode: Bool
+    @ViewBuilder let controls: (Bool) -> Controls
+    @ViewBuilder let content: () -> Content
+
+    @State private var isHovered = false
+
+    var body: some View {
+        content()
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(
+                isHovered
+                    ? TF.settingsRowHover
+                    : Color.clear
+            )
+            .overlay(alignment: .topTrailing) {
+                if !isSelectionMode {
+                    controls(isHovered)
+                        .padding(.top, 10)
+                        .padding(.trailing, 14)
+                }
+            }
+            .onHover { hovering in
+                isHovered = hovering
+            }
+    }
+}
+
 // MARK: - View
 
 struct HistoryTab: View {
@@ -109,18 +276,13 @@ struct HistoryTab: View {
     @State private var isLoadingMore = false
     @State private var searchText = ""
     @State private var copiedId: String?
+    @State private var expandedRecordIds: Set<String> = []
     @State private var statistics: HistoryStore.Statistics?
     @State private var usageBreakdown: [HistoryStore.UsageBreakdown] = []
     @State private var usageBreakdownLoading = false
     @State private var showUsageDetails = false
 
     private static let pageSize = 50
-
-    /// Fixed height for every control in the top toolbar row (search field
-    /// + date filter + selection + export). Locking all items to the same
-    /// height keeps type baselines aligned and prevents the buttons from
-    /// looking smaller than the search box.
-    private let toolbarHeight: CGFloat = 30
 
     // Correction
     @State private var correctionRecord: HistoryRecord? = nil
@@ -230,36 +392,30 @@ struct HistoryTab: View {
             if let stats = statistics, stats.recordCount > 0 {
                 statisticsSection(stats: stats)
                     .padding(.bottom, TF.spacingMD)
+                    .zIndex(30)
             }
 
-            // Search + date filter + selection + export.
-            //
-            // Visual baseline: every control in this row locks to
-            // `toolbarHeight` (30pt) and uses 12pt type so the search
-            // baseline and the button baselines sit on a single line. The
-            // previous layout mixed 12pt/11pt and 7pt/6pt vertical padding,
-            // which made button text read "smaller and floating" next to
-            // the search box.
             HStack(spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 12))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(TF.settingsTextTertiary)
                     TextField(L("搜索记录...", "Search..."), text: $searchText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
                 }
                 .padding(.horizontal, 10)
-                .frame(height: toolbarHeight)
+                .frame(maxWidth: .infinity)
+                .frame(height: 34)
                 .background(
-                    RoundedRectangle(cornerRadius: 6).fill(TF.settingsBg)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(TF.settingsControl)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(TF.settingsTextTertiary.opacity(0.2), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(TF.settingsBorder, lineWidth: 1)
                 )
 
-                // Date filter menu
                 Menu {
                     let presets: [DateFilter] = [.all, .today, .yesterday, .thisWeek, .thisMonth]
                     ForEach(presets, id: \.self) { filter in
@@ -285,8 +441,12 @@ struct HistoryTab: View {
                     }
                 } label: {
                     HStack(spacing: 5) {
-                        Image(systemName: "calendar").font(.system(size: 11))
-                        Text(dateFilter.label).font(.system(size: 12, weight: .medium))
+                        Image(systemName: "calendar")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(dateFilter.label)
+                            .font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8, weight: .bold))
                     }
                     .foregroundStyle(dateFilter == .all ? TF.settingsTextSecondary : TF.settingsNavActive)
                 }
@@ -294,64 +454,47 @@ struct HistoryTab: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .padding(.horizontal, 10)
-                .frame(height: toolbarHeight)
-                .background(RoundedRectangle(cornerRadius: 6).fill(TF.settingsBg))
+                .frame(height: 34)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(TF.settingsControl)
+                )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(dateFilter == .all
-                            ? TF.settingsTextTertiary.opacity(0.2)
-                            : TF.settingsNavActive.opacity(0.4),
-                        lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(dateFilter == .all ? TF.settingsBorder : TF.settingsText.opacity(0.18), lineWidth: 1)
                 )
                 .popover(isPresented: $showCustomRange, arrowEdge: .bottom) {
                     customRangePopover
                 }
 
-                Button {
+                HistoryToolbarButton(
+                    icon: isSelectionMode ? "checkmark" : "checklist",
+                    tooltip: isSelectionMode ? L("完成选择", "Finish selecting") : L("批量选择", "Select records"),
+                    isEnabled: !records.isEmpty
+                ) {
                     if isSelectionMode {
                         isSelectionMode = false
                         selectedIds.removeAll()
                     } else {
+                        expandedRecordIds.removeAll()
                         isSelectionMode = true
                     }
-                } label: {
-                    Text(isSelectionMode ? L("完成", "Done") : L("选择", "Select"))
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(TF.settingsTextSecondary)
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .frame(height: toolbarHeight)
-                .background(RoundedRectangle(cornerRadius: 6).fill(TF.settingsBg))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(TF.settingsTextTertiary.opacity(0.2), lineWidth: 1)
-                )
-                .disabled(records.isEmpty)
 
-                Button {
+                HistoryToolbarButton(
+                    icon: "square.and.arrow.up",
+                    tooltip: L("导出记录", "Export records"),
+                    isEnabled: !records.isEmpty && !isSelectionMode,
+                    tooltipEnabled: !showExportPopover
+                ) {
                     showExportPopover = true
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "square.and.arrow.up").font(.system(size: 11))
-                        Text(L("导出", "Export")).font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundStyle(TF.settingsTextSecondary)
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .frame(height: toolbarHeight)
-                .background(RoundedRectangle(cornerRadius: 6).fill(TF.settingsBg))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(TF.settingsTextTertiary.opacity(0.2), lineWidth: 1)
-                )
-                .disabled(records.isEmpty || isSelectionMode)
                 .popover(isPresented: $showExportPopover, arrowEdge: .bottom) {
                     exportPopover
                 }
             }
             .padding(.bottom, isSelectionMode ? 8 : 12)
+            .zIndex(20)
 
             if isSelectionMode && !records.isEmpty {
                 batchSelectionBar
@@ -369,21 +512,16 @@ struct HistoryTab: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(sections) { section in
-                            Section {
-                                ForEach(section.records) { record in
-                                    recordCard(
-                                        record,
-                                        showDate: false,
-                                        isSelectionMode: isSelectionMode,
-                                        isSelected: selectedIds.contains(record.id),
-                                        onToggleSelection: { toggleSelection(for: record.id) }
-                                    )
-                                    .padding(.bottom, 8)
-                                }
-                            } header: {
-                                sectionHeaderView(section)
-                                    .padding(.top, section.id == sections.first?.id ? 0 : 12)
-                                    .padding(.bottom, 8)
+                            sectionHeaderView(section)
+                                .padding(.top, section.id == sections.first?.id ? 0 : 14)
+                                .padding(.bottom, 8)
+
+                            ForEach(Array(section.records.enumerated()), id: \.element.id) { index, record in
+                                historySectionRow(
+                                    record,
+                                    index: index,
+                                    count: section.records.count
+                                )
                             }
                         }
 
@@ -396,8 +534,8 @@ struct HistoryTab: View {
                                     guard !isLoadingMore else { return }
                                     Task { await loadMore() }
                                 }
+                            }
                         }
-                    }
                     .padding(.bottom, 16)
                 }
             }
@@ -457,9 +595,9 @@ struct HistoryTab: View {
     }
 
     private var batchSelectionBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Text(L("已选 \(selectedIds.count) 条", "\(selectedIds.count) selected"))
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(TF.settingsTextSecondary)
 
             Spacer()
@@ -475,30 +613,43 @@ struct HistoryTab: View {
                         ? L("取消全选", "Deselect All")
                         : L("全选当前列表", "Select All in List")
                 )
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(TF.settingsTextSecondary)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(TF.settingsControl)
+                )
             }
             .buttonStyle(.plain)
-            .foregroundStyle(TF.settingsNavActive)
             .disabled(sections.isEmpty)
 
             Button {
                 showBatchDeleteConfirm = true
             } label: {
                 Text(L("删除", "Delete"))
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(TF.settingsAccentRed)
+                    .padding(.horizontal, 12)
+                    .frame(height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(TF.settingsAccentRed.opacity(0.08))
+                    )
             }
             .buttonStyle(.plain)
-            .foregroundStyle(TF.settingsAccentRed)
             .disabled(selectedIds.isEmpty)
+            .opacity(selectedIds.isEmpty ? 0.4 : 1)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .frame(height: 44)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(TF.settingsBg)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(TF.settingsCard)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(TF.settingsTextTertiary.opacity(0.2), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(TF.settingsBorder, lineWidth: 1)
                 )
         )
     }
@@ -577,20 +728,36 @@ struct HistoryTab: View {
 
             HStack {
                 Spacer()
-                Button(L("取消", "Cancel")) { showCustomRange = false }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Button(L("应用", "Apply")) {
-                    dateFilter = .custom(from: customRangeStart, to: customRangeEnd)
+                Button {
                     showCustomRange = false
+                } label: {
+                    Text(L("取消", "Cancel"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(TF.settingsTextSecondary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(TF.settingsControl)
+                        )
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(RoundedRectangle(cornerRadius: 6).fill(TF.settingsNavActive))
+
+                Button {
+                    dateFilter = .custom(from: customRangeStart, to: customRangeEnd)
+                    showCustomRange = false
+                } label: {
+                    Text(L("应用", "Apply"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(TF.settingsText)
+                        )
+                }
+                .buttonStyle(.plain)
             }
         }
         .padding(16)
@@ -669,18 +836,35 @@ struct HistoryTab: View {
 
             HStack {
                 Spacer()
-                Button(L("取消", "Cancel")) { showExportPopover = false }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Button(L("导出 CSV", "Export CSV")) { exportCSV() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 5)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(TF.settingsNavActive))
+                Button {
+                    showExportPopover = false
+                } label: {
+                    Text(L("取消", "Cancel"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(TF.settingsTextSecondary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(TF.settingsControl)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: exportCSV) {
+                    Text(L("导出 CSV", "Export CSV"))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(TF.settingsText)
+                        )
+                }
+                .buttonStyle(.plain)
                     .disabled(exportRecordCount == 0)
+                    .opacity(exportRecordCount == 0 ? 0.4 : 1)
             }
         }
         .padding(16)
@@ -759,44 +943,175 @@ struct HistoryTab: View {
 
     // MARK: - Record Card
 
-    private func recordCard(
+    private func historySectionRow(
         _ record: HistoryRecord,
-        showDate: Bool,
-        isSelectionMode: Bool,
-        isSelected: Bool,
-        onToggleSelection: @escaping () -> Void
+        index: Int,
+        count: Int
     ) -> some View {
-        let metadataAndText = VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                let timeFormat: Date.FormatStyle = showDate
-                    ? .dateTime.month().day().hour().minute()
-                    : .dateTime.hour().minute()
-                Label(record.createdAt.formatted(timeFormat), systemImage: "clock")
-                Label(String(format: "%.1fs", record.durationSeconds), systemImage: "waveform")
-                if let chars = record.characterCount {
-                    Label(L("\(chars) 字", "\(chars) chars"), systemImage: "doc.text")
-                }
-                if let mode = record.processingMode {
-                    Label(mode, systemImage: "text.bubble")
-                }
-                if let provider = record.asrProvider {
-                    Label(provider, systemImage: "mic")
-                }
-                Spacer()
+        let isFirst = index == 0
+        let isLast = index == count - 1
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: isFirst ? 14 : 0,
+            bottomLeadingRadius: isLast ? 14 : 0,
+            bottomTrailingRadius: isLast ? 14 : 0,
+            topTrailingRadius: isFirst ? 14 : 0,
+            style: .continuous
+        )
+
+        return historyRecordRow(record)
+            .background(TF.settingsCard)
+            .clipShape(shape)
+            .overlay {
+                shape.stroke(TF.settingsBorder, lineWidth: 0.5)
             }
-            .font(.system(size: 10))
-            .foregroundStyle(TF.settingsTextTertiary)
+    }
 
-            Text(record.finalText)
-                .font(.system(size: 12))
-                .foregroundStyle(TF.settingsText)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private func historyRecordRow(_ record: HistoryRecord) -> some View {
+        let isExpanded = expandedRecordIds.contains(record.id)
+        let isSelected = selectedIds.contains(record.id)
 
-            if record.processedText != nil {
-                HStack(alignment: .top, spacing: 4) {
-                    Text(L("原始:", "Raw:"))
+        return HistoryHoverSurface(
+            isSelectionMode: isSelectionMode,
+            controls: { isHovered in
+                historyRecordTrailingControls(record, isHovered: isHovered, isExpanded: isExpanded)
+            },
+            content: {
+                HStack(alignment: .top, spacing: 12) {
+                    if isSelectionMode {
+                        Toggle("", isOn: Binding(
+                            get: { isSelected },
+                            set: { newValue in
+                                if newValue != isSelected { toggleSelection(for: record.id) }
+                            }
+                        ))
+                        .labelsHidden()
+                        .toggleStyle(.checkbox)
+                        .padding(.top, 2)
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(record.createdAt.formatted(.dateTime.hour().minute()))
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(TF.settingsTextSecondary)
+                            .monospacedDigit()
+                        Text(String(format: "%.1fs", record.durationSeconds))
+                            .font(.system(size: 9, weight: .medium, design: .rounded))
+                            .foregroundStyle(TF.settingsTextTertiary)
+                            .monospacedDigit()
+                    }
+                    .frame(width: 48, alignment: .leading)
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(record.finalText)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(TF.settingsText)
+                            .lineLimit(isExpanded ? nil : 2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        HStack(spacing: 10) {
+                            if let chars = record.characterCount {
+                                Label(L("\(chars) 字", "\(chars) chars"), systemImage: "doc.text")
+                            }
+                            if let mode = record.processingMode {
+                                Label(mode, systemImage: "text.bubble")
+                            } else {
+                                Label(L("直接转写", "Transcription"), systemImage: "waveform")
+                            }
+                        }
                         .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(TF.settingsTextTertiary)
+
+                        if isExpanded {
+                            expandedRecordDetails(record)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // Reserve a stable action area so hovering never causes the
+                    // text to reflow while the user is scrolling.
+                    .padding(.trailing, isSelectionMode ? 0 : 88)
+                }
+            }
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if isSelectionMode {
+                toggleSelection(for: record.id)
+            } else {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    if isExpanded {
+                        expandedRecordIds.remove(record.id)
+                    } else {
+                        expandedRecordIds.insert(record.id)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func historyRecordTrailingControls(
+        _ record: HistoryRecord,
+        isHovered: Bool,
+        isExpanded: Bool
+    ) -> some View {
+        if isHovered || copiedId == record.id {
+            HStack(spacing: 5) {
+                historyRecordAction(
+                    icon: "character.textbox",
+                    tooltip: L("纠错", "Correct")
+                ) {
+                    correctionRecord = record
+                }
+
+                historyRecordAction(
+                    icon: copiedId == record.id ? "checkmark" : "doc.on.doc",
+                    tooltip: copiedId == record.id ? L("已复制", "Copied") : L("复制", "Copy"),
+                    color: copiedId == record.id ? TF.settingsAccentGreen : TF.settingsTextSecondary
+                ) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(record.finalText, forType: .string)
+                    copiedId = record.id
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        if copiedId == record.id { copiedId = nil }
+                    }
+                }
+
+                historyRecordAction(
+                    icon: "trash",
+                    tooltip: L("删除", "Delete"),
+                    color: TF.settingsAccentRed.opacity(0.8)
+                ) {
+                    Task {
+                        await historyStore.delete(id: record.id)
+                        records.removeAll { $0.id == record.id }
+                    }
+                }
+            }
+            .padding(.leading, 8)
+            .background(
+                Rectangle()
+                    .fill(TF.settingsRowHover)
+            )
+            .transition(.opacity)
+        } else {
+            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(TF.settingsTextTertiary.opacity(0.65))
+                .frame(width: 20, height: 26)
+        }
+    }
+
+    private func expandedRecordDetails(_ record: HistoryRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+                .overlay(TF.settingsBorder)
+
+            if !record.rawText.isEmpty && record.rawText != record.finalText {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L("原始文本", "Original text"))
+                        .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(TF.settingsTextTertiary)
                     Text(record.rawText)
                         .font(.system(size: 11))
@@ -805,174 +1120,148 @@ struct HistoryTab: View {
                 }
             }
 
-            if !isSelectionMode {
-                HStack(spacing: 8) {
-                    Spacer()
-
-                    Button {
-                        correctionRecord = record
-                    } label: {
-                        Label(L("纠错", "Correct"), systemImage: "character.textbox")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(TF.settingsAccentAmber)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(record.finalText, forType: .string)
-                        copiedId = record.id
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            if copiedId == record.id { copiedId = nil }
-                        }
-                    } label: {
-                        Label(
-                            copiedId == record.id ? L("已复制", "Copied") : L("复制", "Copy"),
-                            systemImage: copiedId == record.id ? "checkmark" : "doc.on.doc"
-                        )
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(copiedId == record.id ? TF.settingsAccentGreen : TF.settingsTextSecondary)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        Task {
-                            await historyStore.delete(id: record.id)
-                            records.removeAll { $0.id == record.id }
-                        }
-                    } label: {
-                        Label(L("删除", "Delete"), systemImage: "trash")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(TF.settingsAccentRed.opacity(0.7))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
+            HStack(spacing: 12) {
+                if let provider = record.asrProvider {
+                    Label(provider, systemImage: "mic")
+                }
+                if let model = record.asrModel, !model.isEmpty {
+                    Label(model, systemImage: "cpu")
+                }
+                if !record.status.isEmpty {
+                    Label(record.status, systemImage: "checkmark.circle")
                 }
             }
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(TF.settingsTextTertiary)
         }
+    }
 
-        return Group {
-            if isSelectionMode {
-                HStack(alignment: .top, spacing: 10) {
-                    Toggle("", isOn: Binding(
-                        get: { isSelected },
-                        set: { new in
-                            if new != isSelected { onToggleSelection() }
-                        }
-                    ))
-                    .labelsHidden()
-                    .toggleStyle(.checkbox)
-
-                    metadataAndText
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture { onToggleSelection() }
-                }
-            } else {
-                metadataAndText
-            }
+    private func historyRecordAction(
+        icon: String,
+        tooltip: String,
+        color: Color = TF.settingsTextSecondary,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            HistoryFloatingTooltipController.shared.hide()
+            action()
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(color)
+                .frame(width: 26, height: 26)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(TF.settingsControl)
+                )
         }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 8).fill(TF.settingsBg)
-        )
+        .buttonStyle(.plain)
+        .historyFloatingTooltip(tooltip)
     }
 
     // MARK: - Statistics UI
 
     private func statisticsSection(stats: HistoryStore.Statistics) -> some View {
-        HStack(spacing: TF.spacingMD) {
-            totalDurationCard(
-                icon: "clock.fill",
+        HStack(spacing: 0) {
+            historyMetric(
+                icon: "clock",
                 label: L("累计时长", "Total Time"),
                 value: formatDuration(stats.totalDuration),
-                color: TF.settingsAccentAmber
+                showsDetails: true
             )
 
-            statCard(
+            historyMetricDivider
+
+            historyMetric(
                 icon: "doc.text",
                 label: L("累计字数", "Total Chars"),
-                value: formatNumber(stats.totalCharacters),
-                color: TF.settingsAccentGreen
+                value: formatNumber(stats.totalCharacters)
             )
 
-            statCard(
-                icon: "speedometer",
+            historyMetricDivider
+
+            historyMetric(
+                icon: "bolt",
                 label: L("平均速度", "Avg Speed"),
-                value: String(format: L("%.0f 字/分", "%.0f ch/min"), stats.averageSpeed),
-                color: TF.settingsText
+                value: String(format: L("%.0f 字/分", "%.0f ch/min"), stats.averageSpeed)
             )
         }
+        .padding(.vertical, 4)
+        .background(TF.settingsCard)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(TF.settingsBorder, lineWidth: 1)
+        )
     }
 
-    private func totalDurationCard(icon: String, label: String, value: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 10))
-                    .foregroundStyle(color)
-                Text(label)
-                    .font(.system(size: 10))
-                    .foregroundStyle(TF.settingsTextTertiary)
+    private func historyMetric(
+        icon: String,
+        label: String,
+        value: String,
+        showsDetails: Bool = false
+    ) -> some View {
+        let content = HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(TF.settingsTextSecondary)
+                .frame(width: 30, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(TF.settingsControl)
+                )
 
-                Spacer(minLength: 6)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 3) {
+                    Text(label)
+                    if showsDetails {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 7, weight: .bold))
+                    }
+                }
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(TF.settingsTextTertiary)
+                .lineLimit(1)
 
+                Text(value)
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(TF.settingsText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+                    .monospacedDigit()
+            }
+
+            Spacer(minLength: 6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+
+        return Group {
+            if showsDetails {
                 Button {
                     showUsageDetails = true
                     Task { await loadUsageBreakdown() }
                 } label: {
-                    HStack(spacing: 3) {
-                        Text(L("详情", "Details"))
-                        Image(systemName: "chevron.right")
-                    }
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(TF.settingsNavActive)
+                    content
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .settingsTooltip(L("查看用量详情", "View usage details"), isEnabled: !showUsageDetails)
                 .popover(isPresented: $showUsageDetails, arrowEdge: .bottom) {
                     usageDetailsPopover
                         .task { await loadUsageBreakdown() }
                 }
+            } else {
+                content
             }
-
-            Text(value)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(TF.settingsText)
-                .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, TF.spacingSM)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: TF.cornerSM)
-                .fill(TF.settingsBg)
-        )
     }
 
-    private func statCard(icon: String, label: String, value: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 10))
-                    .foregroundStyle(color)
-                Text(label)
-                    .font(.system(size: 10))
-                    .foregroundStyle(TF.settingsTextTertiary)
-            }
-            Text(value)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(TF.settingsText)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, TF.spacingSM)
-        .padding(.vertical, 10)
-        .background(
-            RoundedRectangle(cornerRadius: TF.cornerSM)
-                .fill(TF.settingsBg)
-        )
+    private var historyMetricDivider: some View {
+        Rectangle()
+            .fill(TF.settingsBorder)
+            .frame(width: 1, height: 40)
     }
 
     private var usageDetailsPopover: some View {
@@ -980,11 +1269,11 @@ struct HistoryTab: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "timer")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(TF.settingsAccentAmber)
+                    .foregroundStyle(TF.settingsTextSecondary)
                     .frame(width: 30, height: 30)
                     .background(
-                        RoundedRectangle(cornerRadius: 7)
-                            .fill(TF.settingsAccentAmber.opacity(0.12))
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(TF.settingsControl)
                     )
 
                 VStack(alignment: .leading, spacing: 3) {
@@ -1048,7 +1337,7 @@ struct HistoryTab: View {
         .foregroundStyle(TF.settingsTextTertiary)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(TF.settingsCardAlt.opacity(0.76))
+        .background(TF.settingsControl)
     }
 
     private func usageDetailsRow(_ row: HistoryStore.UsageBreakdown) -> some View {
@@ -1076,7 +1365,7 @@ struct HistoryTab: View {
         .monospacedDigit()
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(TF.settingsBg)
+        .background(TF.settingsCard)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(TF.settingsTextTertiary.opacity(0.10))

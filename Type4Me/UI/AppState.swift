@@ -68,6 +68,7 @@ struct TranscriptionSegment: Identifiable, Equatable {
 struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     let id: UUID
     var name: String
+    var description: String
     var prompt: String
     var isBuiltin: Bool
     var processingLabel: String
@@ -97,6 +98,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     init(
         id: UUID,
         name: String,
+        description: String = "",
         prompt: String,
         isBuiltin: Bool,
         processingLabel: String = L("处理中", "Processing"),
@@ -106,6 +108,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     ) {
         self.id = id
         self.name = name
+        self.description = description
         self.prompt = prompt
         self.isBuiltin = isBuiltin
         self.processingLabel = processingLabel
@@ -115,7 +118,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, prompt, isBuiltin, processingLabel
+        case id, name, description, prompt, isBuiltin, processingLabel
         case hotkeyCode, hotkeyModifiers, hotkeyStyle
     }
 
@@ -123,6 +126,8 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+            ?? Self.defaultDescription(for: id)
         prompt = try container.decode(String.self, forKey: .prompt)
         isBuiltin = try container.decode(Bool.self, forKey: .isBuiltin)
         processingLabel = try container.decodeIfPresent(String.self, forKey: .processingLabel) ?? L("处理中", "Processing")
@@ -136,10 +141,38 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     static let smartDirectId = UUID(uuidString: "00000000-0000-0000-0000-000000000006")!
     static let translateId = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
     static let macActionId = UUID(uuidString: "00000000-0000-0000-0000-000000000008")!
+
+    /// Descriptions for records written before the `description` field existed.
+    /// Stable IDs let official modes migrate without deriving UI copy from prompts.
+    private static func defaultDescription(for id: UUID) -> String {
+        switch id {
+        case directId:
+            return L("快速转写，不进行后处理", "Fast transcription without post-processing")
+        case smartDirectId:
+            return L("自动修正错别字和标点，保留原意", "Correct typos and punctuation while preserving meaning")
+        case formalWritingId:
+            return L("将口语整理成清晰、可读的文字", "Turn speech into clear, readable writing")
+        case promptOptimizeId:
+            return L("将口述需求优化成结构清晰的 Prompt", "Turn spoken requests into structured prompts")
+        case defaultTranslateId, translateId:
+            return L("将中文口述自然翻译为英文", "Translate spoken Chinese into natural English")
+        case commandModeId:
+            return L("根据口述指令处理选中文本或剪贴板内容", "Transform selected or clipboard text with spoken commands")
+        case agentModeId:
+            return L("说出需求，直接生成可用成品", "Speak a request and get a ready-to-use result")
+        case macActionId:
+            return L("用语音触发常用 macOS 操作", "Trigger common macOS actions with your voice")
+        default:
+            return ""
+        }
+    }
+
     static var direct: ProcessingMode {
         ProcessingMode(
             id: directId,
-            name: L("快速模式", "Quick Mode"), prompt: "", isBuiltin: true,
+            name: L("快速模式", "Quick Mode"),
+            description: defaultDescription(for: directId),
+            prompt: "", isBuiltin: true,
             hotkeyCode: 62, hotkeyModifiers: 0, hotkeyStyle: .toggle
         )
     }
@@ -159,7 +192,9 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     static var smartDirect: ProcessingMode {
         ProcessingMode(
             id: smartDirectId,
-            name: L("智能模式", "Smart Mode"), prompt: smartDirectPromptTemplate, isBuiltin: false
+            name: L("智能模式", "Smart Mode"),
+            description: defaultDescription(for: smartDirectId),
+            prompt: smartDirectPromptTemplate, isBuiltin: false
         )
     }
 
@@ -351,6 +386,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         ProcessingMode(
             id: formalWritingId,
             name: L("语音润色", "Voice Polish"),
+            description: defaultDescription(for: formalWritingId),
             prompt: formalWritingPromptTemplate,
             isBuiltin: true,
             processingLabel: L("润色中", "Polishing"),
@@ -362,6 +398,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         ProcessingMode(
             id: promptOptimizeId,
             name: L("Prompt优化", "Prompt Optimizer"),
+            description: defaultDescription(for: promptOptimizeId),
             prompt: #"""
             # Role
             你是一个 Prompt 工程专家。你的核心能力是：将用户口述的模糊需求，转化为结构完整、可直接驱动 LLM 高质量执行的 Prompt。
@@ -470,6 +507,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         ProcessingMode(
             id: defaultTranslateId,
             name: L("英文翻译", "Translation"),
+            description: defaultDescription(for: defaultTranslateId),
             prompt: translatePromptTemplate,
             isBuiltin: false,
             processingLabel: L("翻译中", "Translating"),
@@ -481,6 +519,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         ProcessingMode(
             id: commandModeId,
             name: L("命令模式", "Command Mode"),
+            description: defaultDescription(for: commandModeId),
             prompt: "你是一个文字处理工具，\n现在选择的内容是：\"{selected}\"\n现在剪切板(复制)的内容是:\"{clipboard}\"\n请在以下规则下执行命令\n1. 不用解释，直接输出\n2. 不要使用任何 markdown 语法\n命令如下：{text}",
             isBuiltin: false,
             processingLabel: L("执行中", "Executing"),
@@ -558,6 +597,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         ProcessingMode(
             id: macActionId,
             name: L("Mac 操作", "Mac Action"),
+            description: defaultDescription(for: macActionId),
             prompt: macActionPromptTemplate,
             isBuiltin: true,
             processingLabel: L("执行中", "Executing"),
@@ -708,6 +748,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         ProcessingMode(
             id: agentModeId,
             name: L("代办模式", "Handle It"),
+            description: defaultDescription(for: agentModeId),
             prompt: agentModePromptTemplate,
             isBuiltin: false,
             processingLabel: L("处理中", "Handling"),

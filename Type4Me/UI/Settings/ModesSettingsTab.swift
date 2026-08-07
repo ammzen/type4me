@@ -12,6 +12,8 @@ private struct RecordingTarget: Identifiable {
 
 struct ModesSettingsTab: View {
 
+    var showsHeader = true
+
     @Environment(AppState.self) private var appState
     @State private var modes: [ProcessingMode] = ModeStorage().load()
     @State private var selectedModeId: UUID?
@@ -22,11 +24,13 @@ struct ModesSettingsTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SettingsSectionHeader(
-                label: "MODES",
-                title: L("处理模式", "Modes"),
-                description: L("配置语音转写与后处理流水线。快速模式实时输出，自定义模式可经 LLM 加工。", "Configure speech-to-text and post-processing pipelines. Quick Mode outputs live text, and custom modes can use LLM processing.")
-            )
+            if showsHeader {
+                SettingsSectionHeader(
+                    label: "MODES",
+                    title: L("处理模式", "Modes"),
+                    description: L("配置语音转写与后处理流水线。快速模式实时输出，自定义模式可经 LLM 加工。", "Configure speech-to-text and post-processing pipelines. Quick Mode outputs live text, and custom modes can use LLM processing.")
+                )
+            }
 
             HStack(alignment: .top, spacing: 0) {
                 // Left: mode list (all modes)
@@ -347,8 +351,7 @@ struct ModesSettingsTab: View {
             if mode.id == ProcessingMode.macActionId {
                 macActionDescription
             } else {
-                Text(L("直接使用语音识别 API，识别完成后不做处理、直接粘贴。适合非正式场合、无需纠正口头表达的场景，输入流程更丝滑。",
-                         "Uses the ASR API directly, pastes raw output without post-processing. Best for informal contexts where oral expressions don't need correction."))
+                Text(mode.description)
                     .font(.system(size: 12))
                     .foregroundStyle(TF.settingsTextSecondary)
                     .lineSpacing(3)
@@ -900,6 +903,7 @@ private struct ModeDetailInner: View {
 
     @AppStorage("tf_shortTextExemption") private var shortTextExemption = "0"
     @State private var name = ""
+    @State private var modeDescription = ""
     @State private var processingLabel = ""
     @State private var prompt = ""
     @State private var saveStatus: SaveStatus = .clean
@@ -909,7 +913,10 @@ private struct ModeDetailInner: View {
     }
 
     private var isDirty: Bool {
-        name != mode.name || processingLabel != mode.processingLabel || prompt != mode.prompt
+        name != mode.name
+            || modeDescription != mode.description
+            || processingLabel != mode.processingLabel
+            || prompt != mode.prompt
     }
 
     private let exemptionOptions: [(value: String, label: String)] = [
@@ -985,6 +992,7 @@ private struct ModeDetailInner: View {
                 Button(L("保存", "Save")) {
                     var updated = mode
                     updated.name = name
+                    updated.description = modeDescription
                     updated.processingLabel = processingLabel
                     updated.prompt = prompt
                     onSave(updated)
@@ -1012,6 +1020,23 @@ private struct ModeDetailInner: View {
                     .padding(.horizontal, 12)
                     .frame(height: 36)
                     .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+            }
+
+            // Description
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L("描述", "Description"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                TextField(L("简要说明这个模式的用途", "Briefly explain what this mode does"), text: $modeDescription)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+                Text(L("显示在首页的模式列表中，不会发送给模型",
+                       "Shown in the Home mode list and never sent to the model"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
             }
 
             // Processing label
@@ -1053,12 +1078,14 @@ private struct ModeDetailInner: View {
         .onAppear { syncFields() }
         .onChange(of: mode.id) { syncFields() }
         .onChange(of: name) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
+        .onChange(of: modeDescription) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
         .onChange(of: processingLabel) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
         .onChange(of: prompt) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
     }
 
     private func syncFields() {
         name = mode.name
+        modeDescription = mode.description
         processingLabel = mode.processingLabel
         prompt = mode.prompt
         saveStatus = .clean
@@ -1074,6 +1101,7 @@ private struct FormalWritingDetailInner: View {
     let onSave: (ProcessingMode) -> Void
 
     @State private var name = ""
+    @State private var modeDescription = ""
     @State private var processingLabel = ""
     @State private var prompt = ""
     @State private var saveStatus: SaveStatus = .clean
@@ -1084,7 +1112,10 @@ private struct FormalWritingDetailInner: View {
     }
 
     private var isDirty: Bool {
-        name != mode.name || processingLabel != mode.processingLabel || prompt != mode.prompt
+        name != mode.name
+            || modeDescription != mode.description
+            || processingLabel != mode.processingLabel
+            || prompt != mode.prompt
     }
 
     private var isLatestPrompt: Bool {
@@ -1175,6 +1206,7 @@ private struct FormalWritingDetailInner: View {
                 Button(L("保存", "Save")) {
                     var updated = mode
                     updated.name = name
+                    updated.description = modeDescription
                     updated.processingLabel = processingLabel
                     updated.prompt = prompt
                     onSave(updated)
@@ -1203,6 +1235,23 @@ private struct FormalWritingDetailInner: View {
                     .padding(.horizontal, 12)
                     .frame(height: 36)
                     .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+            }
+
+            // Description
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L("描述", "Description"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                TextField(L("简要说明这个模式的用途", "Briefly explain what this mode does"), text: $modeDescription)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+                Text(L("显示在首页的模式列表中，不会发送给模型",
+                       "Shown in the Home mode list and never sent to the model"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
             }
 
             // Processing label
@@ -1248,6 +1297,7 @@ private struct FormalWritingDetailInner: View {
         .onAppear { syncFields() }
         .onChange(of: mode.id) { syncFields() }
         .onChange(of: name) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
+        .onChange(of: modeDescription) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
         .onChange(of: processingLabel) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
         .onChange(of: prompt) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
     }
@@ -1285,6 +1335,7 @@ private struct FormalWritingDetailInner: View {
 
     private func syncFields() {
         name = mode.name
+        modeDescription = mode.description
         processingLabel = mode.processingLabel
         prompt = mode.prompt
         saveStatus = .clean

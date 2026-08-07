@@ -1,5 +1,56 @@
 import SwiftUI
 
+// MARK: - Shared Settings Tooltip
+
+/// Immediate black tooltip used by icon-only controls throughout Settings.
+/// Keeping this separate from SwiftUI's delayed `.help` modifier makes the
+/// interaction consistent across the Vocabulary and History pages.
+struct SettingsTooltipBubble: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.white)
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color.black.opacity(0.92))
+            )
+            .fixedSize(horizontal: true, vertical: false)
+            .allowsHitTesting(false)
+    }
+}
+
+private struct SettingsTooltipModifier: ViewModifier {
+    let text: String
+    let isEnabled: Bool
+
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                if isHovered && isEnabled {
+                    SettingsTooltipBubble(text: text)
+                        .offset(y: 40)
+                        .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .top)))
+                }
+            }
+            .zIndex(isHovered && isEnabled ? 30 : 0)
+            .onHover { isHovered = $0 }
+            .animation(.easeOut(duration: 0.08), value: isHovered)
+    }
+}
+
+extension View {
+    func settingsTooltip(_ text: String, isEnabled: Bool = true) -> some View {
+        modifier(SettingsTooltipModifier(text: text, isEnabled: isEnabled))
+    }
+}
+
 // MARK: - Shared Types
 
 enum SettingsTestStatus: Equatable {
@@ -39,13 +90,12 @@ extension SettingsCardHelpers {
             HStack(spacing: 6) {
                 if let icon {
                     Image(systemName: icon)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(TF.settingsAccentAmber)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(TF.settingsText)
                 }
-                Text(title.uppercased())
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(1.2)
-                    .foregroundStyle(TF.settingsTextTertiary)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(TF.settingsText)
                 Spacer()
                 if let trailing {
                     trailing
@@ -58,8 +108,12 @@ extension SettingsCardHelpers {
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(TF.settingsBg)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(TF.settingsBorder, lineWidth: 1)
+                )
         )
     }
 
@@ -220,7 +274,7 @@ extension SettingsCardHelpers {
             .foregroundStyle(.white)
             .padding(.horizontal, 16)
             .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsAccentAmber))
+            .background(RoundedRectangle(cornerRadius: 9).fill(TF.settingsAccentBlue))
             .contentShape(Rectangle())
     }
 
