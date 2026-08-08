@@ -2108,6 +2108,7 @@ actor RecognitionSession {
         sessionGeneration &+= 1
         state = .idle
         currentTranscript = .empty
+        pendingSelectionAskConversationContext = ""
         hasEmittedReadyForCurrentSession = false
         currentConfig = nil
         uploadFailureFlag = nil

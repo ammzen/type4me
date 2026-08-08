@@ -56,9 +56,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var floatingBarController: FloatingBarController?
     private lazy var selectionAskController = SelectionAskController { [weak self] conversationContext in
         self?.toggleSelectionAskFollowUp(conversationContext: conversationContext) ?? false
+    } onCancelFollowUp: { [weak self] in
+        self?.cancelSelectionAskFollowUp() ?? false
     }
     private let hotkeyManager = HotkeyManager()
     private let session = RecognitionSession()
+    private var selectionAskFollowUpGeneration = 0
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[Type4Me] applicationDidFinishLaunching")
@@ -312,7 +315,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func refreshModeAvailability() {
         let provider = KeychainService.selectedASRProvider
         appState.reconcileCurrentMode(for: provider)
+        updateSelectionAskShortcutHint()
         registerHotkeys(for: provider)
+    }
+
+    private func updateSelectionAskShortcutHint() {
+        let hint = appState.availableModes
+            .first(where: { $0.id == ProcessingMode.selectionAskId })?
+            .hotkeyBindings
+            .map { HotkeyRecorderView.keyDisplayName(keyCode: $0.keyCode, modifiers: $0.modifiers) }
+            .joined(separator: " / ") ?? ""
+        selectionAskController.updateFollowUpShortcutHint(hint)
     }
 
     private func registerHotkeys(for provider: ASRProvider) {
@@ -322,6 +335,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let capturedMode = mode
             let onStart: @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
+
+                if capturedMode.executionKind == .selectionAsk,
+                   MainActor.assumeIsolated({ self.selectionAskController.isVisible }) {
+                    let wasRecording = MainActor.assumeIsolated {
+                        self.selectionAskController.isRecordingFollowUp
+                    }
+                    let handled = MainActor.assumeIsolated {
+                        self.selectionAskController.toggleFollowUpRecording()
+                    }
+                    if !handled || wasRecording {
+                        MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
+                    }
+                    return
+                }
 
                 let phase = MainActor.assumeIsolated { self.appState.barPhase }
 
@@ -390,6 +417,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let onStop: @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
 
+                if capturedMode.executionKind == .selectionAsk,
+                   MainActor.assumeIsolated({
+                       self.selectionAskController.isVisible
+                           && self.selectionAskController.isRecordingFollowUp
+                   }) {
+                    _ = MainActor.assumeIsolated {
+                        self.selectionAskController.toggleFollowUpRecording()
+                    }
+                    return
+                }
+
                 let phase = MainActor.assumeIsolated { self.appState.barPhase }
                 NSLog("[Type4Me] >>> HOTKEY: Record STOP (phase=%@)", String(describing: phase))
                 DebugFileLogger.log("hotkey record stop phase=\(phase)")
@@ -451,6 +489,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Returns true if the abort was actually handled (ESC should be swallowed).
         hotkeyManager.onESCAbort = { [weak self] in
             guard let self else { return false }
+            if MainActor.assumeIsolated({
+                self.selectionAskController.isVisible
+                    && self.selectionAskController.isRecordingFollowUp
+            }) {
+                return MainActor.assumeIsolated {
+                    self.selectionAskController.cancelActiveFollowUp()
+                }
+            }
             let phase = appState.barPhase
             guard phase == .recording || phase == .processing || phase == .preparing else {
                 return false  // Not in an active session, let ESC pass through
@@ -486,6 +532,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let phase = appState.barPhase
         if phase == .recording || phase == .preparing {
             DebugFileLogger.log("selectionAsk follow-up stop phase=\(phase)")
+            selectionAskFollowUpGeneration &+= 1
             appState.stopRecording()
             if phase == .preparing {
                 Task { await self.session.cancelRecording() }
@@ -506,6 +553,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
 
         DebugFileLogger.log("selectionAsk follow-up start")
+        selectionAskFollowUpGeneration &+= 1
+        let generation = selectionAskFollowUpGeneration
         appState.currentMode = effectiveMode
         appState.startRecording()
         Task {
@@ -513,9 +562,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !ready {
                 DebugFileLogger.log("selectionAsk follow-up start: awaitIdle timed out")
             }
+            let shouldStart = await MainActor.run {
+                self.selectionAskFollowUpGeneration == generation
+                    && self.selectionAskController.isRecordingFollowUp
+                    && (self.appState.barPhase == .preparing || self.appState.barPhase == .recording)
+            }
+            guard shouldStart else {
+                DebugFileLogger.log("selectionAsk follow-up start: cancelled before session start")
+                return
+            }
             await self.session.setSelectionAskConversationContext(conversationContext)
             await self.session.startRecording(mode: effectiveMode)
         }
+        return true
+    }
+
+    private func cancelSelectionAskFollowUp() -> Bool {
+        let phase = appState.barPhase
+        guard phase == .recording || phase == .preparing else { return false }
+
+        DebugFileLogger.log("selectionAsk follow-up cancel phase=\(phase)")
+        selectionAskFollowUpGeneration &+= 1
+        appState.cancel()
+        hotkeyManager.resetActiveState()
+        Task { await self.session.cancelRecording() }
         return true
     }
 

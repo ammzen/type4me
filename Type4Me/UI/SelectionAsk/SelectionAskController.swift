@@ -24,6 +24,7 @@ final class SelectionAskState {
     var phase: Phase = .idle
     var turns: [Turn] = []
     var isRecordingFollowUp = false
+    var followUpShortcutHint = ""
 
     var activeAnswer: String {
         switch phase {
@@ -121,6 +122,8 @@ enum SelectionAskPromptBuilder {
 
 @MainActor
 final class SelectionAskPanel: NSPanel {
+    var onEscape: (() -> Void)?
+
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
@@ -146,6 +149,18 @@ final class SelectionAskPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func cancelOperation(_ sender: Any?) {
+        onEscape?()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard event.keyCode != 53 else {
+            onEscape?()
+            return
+        }
+        super.keyDown(with: event)
+    }
 }
 
 @MainActor
@@ -154,10 +169,15 @@ final class SelectionAskController {
     private let panel: SelectionAskPanel
     private var requestGeneration = 0
     private let onFollowUp: (String) -> Bool
+    private let onCancelFollowUp: () -> Bool
     private var awaitingFollowUpTurn = false
 
-    init(onFollowUp: @escaping (String) -> Bool = { _ in false }) {
+    init(
+        onFollowUp: @escaping (String) -> Bool = { _ in false },
+        onCancelFollowUp: @escaping () -> Bool = { false }
+    ) {
         self.onFollowUp = onFollowUp
+        self.onCancelFollowUp = onCancelFollowUp
         let size = NSSize(width: 680, height: 560)
         panel = SelectionAskPanel(contentRect: NSRect(origin: .zero, size: size))
 
@@ -165,12 +185,25 @@ final class SelectionAskController {
             self?.hide()
         } onFollowUp: { [weak self] in
             self?.toggleFollowUpRecording()
+        } onCancelFollowUp: { [weak self] in
+            self?.cancelActiveFollowUp()
         }
         let hosting = NSHostingView(rootView: view)
         hosting.frame = NSRect(origin: .zero, size: size)
         hosting.autoresizingMask = [.width, .height]
         panel.contentView = hosting
         panel.setFrame(NSRect(origin: .zero, size: size), display: false)
+        panel.onEscape = { [weak self] in
+            self?.handleEscape()
+        }
+    }
+
+    var isVisible: Bool { panel.isVisible }
+
+    var isRecordingFollowUp: Bool { state.isRecordingFollowUp }
+
+    func updateFollowUpShortcutHint(_ hint: String) {
+        state.followUpShortcutHint = hint
     }
 
     func begin(question: String, selectedText: String) {
@@ -240,13 +273,31 @@ final class SelectionAskController {
         }
     }
 
-    private func toggleFollowUpRecording() {
+    @discardableResult
+    func toggleFollowUpRecording() -> Bool {
         let didStartOrStop = onFollowUp(conversationContext())
-        guard didStartOrStop else { return }
+        guard didStartOrStop else { return false }
         if !state.isRecordingFollowUp {
             awaitingFollowUpTurn = true
         }
         state.isRecordingFollowUp.toggle()
+        return true
+    }
+
+    func handleEscape() {
+        guard panel.isVisible else { return }
+        if state.isRecordingFollowUp {
+            _ = cancelActiveFollowUp()
+        } else {
+            hide()
+        }
+    }
+
+    @discardableResult
+    func cancelActiveFollowUp() -> Bool {
+        guard state.isRecordingFollowUp, onCancelFollowUp() else { return false }
+        cancelFollowUpRecording()
+        return true
     }
 
     private func conversationContext() -> String {

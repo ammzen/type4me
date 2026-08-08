@@ -5,7 +5,9 @@ struct SelectionAskView: View {
     let state: SelectionAskState
     let onClose: () -> Void
     let onFollowUp: () -> Void
+    let onCancelFollowUp: () -> Void
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
+    @State private var isFollowUpHovered = false
     private let bottomAnchorID = "selectionAskBottomAnchor"
 
     var body: some View {
@@ -178,27 +180,72 @@ struct SelectionAskView: View {
                     .foregroundStyle(TF.settingsTextSecondary)
             }
             Spacer()
-            Button(action: onFollowUp) {
-                HStack(spacing: 8) {
-                    Image(systemName: state.isRecordingFollowUp ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 12, weight: .bold))
-                    Text(state.isRecordingFollowUp ? L("停止追问", "Stop follow-up") : L("继续追问", "Ask follow-up"))
-                        .font(.system(size: 12, weight: .semibold))
-                    if state.isRecordingFollowUp {
+            if isFollowUpHovered,
+               !state.isRecordingFollowUp,
+               !state.followUpShortcutHint.isEmpty {
+                Text(L("快捷键 \(state.followUpShortcutHint)", "Shortcut \(state.followUpShortcutHint)"))
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
+            if state.isRecordingFollowUp {
+                Button(action: onCancelFollowUp) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .bold))
+                        Text(L("取消追问（ESC）", "Cancel follow-up (ESC)"))
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 13)
+                    .frame(height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(TF.settingsAccentRed)
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onFollowUp) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12, weight: .bold))
+                        Text(L("结束追问", "Finish follow-up"))
+                            .font(.system(size: 12, weight: .semibold))
                         VoiceBars()
                     }
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 13)
+                    .frame(height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(TF.settingsAccentGreen)
+                    )
                 }
-                .foregroundStyle(Color.white)
-                .padding(.horizontal, 14)
-                .frame(height: 36)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(state.isRecordingFollowUp
-                              ? TF.settingsAccentRed
-                              : TF.settingsNavActive)
-                )
+                .buttonStyle(.plain)
+            } else {
+                Button(action: onFollowUp) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 12, weight: .bold))
+                        Text(L("继续追问", "Ask follow-up"))
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 14)
+                    .frame(height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(TF.settingsNavActive)
+                    )
+                }
+                .buttonStyle(.plain)
+                .onHover { isHovered in
+                    withAnimation(.easeOut(duration: 0.14)) {
+                        isFollowUpHovered = isHovered
+                    }
+                }
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 20)
         .frame(height: 64)
