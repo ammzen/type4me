@@ -386,8 +386,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     await self.session.startRecording(mode: effectiveMode)
                 }
-            },
-            onStop: { [weak self] in
+            }
+            let onStop: @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
 
                 let phase = MainActor.assumeIsolated { self.appState.barPhase }
@@ -398,49 +398,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Task { _ = await self.session.handleRecoveryHotkeyPress() }
                     return
                 }
-                MainActor.assumeIsolated { self.appState.stopRecording() }
-                if phase == .preparing {
-                    Task { await self.session.cancelRecording() }
-                    } else {
-                        Task { await self.session.stopRecording() }
-                    }
-                    return
-                }
-
-                // Block new recording while LLM/injection is still in progress.
-                // The current session must finish (paste + history save) before a new one can start.
-                if phase == .processing {
-                    NSLog("[Type4Me] >>> HOTKEY: onStart blocked – still processing")
-                    DebugFileLogger.log("hotkey onStart blocked: still processing")
-                    MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
-                    return
-                }
-
-                let selectedProvider = KeychainService.selectedASRProvider
-                let resolvedMode = ASRProviderRegistry.resolvedMode(for: capturedMode, provider: selectedProvider)
-                let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
-                NSLog("[Type4Me] >>> HOTKEY: Record START (mode: %@)", effectiveMode.name)
-                DebugFileLogger.log("hotkey record start mode=\(effectiveMode.name)")
-                Task { @MainActor in
-                    self.appState.currentMode = effectiveMode
-                    self.appState.startRecording()
-                }
-                Task {
-                    // Wait for previous session to fully clean up before starting
-                    let ready = await self.session.awaitIdle()
-                    if !ready {
-                        NSLog("[Type4Me] >>> HOTKEY: previous session did not reach idle in time")
-                        DebugFileLogger.log("hotkey start: awaitIdle timed out")
-                    }
-                    await self.session.startRecording(mode: effectiveMode)
-                }
-            }
-            let onStop: @Sendable () -> Void = { [weak self] in
-                guard let self else { return }
-
-                let phase = MainActor.assumeIsolated { self.appState.barPhase }
-                NSLog("[Type4Me] >>> HOTKEY: Record STOP (phase=%@)", String(describing: phase))
-                DebugFileLogger.log("hotkey record stop phase=\(phase)")
                 MainActor.assumeIsolated { self.appState.stopRecording() }
                 if phase == .preparing {
                     Task { await self.session.cancelRecording() }

@@ -70,9 +70,7 @@ struct ModeStorage {
             }
             if mode.id == ProcessingMode.selectionAskId {
                 var d = ProcessingMode.selectionAsk
-                d.hotkeyCode = mode.hotkeyCode
-                d.hotkeyModifiers = mode.hotkeyModifiers
-                d.hotkeyStyle = mode.hotkeyStyle
+                d.hotkeyBindings = mode.hotkeyBindings
                 if mode.prompt != ProcessingMode.selectionAsk.prompt,
                    !selectionAskPromptIsLegacy(mode.prompt) {
                     d.name = mode.name
