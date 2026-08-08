@@ -133,14 +133,14 @@ extension DemoState: FloatingBarState {
     var pinsTranscriptPopup: Bool { false }
     var isQwen3OnlyMode: Bool { false }
 
-    func completeRecordingFromIndicator() {
+    func performRecordingControlAction(_ action: RecordingControlAction) {
         guard barPhase == .preparing || barPhase == .recording else { return }
-        barPhase = .processing
-    }
-
-    func cancelRecordingFromIndicator() {
-        guard barPhase == .preparing || barPhase == .recording else { return }
-        feedbackMessage = L("已取消", "Cancelled")
-        barPhase = .done
+        switch action {
+        case .finish:
+            barPhase = .processing
+        case .cancel:
+            feedbackMessage = L("已取消", "Cancelled")
+            barPhase = .done
+        }
     }
 }

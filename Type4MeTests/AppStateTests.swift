@@ -174,16 +174,13 @@ final class AppStateTests: XCTestCase {
 
     func testFloatingIndicatorActionCallbacksAreForwarded() {
         let appState = AppState()
-        var completed = false
-        var cancelled = false
-        appState.onCompleteRecording = { completed = true }
-        appState.onCancelRecording = { cancelled = true }
+        var actions: [RecordingControlAction] = []
+        appState.onRecordingControlAction = { actions.append($0) }
 
-        appState.completeRecordingFromIndicator()
-        appState.cancelRecordingFromIndicator()
+        appState.performRecordingControlAction(.finish)
+        appState.performRecordingControlAction(.cancel)
 
-        XCTAssertTrue(completed)
-        XCTAssertTrue(cancelled)
+        XCTAssertEqual(actions, [.finish, .cancel])
     }
 
     func testDisabledLiveTranscriptOnlyHidesTextWhileRecording() {

@@ -44,6 +44,50 @@ struct Type4MeApp: App {
     }
 }
 
+@MainActor
+final class RecordingControlCoordinator {
+    private weak var followUpController: SelectionAskController?
+    private let onStandardAction: (RecordingControlAction) -> Void
+
+    init(
+        followUpController: SelectionAskController,
+        onStandardAction: @escaping (RecordingControlAction) -> Void
+    ) {
+        self.followUpController = followUpController
+        self.onStandardAction = onStandardAction
+    }
+
+    func perform(_ action: RecordingControlAction) {
+        if followUpController?.handleActiveRecordingAction(action) == true {
+            return
+        }
+        onStandardAction(action)
+    }
+}
+
+struct SelectionAskFollowUpStartGate {
+    private(set) var generation = 0
+
+    mutating func begin() -> Int {
+        generation &+= 1
+        return generation
+    }
+
+    mutating func invalidate() {
+        generation &+= 1
+    }
+
+    func allowsStart(
+        token: Int,
+        isFollowUpActive: Bool,
+        phase: FloatingBarPhase
+    ) -> Bool {
+        token == generation
+            && isFollowUpActive
+            && (phase == .preparing || phase == .recording)
+    }
+}
+
 // MARK: - App Delegate
 
 @MainActor
@@ -55,13 +99,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Computed dynamically per recording based on audio device topology.
     private var floatingBarController: FloatingBarController?
     private lazy var selectionAskController = SelectionAskController { [weak self] conversationContext in
-        self?.toggleSelectionAskFollowUp(conversationContext: conversationContext) ?? false
+        self?.startSelectionAskFollowUp(conversationContext: conversationContext) ?? false
+    } onFinishFollowUp: { [weak self] in
+        self?.finishSelectionAskFollowUp()
     } onCancelFollowUp: { [weak self] in
-        self?.cancelSelectionAskFollowUp() ?? false
+        self?.cancelSelectionAskFollowUp()
+    }
+    private lazy var recordingControlCoordinator = RecordingControlCoordinator(
+        followUpController: selectionAskController
+    ) { [weak self] action in
+        self?.performStandardRecordingAction(action)
     }
     private let hotkeyManager = HotkeyManager()
     private let session = RecognitionSession()
-    private var selectionAskFollowUpGeneration = 0
+    private var selectionAskFollowUpStartGate = SelectionAskFollowUpStartGate()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[Type4Me] applicationDidFinishLaunching")
@@ -88,11 +139,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugFileLogger.startSession()
         DebugFileLogger.log("applicationDidFinishLaunching")
         floatingBarController = FloatingBarController(state: appState)
-        appState.onCompleteRecording = { [weak self] in
-            self?.completeRecordingFromIndicator()
-        }
-        appState.onCancelRecording = { [weak self] in
-            self?.cancelRecordingFromIndicator()
+        appState.onRecordingControlAction = { [weak self] action in
+            self?.recordingControlCoordinator.perform(action)
         }
 
         // Bridge ASR events → AppState for floating bar display
@@ -148,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case .transcript(let transcript):
                         appState.setLiveTranscript(transcript)
                     case .completed:
+                        self.selectionAskController.recordingDidEnd(.finish)
                         appState.stopRecording()
                         if await session.stoppedByMaxDuration {
                             appState.processingLabelOverride = L("已达最大时长", "Max duration reached")
@@ -201,7 +250,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.safeResetHotkeyState()
                     case .error(let error):
                         appState.showError(self.userFacingMessage(for: error))
-                        self.selectionAskController.cancelFollowUpRecording()
+                        self.selectionAskController.recordingDidEnd(.cancel)
                         self.hotkeyManager.isProcessing = false
                         self.safeResetHotkeyState()
                     }
@@ -348,7 +397,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.selectionAskController.isRecordingFollowUp
                     }
                     let handled = MainActor.assumeIsolated {
-                        self.selectionAskController.toggleFollowUpRecording()
+                        self.selectionAskController.performPrimaryFollowUpAction()
                     }
                     if !handled || wasRecording {
                         MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
@@ -429,7 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                            && self.selectionAskController.isRecordingFollowUp
                    }) {
                     _ = MainActor.assumeIsolated {
-                        self.selectionAskController.toggleFollowUpRecording()
+                        self.selectionAskController.handleActiveRecordingAction(.finish)
                     }
                     return
                 }
@@ -500,7 +549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     && self.selectionAskController.isRecordingFollowUp
             }) {
                 return MainActor.assumeIsolated {
-                    self.selectionAskController.cancelActiveFollowUp()
+                    self.selectionAskController.handleActiveRecordingAction(.cancel)
                 }
             }
             let phase = appState.barPhase
@@ -534,22 +583,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func toggleSelectionAskFollowUp(conversationContext: String) -> Bool {
+    private func startSelectionAskFollowUp(conversationContext: String) -> Bool {
         let phase = appState.barPhase
-        if phase == .recording || phase == .preparing {
-            DebugFileLogger.log("selectionAsk follow-up stop phase=\(phase)")
-            selectionAskFollowUpGeneration &+= 1
-            appState.stopRecording()
-            if phase == .preparing {
-                Task { await self.session.cancelRecording() }
-            } else {
-                Task { await self.session.stopRecording() }
-            }
-            return true
-        }
-
         guard phase != .processing else {
             DebugFileLogger.log("selectionAsk follow-up blocked: still processing")
+            return false
+        }
+        guard phase != .recording, phase != .preparing else {
+            DebugFileLogger.log("selectionAsk follow-up blocked: another recording is active")
             return false
         }
 
@@ -559,8 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
 
         DebugFileLogger.log("selectionAsk follow-up start")
-        selectionAskFollowUpGeneration &+= 1
-        let generation = selectionAskFollowUpGeneration
+        let generation = selectionAskFollowUpStartGate.begin()
         appState.currentMode = effectiveMode
         appState.startRecording()
         Task {
@@ -569,9 +609,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DebugFileLogger.log("selectionAsk follow-up start: awaitIdle timed out")
             }
             let shouldStart = await MainActor.run {
-                self.selectionAskFollowUpGeneration == generation
-                    && self.selectionAskController.isRecordingFollowUp
-                    && (self.appState.barPhase == .preparing || self.appState.barPhase == .recording)
+                self.selectionAskFollowUpStartGate.allowsStart(
+                    token: generation,
+                    isFollowUpActive: self.selectionAskController.isRecordingFollowUp,
+                    phase: self.appState.barPhase
+                )
             }
             guard shouldStart else {
                 DebugFileLogger.log("selectionAsk follow-up start: cancelled before session start")
@@ -583,45 +625,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    private func cancelSelectionAskFollowUp() -> Bool {
+    private func finishSelectionAskFollowUp() {
         let phase = appState.barPhase
-        guard phase == .recording || phase == .preparing else { return false }
-
-        DebugFileLogger.log("selectionAsk follow-up cancel phase=\(phase)")
-        selectionAskFollowUpGeneration &+= 1
-        appState.cancel()
+        DebugFileLogger.log("selectionAsk follow-up finish phase=\(phase)")
+        selectionAskFollowUpStartGate.invalidate()
         hotkeyManager.resetActiveState()
-        Task { await self.session.cancelRecording() }
-        return true
-    }
 
-    private func completeRecordingFromIndicator() {
-        let phase = appState.barPhase
-        guard phase == .preparing || phase == .recording else { return }
-
-        DebugFileLogger.log("floating indicator: complete recording phase=\(phase)")
-        hotkeyManager.resetActiveState()
-        appState.stopRecording()
-        if phase == .preparing {
-            Task { await session.cancelRecording() }
-        } else {
-            Task { await session.stopRecording() }
+        switch phase {
+        case .recording:
+            appState.stopRecording()
+            Task { await self.session.stopRecording() }
+        case .preparing:
+            // No ASR session is ready to finalize yet, so there is no usable
+            // question to process. Tear down the pending start deterministically.
+            appState.cancel()
+            Task { await self.session.cancelRecording() }
+        case .processing, .recovering, .done, .error, .hidden:
+            break
         }
     }
 
-    private func cancelRecordingFromIndicator() {
+    private func cancelSelectionAskFollowUp() {
+        let phase = appState.barPhase
+        DebugFileLogger.log("selectionAsk follow-up cancel phase=\(phase)")
+        selectionAskFollowUpStartGate.invalidate()
+        appState.cancel()
+        hotkeyManager.resetActiveState()
+        Task { await self.session.cancelRecording() }
+    }
+
+    private func performStandardRecordingAction(_ action: RecordingControlAction) {
         let phase = appState.barPhase
         guard phase == .preparing || phase == .recording else { return }
 
-        DebugFileLogger.log("floating indicator: cancel recording phase=\(phase)")
+        DebugFileLogger.log("floating indicator: \(action) recording phase=\(phase)")
         hotkeyManager.resetActiveState()
-        appState.stopRecording()
-        if phase == .preparing {
-            Task { await session.cancelRecording() }
-        } else {
-            Task {
-                await session.abortInjection()
-                await session.stopRecording()
+
+        switch action {
+        case .finish:
+            appState.stopRecording()
+            if phase == .preparing {
+                Task { await session.cancelRecording() }
+            } else {
+                Task { await session.stopRecording() }
+            }
+        case .cancel:
+            appState.stopRecording()
+            if phase == .preparing {
+                Task { await session.cancelRecording() }
+            } else {
+                Task {
+                    await session.abortInjection()
+                    await session.stopRecording()
+                }
             }
         }
     }

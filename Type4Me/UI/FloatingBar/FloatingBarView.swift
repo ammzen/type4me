@@ -3,14 +3,9 @@ import SwiftUI
 /// Cached font for text measurement (module-level to avoid generic-type static restriction).
 private let floatingBarFont = NSFont.systemFont(ofSize: 14, weight: .medium)
 
-private enum RecordingAction: Equatable {
-    case complete
-    case cancel
-}
-
 private enum FloatingBarTopOverlay: Equatable {
     case transcript
-    case action(RecordingAction)
+    case action(RecordingControlAction)
     case mode
 }
 
@@ -31,8 +26,7 @@ protocol FloatingBarState: AnyObject, Observable {
     /// True when recording without SenseVoice streaming (Qwen3-only).
     var isQwen3OnlyMode: Bool { get }
     var effectiveProcessingLabel: String { get }
-    func completeRecordingFromIndicator()
-    func cancelRecordingFromIndicator()
+    func performRecordingControlAction(_ action: RecordingControlAction)
 }
 
 /// Dark-themed floating transcription bar.
@@ -53,7 +47,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     @State private var doneStartDate: Date?
     @State private var isTranscriptHoverActive = false
     @State private var transcriptHoverExitTask: Task<Void, Never>?
-    @State private var hoveredAction: RecordingAction?
+    @State private var hoveredAction: RecordingControlAction?
     @State private var showsModeHint = false
     @State private var modeHintTask: Task<Void, Never>?
     @State private var recordingActionLocked = false
@@ -202,7 +196,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var recordingContent: some View {
         HStack(spacing: TF.recordingControlGap) {
-            recordingButton(.complete)
+            recordingButton(.finish)
 
             recordingText
 
@@ -250,12 +244,12 @@ struct FloatingBarView<S: FloatingBarState>: View {
         return state.transcriptionText
     }
 
-    private func recordingButton(_ action: RecordingAction) -> some View {
+    private func recordingButton(_ action: RecordingControlAction) -> some View {
         ZStack {
             Circle()
-                .fill(action == .complete ? TF.floatingControl : TF.floatingControlLight)
+                .fill(action == .finish ? TF.floatingControl : TF.floatingControlLight)
 
-            if action == .complete {
+            if action == .finish {
                 RecordingDot()
                     .allowsHitTesting(false)
             } else {
@@ -267,7 +261,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         }
         .frame(width: TF.recordingControlSize, height: TF.recordingControlSize)
         .contentShape(Circle())
-        .accessibilityLabel(action == .complete
+        .accessibilityLabel(action == .finish
             ? L("完成录制", "Finish Recording")
             : L("取消录制", "Cancel Recording"))
         .accessibilityAddTraits(.isButton)
@@ -285,18 +279,13 @@ struct FloatingBarView<S: FloatingBarState>: View {
         }
     }
 
-    private func triggerRecordingAction(_ action: RecordingAction) {
+    private func triggerRecordingAction(_ action: RecordingControlAction) {
         guard !recordingActionLocked else { return }
         recordingActionLocked = true
         hoveredAction = nil
         transcriptHoverExitTask?.cancel()
         isTranscriptHoverActive = false
-        switch action {
-        case .complete:
-            state.completeRecordingFromIndicator()
-        case .cancel:
-            state.cancelRecordingFromIndicator()
-        }
+        state.performRecordingControlAction(action)
     }
 
     private var processingContent: some View {
@@ -502,7 +491,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         case .mode:
             hintBubble(text: state.currentMode.name)
                 .transaction { $0.animation = nil }
-        case .action(.complete):
+        case .action(.finish):
             alignedHint(text: L("完成录制", "Finish Recording"), alignment: .leading)
         case .action(.cancel):
             alignedHint(text: L("取消录制（ESC）", "Cancel Recording (ESC)"), alignment: .trailing)

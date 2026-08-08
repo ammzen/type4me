@@ -12,6 +12,11 @@ enum FloatingBarPhase: Equatable {
     case error
 }
 
+enum RecordingControlAction: Equatable {
+    case finish
+    case cancel
+}
+
 enum RecordingVisualStyle: String, CaseIterable {
     static let storageKey = "tf_visualStyle"
     static let defaultValue = Self.timeline.rawValue
@@ -983,8 +988,7 @@ final class AppState {
 
     @ObservationIgnored var onShowPanel: (() -> Void)?
     @ObservationIgnored var onHidePanel: (() -> Void)?
-    @ObservationIgnored var onCompleteRecording: (() -> Void)?
-    @ObservationIgnored var onCancelRecording: (() -> Void)?
+    @ObservationIgnored var onRecordingControlAction: ((RecordingControlAction) -> Void)?
 
     // MARK: Update Check
 
@@ -1158,12 +1162,8 @@ final class AppState {
         scheduleAutoHide(for: .done, delay: .seconds(0.8))
     }
 
-    func completeRecordingFromIndicator() {
-        onCompleteRecording?()
-    }
-
-    func cancelRecordingFromIndicator() {
-        onCancelRecording?()
+    func performRecordingControlAction(_ action: RecordingControlAction) {
+        onRecordingControlAction?(action)
     }
 
     /// Display a Mac Action result in the floating bar with status-specific

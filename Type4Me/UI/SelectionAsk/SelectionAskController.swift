@@ -168,25 +168,28 @@ final class SelectionAskController {
     private let state = SelectionAskState()
     private let panel: SelectionAskPanel
     private var requestGeneration = 0
-    private let onFollowUp: (String) -> Bool
-    private let onCancelFollowUp: () -> Bool
+    private let onStartFollowUp: (String) -> Bool
+    private let onFinishFollowUp: () -> Void
+    private let onCancelFollowUp: () -> Void
     private var awaitingFollowUpTurn = false
 
     init(
-        onFollowUp: @escaping (String) -> Bool = { _ in false },
-        onCancelFollowUp: @escaping () -> Bool = { false }
+        onStartFollowUp: @escaping (String) -> Bool = { _ in false },
+        onFinishFollowUp: @escaping () -> Void = {},
+        onCancelFollowUp: @escaping () -> Void = {}
     ) {
-        self.onFollowUp = onFollowUp
+        self.onStartFollowUp = onStartFollowUp
+        self.onFinishFollowUp = onFinishFollowUp
         self.onCancelFollowUp = onCancelFollowUp
         let size = NSSize(width: 680, height: 560)
         panel = SelectionAskPanel(contentRect: NSRect(origin: .zero, size: size))
 
         let view = SelectionAskView(state: state) { [weak self] in
-            self?.hide()
+            self?.close()
         } onFollowUp: { [weak self] in
-            self?.toggleFollowUpRecording()
+            _ = self?.performPrimaryFollowUpAction()
         } onCancelFollowUp: { [weak self] in
-            self?.cancelActiveFollowUp()
+            _ = self?.handleActiveRecordingAction(.cancel)
         }
         let hosting = NSHostingView(rootView: view)
         hosting.frame = NSRect(origin: .zero, size: size)
@@ -201,6 +204,7 @@ final class SelectionAskController {
     var isVisible: Bool { panel.isVisible }
 
     var isRecordingFollowUp: Bool { state.isRecordingFollowUp }
+    var turns: [SelectionAskState.Turn] { state.turns }
 
     func updateFollowUpShortcutHint(_ hint: String) {
         state.followUpShortcutHint = hint
@@ -253,13 +257,21 @@ final class SelectionAskController {
         state.phase = .error(message)
     }
 
-    func cancelFollowUpRecording() {
+    func recordingDidEnd(_ action: RecordingControlAction) {
+        guard state.isRecordingFollowUp else { return }
         state.isRecordingFollowUp = false
-        awaitingFollowUpTurn = false
+        if action == .cancel {
+            awaitingFollowUpTurn = false
+        }
     }
 
     func hide() {
         panel.orderOut(nil)
+    }
+
+    func close() {
+        _ = handleActiveRecordingAction(.cancel)
+        hide()
     }
 
     private func show() {
@@ -274,30 +286,56 @@ final class SelectionAskController {
     }
 
     @discardableResult
-    func toggleFollowUpRecording() -> Bool {
-        let didStartOrStop = onFollowUp(conversationContext())
-        guard didStartOrStop else { return false }
-        if !state.isRecordingFollowUp {
-            awaitingFollowUpTurn = true
-        }
-        state.isRecordingFollowUp.toggle()
+    func startFollowUpRecording() -> Bool {
+        guard !state.isRecordingFollowUp else { return false }
+        guard onStartFollowUp(conversationContext()) else { return false }
+        awaitingFollowUpTurn = true
+        state.isRecordingFollowUp = true
         return true
+    }
+
+    @discardableResult
+    func finishActiveFollowUp() -> Bool {
+        guard state.isRecordingFollowUp else { return false }
+        state.isRecordingFollowUp = false
+        onFinishFollowUp()
+        return true
+    }
+
+    @discardableResult
+    func cancelActiveFollowUp() -> Bool {
+        guard state.isRecordingFollowUp else { return false }
+        state.isRecordingFollowUp = false
+        awaitingFollowUpTurn = false
+        onCancelFollowUp()
+        return true
+    }
+
+    @discardableResult
+    func handleActiveRecordingAction(_ action: RecordingControlAction) -> Bool {
+        switch action {
+        case .finish:
+            return finishActiveFollowUp()
+        case .cancel:
+            return cancelActiveFollowUp()
+        }
+    }
+
+    @discardableResult
+    func performPrimaryFollowUpAction() -> Bool {
+        if state.isRecordingFollowUp {
+            return handleActiveRecordingAction(.finish)
+        }
+        return startFollowUpRecording()
     }
 
     func handleEscape() {
         guard panel.isVisible else { return }
         if state.isRecordingFollowUp {
-            _ = cancelActiveFollowUp()
+            _ = handleActiveRecordingAction(.cancel)
         } else {
             hide()
         }
-    }
-
-    @discardableResult
-    func cancelActiveFollowUp() -> Bool {
-        guard state.isRecordingFollowUp, onCancelFollowUp() else { return false }
-        cancelFollowUpRecording()
-        return true
     }
 
     private func conversationContext() -> String {
