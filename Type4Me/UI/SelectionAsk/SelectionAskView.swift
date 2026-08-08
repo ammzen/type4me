@@ -5,37 +5,46 @@ struct SelectionAskView: View {
     let state: SelectionAskState
     let onClose: () -> Void
     let onFollowUp: () -> Void
+    @AppStorage("tf_language") private var language = AppLanguage.systemDefault
     private let bottomAnchorID = "selectionAskBottomAnchor"
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 28)
-                .fill(Color(red: 0.96, green: 0.95, blue: 0.93))
+            RoundedRectangle(cornerRadius: TF.cornerLG, style: .continuous)
+                .fill(TF.settingsWindowBackground)
+                .overlay(
+                    RoundedRectangle(cornerRadius: TF.cornerLG, style: .continuous)
+                        .stroke(TF.settingsBorder, lineWidth: 1)
+                )
 
             VStack(spacing: 0) {
                 header
-                Divider().opacity(0.5)
+                divider
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 22) {
-                            questionSection
-                            ForEach(state.turns) { turn in
-                                turnView(turn)
+                        VStack(alignment: .leading, spacing: TF.spacingMD) {
+                            if hasSelectedText {
+                                selectedTextCard
+                            }
+
+                            if state.turns.isEmpty {
+                                turnCard(pendingTurn)
+                            } else {
+                                ForEach(state.turns) { turn in
+                                    turnCard(turn)
                                     .transition(.asymmetric(
                                         insertion: .move(edge: .bottom).combined(with: .opacity),
                                         removal: .opacity
                                     ))
+                                }
                             }
-                            if state.turns.isEmpty {
-                                answerSection
-                            }
+
                             Color.clear
                                 .frame(height: 1)
                                 .id(bottomAnchorID)
                         }
-                        .padding(.horizontal, 34)
-                        .padding(.vertical, 26)
-                        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: state.turns)
+                        .padding(TF.spacingXL)
+                        .animation(.easeOut(duration: 0.18), value: state.turns)
                     }
                     .onChange(of: state.turns) { _, _ in
                         withAnimation(.easeOut(duration: 0.18)) {
@@ -43,112 +52,101 @@ struct SelectionAskView: View {
                         }
                     }
                 }
+                .background(TF.settingsBg)
+                divider
                 followUpBar
             }
         }
-        .padding(10)
+        .padding(8)
+        .id(language)
     }
 
     private var header: some View {
-        HStack {
-            Spacer()
+        HStack(spacing: TF.spacingMD) {
             HStack(spacing: 10) {
-                Image(systemName: "sparkle.magnifyingglass")
-                    .font(.system(size: 22, weight: .semibold))
-                Text(L("随便问", "Ask Anything"))
-                    .font(.system(size: 24, weight: .bold))
+                AskAnythingIcon()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L("随便问", "Ask Anything"))
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundStyle(TF.settingsText)
+                    Text(L("语音提问，流式回答", "Voice questions, streamed answers"))
+                        .font(.system(size: 12))
+                        .foregroundStyle(TF.settingsTextSecondary)
+                }
             }
-            .foregroundStyle(Color(red: 0.08, green: 0.08, blue: 0.08))
             Spacer()
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundStyle(Color(red: 0.45, green: 0.45, blue: 0.45))
-                    .frame(width: 34, height: 34)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(TF.settingsTextSecondary)
+                    .frame(width: 32, height: 32)
+                    .background(
+                        RoundedRectangle(cornerRadius: TF.cornerSM, style: .continuous)
+                            .fill(TF.settingsCardAlt)
+                    )
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(L("关闭", "Close"))
         }
-        .padding(.horizontal, 24)
-        .frame(height: 74)
+        .padding(.horizontal, 20)
+        .frame(height: 64)
     }
 
-    private var questionSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: "questionmark.bubble")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(Color(red: 0.45, green: 0.45, blue: 0.45))
-                Text(state.question.isEmpty ? L("正在识别问题...", "Recognizing question...") : state.question)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.18, green: 0.18, blue: 0.18))
+    private var selectedTextCard: some View {
+        VStack(alignment: .leading, spacing: TF.spacingSM) {
+            HStack {
+                metadataLabel(L("已选内容", "SELECTED TEXT"))
                 Spacer()
-                if hasSelectedText {
-                    copyButton(text: state.selectedText, systemImage: "doc.on.doc")
-                }
+                copyButton(text: state.selectedText, systemImage: "doc.on.doc")
             }
-
-            if hasSelectedText {
-                HStack(alignment: .top, spacing: 14) {
-                    Rectangle()
-                        .fill(Color(red: 0.78, green: 0.76, blue: 0.72))
-                        .frame(width: 2)
-                    Text(state.selectedText)
-                        .font(.system(size: 18))
-                        .foregroundStyle(Color(red: 0.48, green: 0.48, blue: 0.48))
-                        .lineSpacing(5)
-                        .lineLimit(3)
-                        .truncationMode(.tail)
-                        .textSelection(.enabled)
-                }
-                .padding(.leading, 34)
-            }
+            Text(state.selectedText)
+                .font(.system(size: 13))
+                .foregroundStyle(TF.settingsTextSecondary)
+                .lineSpacing(4)
+                .lineLimit(3)
+                .truncationMode(.tail)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .padding(TF.spacingLG)
+        .background(
+            RoundedRectangle(cornerRadius: TF.cornerMD, style: .continuous)
+                .fill(TF.settingsCardAlt)
+        )
     }
 
-    private var answerSection: some View {
-        turnView(SelectionAskState.Turn(
+    private var pendingTurn: SelectionAskState.Turn {
+        SelectionAskState.Turn(
             question: state.question,
             answer: answerText ?? "",
             isLoading: answerText == nil,
             errorMessage: errorText
-        ))
+        )
     }
 
-    private func turnView(_ turn: SelectionAskState.Turn) -> some View {
+    private func turnCard(_ turn: SelectionAskState.Turn) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "person.crop.circle")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.38, green: 0.40, blue: 0.44))
+            VStack(alignment: .leading, spacing: TF.spacingSM) {
+                metadataLabel(L("问题", "QUESTION"))
                 Text(turn.question.isEmpty ? L("正在识别问题...", "Recognizing question...") : turn.question)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.18, green: 0.20, blue: 0.24))
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(TF.settingsText)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 12)
+            .padding(TF.spacingLG)
 
-            Divider()
+            divider
 
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 18, weight: .semibold))
-                Text(L("回答", "Answer"))
-                    .font(.system(size: 22, weight: .bold))
-                Spacer()
-                if !turn.answer.isEmpty {
-                    copyButton(text: turn.answer, systemImage: "doc.on.doc")
+            VStack(alignment: .leading, spacing: TF.spacingSM) {
+                HStack {
+                    metadataLabel(L("回答", "ANSWER"))
+                    Spacer()
+                    if !turn.answer.isEmpty {
+                        copyButton(text: turn.answer, systemImage: "doc.on.doc")
+                    }
                 }
-            }
-            .foregroundStyle(Color(red: 0.12, green: 0.12, blue: 0.12))
-            .padding(.horizontal, 24)
-            .frame(height: 52)
 
-            Divider()
-
-            Group {
                 if let message = turn.errorMessage {
                     errorView(message)
                 } else if turn.isLoading && turn.answer.isEmpty {
@@ -157,67 +155,74 @@ struct SelectionAskView: View {
                     markdownView(turn.answer)
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 16)
-            .padding(.bottom, 24)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(TF.spacingLG)
         }
         .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(Color.white)
+            RoundedRectangle(cornerRadius: TF.cornerMD, style: .continuous)
+                .fill(TF.settingsCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: TF.cornerMD, style: .continuous)
+                        .stroke(TF.settingsBorder, lineWidth: 1)
+                )
         )
     }
 
     private var followUpBar: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: TF.spacingMD) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(state.isRecordingFollowUp ? TF.settingsAccentRed : TF.settingsAccentGreen)
+                    .frame(width: 7, height: 7)
+                Text(state.isRecordingFollowUp ? L("正在录音", "Recording") : L("准备追问", "Ready for follow-up"))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(TF.settingsTextSecondary)
+            }
             Spacer()
             Button(action: onFollowUp) {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Image(systemName: state.isRecordingFollowUp ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 16, weight: .bold))
-                        .frame(width: 18, height: 18)
+                        .font(.system(size: 12, weight: .bold))
                     Text(state.isRecordingFollowUp ? L("停止追问", "Stop follow-up") : L("继续追问", "Ask follow-up"))
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                     if state.isRecordingFollowUp {
                         VoiceBars()
                     }
                 }
                 .foregroundStyle(Color.white)
-                .padding(.horizontal, 18)
-                .frame(height: 46)
+                .padding(.horizontal, 14)
+                .frame(height: 36)
                 .background(
-                    Capsule()
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
                         .fill(state.isRecordingFollowUp
-                              ? Color(red: 0.82, green: 0.22, blue: 0.18)
-                              : Color(red: 0.10, green: 0.12, blue: 0.16))
+                              ? TF.settingsAccentRed
+                              : TF.settingsNavActive)
                 )
-                .shadow(color: Color.black.opacity(0.12), radius: 10, y: 4)
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 34)
-        .padding(.bottom, 24)
+        .padding(.horizontal, 20)
+        .frame(height: 64)
     }
 
     private var loadingView: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             ProgressView()
                 .controlSize(.small)
             Text(L("正在思考...", "Thinking..."))
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(Color(red: 0.42, green: 0.42, blue: 0.42))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(TF.settingsTextSecondary)
         }
-        .frame(minHeight: 220, alignment: .center)
+        .frame(minHeight: 96, alignment: .center)
         .frame(maxWidth: .infinity)
     }
 
     private func markdownView(_ markdown: String) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: TF.spacingSM) {
             ForEach(Array(MarkdownRenderer.displayBlocks(from: markdown).enumerated()), id: \.offset) { _, block in
                 Text(MarkdownRenderer.attributedString(from: block))
-                    .font(.system(size: 19))
-                    .foregroundStyle(Color(red: 0.08, green: 0.10, blue: 0.16))
-                    .lineSpacing(8)
+                    .font(.system(size: 14))
+                    .foregroundStyle(TF.settingsText)
+                    .lineSpacing(5)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -226,15 +231,20 @@ struct SelectionAskView: View {
     }
 
     private func errorView(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(TF.settingsAccentRed)
             Text(message)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(Color(red: 0.42, green: 0.18, blue: 0.15))
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(TF.settingsAccentRed)
                 .textSelection(.enabled)
         }
-        .frame(minHeight: 180, alignment: .topLeading)
+        .padding(TF.spacingMD)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: TF.cornerSM, style: .continuous)
+                .fill(TF.settingsAccentRed.opacity(0.10))
+        )
     }
 
     private var answerText: String? {
@@ -255,17 +265,53 @@ struct SelectionAskView: View {
         !state.selectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var divider: some View {
+        Rectangle()
+            .fill(TF.settingsBorder)
+            .frame(height: 1)
+    }
+
+    private func metadataLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .tracking(0.8)
+            .foregroundStyle(TF.settingsTextTertiary)
+    }
+
     private func copyButton(text: String, systemImage: String) -> some View {
         Button {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         } label: {
             Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(Color(red: 0.46, green: 0.46, blue: 0.46))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(TF.settingsTextSecondary)
                 .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: TF.cornerSM, style: .continuous)
+                        .fill(TF.settingsCardAlt)
+                )
         }
         .buttonStyle(.plain)
+        .settingsTooltip(L("复制", "Copy"))
+    }
+}
+
+private struct AskAnythingIcon: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: TF.cornerSM, style: .continuous)
+                .fill(TF.settingsCardAlt)
+            Image(systemName: "text.bubble.fill")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(TF.settingsText)
+            Image(systemName: "sparkle")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(TF.settingsAccentAmber)
+                .offset(x: 9, y: -8)
+        }
+        .frame(width: 32, height: 32)
+        .accessibilityHidden(true)
     }
 }
 

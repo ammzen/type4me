@@ -124,16 +124,20 @@ final class SelectionAskPanel: NSPanel {
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
-            styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
+            styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView, .resizable],
             backing: .buffered,
             defer: false
         )
 
+        minSize = NSSize(width: 560, height: 440)
+        maxSize = NSSize(width: 820, height: 760)
+        contentMinSize = minSize
+        contentMaxSize = maxSize
         isFloatingPanel = true
         level = .floating
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = false
+        hasShadow = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         hidesOnDeactivate = false
         animationBehavior = .utilityWindow
@@ -154,7 +158,7 @@ final class SelectionAskController {
 
     init(onFollowUp: @escaping (String) -> Bool = { _ in false }) {
         self.onFollowUp = onFollowUp
-        let size = NSSize(width: 860, height: 760)
+        let size = NSSize(width: 680, height: 560)
         panel = SelectionAskPanel(contentRect: NSRect(origin: .zero, size: size))
 
         let view = SelectionAskView(state: state) { [weak self] in
