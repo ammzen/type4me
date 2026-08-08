@@ -918,7 +918,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// and retries on the next runloop until a window is visible.
     func presentSettings(remainingAttempts: Int = 25) {
         let hasVisibleAppWindow = NSApp.windows.contains {
-            $0.isVisible && !$0.className.contains("NSStatusBar")
+            $0.isVisible
+                && !$0.className.contains("NSStatusBar")
+                && !($0 is NSPanel)
+                && $0.styleMask.contains(.titled)
         }
         if hasVisibleAppWindow {
             NSApp.activate(ignoringOtherApps: true)
@@ -939,7 +942,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #if DEBUG
     private func presentSettingsWhenReady(remainingAttempts: Int) {
         let hasVisibleAppWindow = NSApp.windows.contains {
-            $0.isVisible && !$0.className.contains("NSStatusBar")
+            $0.isVisible
+                && !$0.className.contains("NSStatusBar")
+                && !($0 is NSPanel)
+                && $0.styleMask.contains(.titled)
         }
         if hasVisibleAppWindow {
             NSApp.activate(ignoringOtherApps: true)
@@ -968,9 +974,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - URL Scheme Handling
 
     func application(_ application: NSApplication, open urls: [URL]) {
+        let acceptedSchemes = Self.registeredURLSchemes()
         for url in urls {
-            guard url.scheme == "type4me" else { continue }
+            guard let scheme = url.scheme?.lowercased(), acceptedSchemes.contains(scheme) else {
+                NSLog("[Type4Me] Ignored URL with unregistered scheme")
+                continue
+            }
             switch url.host {
+            case "vocabulary":
+                handleVocabularyURL(url, acceptedSchemes: acceptedSchemes)
             case "reload-vocabulary":
                 NSLog("[Type4Me] URL command: reload-vocabulary")
                 SnippetStorage.invalidateCache()
@@ -986,6 +998,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             default:
                 NSLog("[Type4Me] Unknown URL command: \(url)")
             }
+        }
+    }
+
+    private static func registeredURLSchemes(bundle: Bundle = .main) -> Set<String> {
+        guard let types = bundle.object(forInfoDictionaryKey: "CFBundleURLTypes") as? [[String: Any]] else {
+            return ["type4me"]
+        }
+        let schemes = types
+            .compactMap { $0["CFBundleURLSchemes"] as? [String] }
+            .flatMap { $0 }
+            .map { $0.lowercased() }
+        return schemes.isEmpty ? ["type4me"] : Set(schemes)
+    }
+
+    private func handleVocabularyURL(_ url: URL, acceptedSchemes: Set<String>) {
+        switch VocabularyURLCommandParser.parse(url, allowedSchemes: acceptedSchemes) {
+        case .failure(let error):
+            NSLog("[Type4Me] Vocabulary URL rejected: \(String(describing: error))")
+        case .success(let command):
+            guard command.silent else {
+                VocabularyNavigationCenter.shared.submit(command.navigationRequest)
+                presentSettings()
+                return
+            }
+
+            let result: VocabularyCommandResult
+            switch command.section {
+            case .hotwords:
+                guard let word = command.word else { return }
+                result = VocabularyCommandService.live.addHotword(word)
+            case .snippets:
+                guard let trigger = command.trigger, let replacement = command.replacement else { return }
+                result = VocabularyCommandService.live.addSnippet(
+                    trigger: trigger,
+                    replacement: replacement
+                )
+            }
+            NSLog("[Type4Me] Silent vocabulary URL result: \(String(describing: result))")
         }
     }
 

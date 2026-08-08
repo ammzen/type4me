@@ -550,6 +550,14 @@ struct ModesSettingsTab: View {
 
     private var macActionExamples: [(String, String)] {
         [
+            (L("打开热词", "Open hotwords"),
+             L("进入 ASR 热词管理", "Open ASR hotword management")),
+            (L("打开片段替换", "Open snippets"),
+             L("进入片段替换管理", "Open snippet management")),
+            (L("替换这个单词", "Replace this word"),
+             L("用选中文本预填片段触发词", "Prefill a snippet trigger from selected text")),
+            (L("添加热词", "Add hotword"),
+             L("将选中文本加入 ASR 热词", "Add selected text to ASR hotwords")),
             (L("打开 Safari", "Open Safari"),
              L("启动应用", "Launch an app")),
             (L("音量调到 30", "Set volume to 30"),

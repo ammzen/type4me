@@ -138,9 +138,10 @@ private struct AddAppButtonAnchorKey: PreferenceKey {
 
 struct VocabularyTab: View {
 
-    private enum VocabularySection: Hashable {
-        case hotwords
-        case snippets
+    private enum VocabularyInputFocus: Hashable {
+        case hotword
+        case snippetTrigger
+        case snippetReplacement
     }
 
     @State private var selectedSection: VocabularySection = .hotwords
@@ -148,6 +149,7 @@ struct VocabularyTab: View {
     @State private var isSearchExpanded = false
     @State private var searchQuery = ""
     @FocusState private var isSearchFocused: Bool
+    @FocusState private var focusedVocabularyInput: VocabularyInputFocus?
 
     // Hotwords (user file)
     @State private var hotwords: [String] = HotwordStorage.load()
@@ -225,6 +227,10 @@ struct VocabularyTab: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .onReceive(NotificationCenter.default.publisher(for: .navigateToVocabulary)) { note in
+                if let request = note.object as? VocabularyNavigationRequest {
+                    applyNavigationRequest(request)
+                    return
+                }
                 guard let replacement = note.object as? String else { return }
                 // Quick Correction always writes to the global snippet store.
                 // Reset view-only filters before resolving the scroll target so
@@ -254,6 +260,9 @@ struct VocabularyTab: View {
             snippets = SnippetStorage.load()
             registeredApps = SnippetStorage.loadRegistry()
             seedExampleIfNeeded()
+            if let request = VocabularyNavigationCenter.shared.pendingRequest {
+                applyNavigationRequest(request)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: SnippetStorage.didChangeNotification)) { _ in
             if let bundleId = selectedAppScope {
@@ -482,6 +491,7 @@ struct VocabularyTab: View {
     private var hotwordAddControl: some View {
         HStack(spacing: 10) {
             TextField(L("输入新的热词", "Enter a new hotword"), text: $newHotword)
+                .focused($focusedVocabularyInput, equals: .hotword)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .padding(.horizontal, 12)
@@ -587,6 +597,7 @@ struct VocabularyTab: View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 10) {
                 TextField(L("替换内容", "Replacement text"), text: $newValue)
+                    .focused($focusedVocabularyInput, equals: .snippetReplacement)
                     .textFieldStyle(.plain)
                     .font(.system(size: 12))
                     .padding(.horizontal, 12)
@@ -613,6 +624,7 @@ struct VocabularyTab: View {
                             ),
                             text: $newTrigger
                         )
+                        .focused($focusedVocabularyInput, equals: .snippetTrigger)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
                         .frame(minWidth: 130, idealWidth: 170)
@@ -1290,6 +1302,32 @@ struct VocabularyTab: View {
     }
 
     // MARK: - Actions
+
+    private func applyNavigationRequest(_ request: VocabularyNavigationRequest) {
+        searchQuery = ""
+        isSearchExpanded = false
+        switchScope(to: nil)
+        selectedSection = request.section
+
+        switch request.section {
+        case .hotwords:
+            if let word = request.word { newHotword = word }
+        case .snippets:
+            newSnippetTriggers = []
+            newTrigger = request.trigger ?? ""
+            newValue = request.replacement ?? ""
+        }
+
+        VocabularyNavigationCenter.shared.consume(request)
+        DispatchQueue.main.async {
+            switch request.focus {
+            case .hotword: focusedVocabularyInput = .hotword
+            case .snippetTrigger: focusedVocabularyInput = .snippetTrigger
+            case .snippetReplacement: focusedVocabularyInput = .snippetReplacement
+            case nil: focusedVocabularyInput = nil
+            }
+        }
+    }
 
     private func addHotword() {
         let word = newHotword.trimmingCharacters(in: .whitespaces)

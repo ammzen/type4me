@@ -756,6 +756,18 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     用户："向上滚动" / "scroll up"
     输出：<tool_call>{"name":"scroll_up","arguments":{}}</tool_call>
 
+    用户："打开词典" / "打开热词" / "open hotwords"
+    输出：<tool_call>{"name":"open_vocabulary","arguments":{"section":"hotwords"}}</tool_call>
+
+    用户："打开片段替换" / "open snippets"
+    输出：<tool_call>{"name":"open_vocabulary","arguments":{"section":"snippets"}}</tool_call>
+
+    用户："替换这个单词" / "replace this word"
+    输出：<tool_call>{"name":"prepare_snippet_from_selection","arguments":{}}</tool_call>
+
+    用户："添加热词" / "add selected text to hotwords"
+    输出：<tool_call>{"name":"add_selected_hotword","arguments":{}}</tool_call>
+
     用户："今天天气怎么样"
     输出：NO_MATCH
 

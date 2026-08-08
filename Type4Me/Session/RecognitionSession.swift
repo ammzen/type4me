@@ -675,7 +675,12 @@ actor RecognitionSession {
             return (L("未匹配到操作", "No matching action"), .unsure)
         }
         DebugFileLogger.log("macAction: dispatching \(toolCall.name) args=\(toolCall.arguments)")
-        guard let result = await ActionRegistry.dispatch(name: toolCall.name, args: toolCall.arguments) else {
+        let actionContext = MacActionContext(selectedText: promptContext.selectedText)
+        guard let result = await ActionRegistry.dispatch(
+            name: toolCall.name,
+            args: toolCall.arguments,
+            context: actionContext
+        ) else {
             DebugFileLogger.log("macAction: unknown action name \(toolCall.name)")
             return (L("未知操作：\(toolCall.name)", "Unknown action: \(toolCall.name)"), .failure)
         }

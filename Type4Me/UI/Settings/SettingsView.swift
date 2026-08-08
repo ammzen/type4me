@@ -124,6 +124,12 @@ struct SettingsView: View {
         .frame(minWidth: 900, minHeight: 600)
         .background(SettingsWindowConfigurator())
         .preferredColorScheme(.light)
+        .onAppear {
+            if VocabularyNavigationCenter.shared.hasPendingSettingsNavigation {
+                selectedTab = .vocabulary
+                VocabularyNavigationCenter.shared.consumeSettingsNavigation()
+            }
+        }
         #if HAS_CLOUD_SUBSCRIPTION
         .onAppear {
             if (selectedTab == .models && edition == .member) ||
@@ -156,8 +162,11 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .navigateToHistory)) { _ in
             selectedTab = .history
         }
-        .onReceive(NotificationCenter.default.publisher(for: .navigateToVocabulary)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .navigateToVocabulary)) { note in
             selectedTab = .vocabulary
+            if note.object is VocabularyNavigationRequest {
+                VocabularyNavigationCenter.shared.consumeSettingsNavigation()
+            }
         }
     }
 
