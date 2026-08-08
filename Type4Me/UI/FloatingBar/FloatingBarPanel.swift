@@ -23,6 +23,8 @@ final class FloatingBarPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
+        ignoresMouseEvents = false
+        acceptsMouseMovedEvents = true
         animationBehavior = .utilityWindow
         appearance = NSAppearance(named: .darkAqua)
     }

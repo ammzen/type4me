@@ -19,6 +19,7 @@ enum RecordingVisualStyle: String, CaseIterable {
     case classic
     case dual
     case timeline
+    case effectless
     case hidden
 
     var displayName: String {
@@ -26,11 +27,13 @@ enum RecordingVisualStyle: String, CaseIterable {
         case .classic: return L("线条", "Lines")
         case .dual: return L("粒子云", "Particles")
         case .timeline: return L("电平", "Levels")
-        case .hidden: return L("关闭", "Off")
+        case .effectless: return L("无特效", "No Effects")
+        case .hidden: return L("无", "None")
         }
     }
 
     var showsRecordingPanel: Bool { self != .hidden }
+    var showsBackgroundEffect: Bool { self != .effectless && self != .hidden }
 
     static func current(userDefaults: UserDefaults = .standard) -> Self {
         guard let raw = userDefaults.string(forKey: storageKey),
@@ -980,6 +983,8 @@ final class AppState {
 
     @ObservationIgnored var onShowPanel: (() -> Void)?
     @ObservationIgnored var onHidePanel: (() -> Void)?
+    @ObservationIgnored var onCompleteRecording: (() -> Void)?
+    @ObservationIgnored var onCancelRecording: (() -> Void)?
 
     // MARK: Update Check
 
@@ -1018,11 +1023,10 @@ final class AppState {
         processingLabelOverride = nil
         pinsTranscriptPopup = false
         barPhase = .preparing
-        if RecordingVisualStyle.current().showsRecordingPanel {
-            onShowPanel?()
-        } else {
-            onHidePanel?()
-        }
+        // Keep the transparent panel alive for every style so a live settings
+        // change from `.hidden` can reveal the indicator immediately. The view
+        // itself is responsible for rendering nothing for `.hidden`.
+        onShowPanel?()
     }
 
     func markRecordingReady() {
@@ -1152,6 +1156,14 @@ final class AppState {
         pinsTranscriptPopup = false
         barPhase = .done
         scheduleAutoHide(for: .done, delay: .seconds(0.8))
+    }
+
+    func completeRecordingFromIndicator() {
+        onCompleteRecording?()
+    }
+
+    func cancelRecordingFromIndicator() {
+        onCancelRecording?()
     }
 
     /// Display a Mac Action result in the floating bar with status-specific

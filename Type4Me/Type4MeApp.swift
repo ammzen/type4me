@@ -88,6 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DebugFileLogger.startSession()
         DebugFileLogger.log("applicationDidFinishLaunching")
         floatingBarController = FloatingBarController(state: appState)
+        appState.onCompleteRecording = { [weak self] in
+            self?.completeRecordingFromIndicator()
+        }
+        appState.onCancelRecording = { [weak self] in
+            self?.cancelRecordingFromIndicator()
+        }
 
         // Bridge ASR events → AppState for floating bar display
         let session = self.session
@@ -587,6 +593,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyManager.resetActiveState()
         Task { await self.session.cancelRecording() }
         return true
+    }
+
+    private func completeRecordingFromIndicator() {
+        let phase = appState.barPhase
+        guard phase == .preparing || phase == .recording else { return }
+
+        DebugFileLogger.log("floating indicator: complete recording phase=\(phase)")
+        hotkeyManager.resetActiveState()
+        appState.stopRecording()
+        if phase == .preparing {
+            Task { await session.cancelRecording() }
+        } else {
+            Task { await session.stopRecording() }
+        }
+    }
+
+    private func cancelRecordingFromIndicator() {
+        let phase = appState.barPhase
+        guard phase == .preparing || phase == .recording else { return }
+
+        DebugFileLogger.log("floating indicator: cancel recording phase=\(phase)")
+        hotkeyManager.resetActiveState()
+        appState.stopRecording()
+        if phase == .preparing {
+            Task { await session.cancelRecording() }
+        } else {
+            Task {
+                await session.abortInjection()
+                await session.stopRecording()
+            }
+        }
     }
 
     private func syncESCAbortSetting() {

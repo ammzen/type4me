@@ -92,7 +92,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.pinsTranscriptPopup)
     }
 
-    func testHiddenRecordingVisualDoesNotShowPanelUntilProcessing() {
+    func testHiddenRecordingVisualKeepsHostPanelAliveForLivePreferenceChanges() {
         let previousStyle = UserDefaults.standard.string(forKey: RecordingVisualStyle.storageKey)
         UserDefaults.standard.set(RecordingVisualStyle.hidden.rawValue, forKey: RecordingVisualStyle.storageKey)
         defer {
@@ -113,13 +113,77 @@ final class AppStateTests: XCTestCase {
         appState.markRecordingReady()
 
         XCTAssertEqual(appState.barPhase, .recording)
-        XCTAssertEqual(showCount, 0)
-        XCTAssertEqual(hideCount, 1)
+        XCTAssertEqual(showCount, 1)
+        XCTAssertEqual(hideCount, 0)
 
         appState.stopRecording()
 
         XCTAssertEqual(appState.barPhase, .processing)
-        XCTAssertEqual(showCount, 1)
+        XCTAssertEqual(showCount, 2)
+        XCTAssertEqual(hideCount, 0)
+    }
+
+    func testRecordingVisualStylesIncludeEffectlessAndHiddenAsDistinctChoices() {
+        XCTAssertEqual(RecordingVisualStyle.allCases.count, 5)
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.effectless))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.hidden))
+        XCTAssertTrue(RecordingVisualStyle.effectless.showsRecordingPanel)
+        XCTAssertFalse(RecordingVisualStyle.effectless.showsBackgroundEffect)
+        XCTAssertFalse(RecordingVisualStyle.hidden.showsRecordingPanel)
+        XCTAssertFalse(RecordingVisualStyle.hidden.showsBackgroundEffect)
+    }
+
+    func testFloatingIndicatorDesignDimensionsMatchSpecification() {
+        XCTAssertEqual(TF.barHeight, 55)
+        XCTAssertEqual(TF.barWidthCompact, 180)
+        XCTAssertEqual(TF.barWidth, 400)
+        XCTAssertEqual(TF.recordingControlSize, 45)
+        XCTAssertEqual(TF.transcriptPopupWidth, 350)
+        XCTAssertEqual(TF.transcriptPopupMaxHeight, 120)
+        XCTAssertEqual(TF.transcriptPopupCorner, 10)
+        XCTAssertEqual(TF.transcriptPopupGap, 10)
+    }
+
+    func testFloatingIndicatorHoverTrackingDoesNotInterceptControls() {
+        let panel = FloatingBarPanel(contentRect: NSRect(x: 0, y: 0, width: 432, height: 217))
+        let tracker = HoverTrackingNSView(frame: NSRect(x: 0, y: 0, width: 45, height: 45))
+        let buttonTarget = FloatingBarButtonNSView(frame: NSRect(x: 0, y: 0, width: 45, height: 45))
+        var clickCount = 0
+        buttonTarget.onClick = { clickCount += 1 }
+
+        XCTAssertFalse(panel.ignoresMouseEvents)
+        XCTAssertTrue(panel.acceptsMouseMovedEvents)
+        XCTAssertNil(tracker.hitTest(NSPoint(x: 22, y: 22)))
+        XCTAssertTrue(buttonTarget.acceptsFirstMouse(for: nil))
+        XCTAssertTrue(buttonTarget.hitTest(NSPoint(x: 22, y: 22)) === buttonTarget)
+
+        let event = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: NSPoint(x: 22, y: 22),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 1,
+            clickCount: 1,
+            pressure: 1
+        )
+        buttonTarget.mouseDown(with: try! XCTUnwrap(event))
+        XCTAssertEqual(clickCount, 1)
+    }
+
+    func testFloatingIndicatorActionCallbacksAreForwarded() {
+        let appState = AppState()
+        var completed = false
+        var cancelled = false
+        appState.onCompleteRecording = { completed = true }
+        appState.onCancelRecording = { cancelled = true }
+
+        appState.completeRecordingFromIndicator()
+        appState.cancelRecordingFromIndicator()
+
+        XCTAssertTrue(completed)
+        XCTAssertTrue(cancelled)
     }
 
     func testDisabledLiveTranscriptOnlyHidesTextWhileRecording() {

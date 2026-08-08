@@ -457,7 +457,7 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
                     ("off", L("关闭", "Off")),
                 ]
             )
-            Text(L("关闭后录音时只展示动效", "Show only animation while recording"))
+            Text(L("关闭后录音时显示倾听状态", "Show listening status while recording"))
                 .font(.system(size: 10))
                 .foregroundStyle(TF.settingsTextTertiary)
         }

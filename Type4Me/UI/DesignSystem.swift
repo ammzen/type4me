@@ -46,6 +46,12 @@ enum TF {
         dark:  (0.42, 0.70, 0.42)
     )
 
+    /// Recording indicator palette from the floating-bar design specification.
+    static let floatingBackground = Color(red: 27 / 255, green: 27 / 255, blue: 27 / 255)
+    static let floatingControl = Color(red: 51 / 255, green: 51 / 255, blue: 51 / 255)
+    static let floatingControlLight = Color(red: 251 / 255, green: 251 / 255, blue: 251 / 255)
+    static let floatingText = Color.white
+
     // MARK: Settings Palette
 
     // The settings window deliberately uses a quiet, neutral palette.  It keeps
@@ -89,15 +95,23 @@ enum TF {
     // MARK: Floating Bar
 
     static let barWidth: CGFloat = 400
-    static let barWidthCompact: CGFloat = 200
-    static let barHeight: CGFloat = 52
+    static let barWidthCompact: CGFloat = 180
+    static let barHeight: CGFloat = 55
     static let barBottomOffset: CGFloat = 48
+    static let recordingControlSize: CGFloat = 45
+    static let recordingEdgeInset: CGFloat = 5
+    static let recordingControlGap: CGFloat = 8
+    static let recordingChromeWidth: CGFloat = recordingControlSize * 2
+        + recordingEdgeInset * 2
+        + recordingControlGap * 2
+        + 16
 
     // MARK: Transcript Popup (hover preview above bar)
 
-    static let transcriptPopupMaxHeight: CGFloat = 400
-    static let transcriptPopupCorner: CGFloat = 14
-    static let transcriptPopupGap: CGFloat = 8
+    static let transcriptPopupWidth: CGFloat = 350
+    static let transcriptPopupMaxHeight: CGFloat = 120
+    static let transcriptPopupCorner: CGFloat = 10
+    static let transcriptPopupGap: CGFloat = 10
 
     // MARK: Animation
 
