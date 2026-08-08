@@ -345,6 +345,10 @@ actor RecognitionSession {
             await forceReset()
         }
 
+        await MainActor.run {
+            CorrectionLearningCoordinator.shared.cancelObservation()
+        }
+
         stoppedByMaxDuration = false
         targetBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let provider = KeychainService.selectedASRProvider
@@ -1278,28 +1282,50 @@ actor RecognitionSession {
             let engine = injectionEngine
             let aborted = injectionAborted
             let onEvent = self.onASREvent
+            let recordId = UUID().uuidString
+            let modeID = currentMode.id
+            let correctionLearningEnabled = defaults.bool(
+                forKey: CorrectionLearningCoordinator.enabledDefaultsKey
+            )
+            let shouldTrackCorrection = !aborted
+                && correctionLearningEnabled
+                && (modeID == ProcessingMode.directId || modeID == ProcessingMode.formalWritingId)
             let injectLog = "stop: injecting method=clipboard len=\(finalText.count) +\(ContinuousClock.now - stopT0)"
-            _ = await withCheckedContinuation { continuation in
+            let injectionResult: TrackedInjectionResult = await withCheckedContinuation { continuation in
                 Task.detached {
-                    let outcome: InjectionOutcome
+                    let result: TrackedInjectionResult
                     if aborted {
                         engine.copyToClipboard(finalText)
                         DebugFileLogger.log("stop: injection aborted by ESC, text saved to clipboard & history")
-                        outcome = .copiedToClipboard
+                        result = TrackedInjectionResult(
+                            outcome: .copiedToClipboard,
+                            observationContext: nil
+                        )
                     } else {
                         DebugFileLogger.log(injectLog)
-                        outcome = engine.inject(finalText)
+                        if shouldTrackCorrection {
+                            result = engine.injectTracked(
+                                finalText,
+                                sourceRecordID: recordId,
+                                modeID: modeID
+                            )
+                        } else {
+                            result = TrackedInjectionResult(
+                                outcome: engine.inject(finalText),
+                                observationContext: nil
+                            )
+                        }
                     }
                     // Notify UI immediately from this thread, before actor resumes
-                    onEvent?(.finalized(text: finalText, injection: outcome))
+                    onEvent?(.finalized(text: finalText, injection: result.outcome))
                     DebugFileLogger.log("stop: finalized emitted from injection task")
                     // Only restore clipboard when text was successfully inserted.
                     // When outcome is .copiedToClipboard (injection failed or ESC abort),
                     // keep the text in clipboard so user can manually paste.
-                    if outcome == .inserted {
+                    if result.outcome == .inserted {
                         engine.finishClipboardRestore()
                     }
-                    continuation.resume(returning: outcome)
+                    continuation.resume(returning: result)
                 }
             }
 
@@ -1310,7 +1336,6 @@ actor RecognitionSession {
             #endif
 
             // Save to history
-            let recordId = UUID().uuidString
             let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
             let status: String
             if injectionAborted { status = "aborted" }
@@ -1330,6 +1355,11 @@ actor RecognitionSession {
                 asrProvider: activeProvider.displayName,
                 asrModel: currentASRModelLabel(for: activeProvider)
             ))
+            if let context = injectionResult.observationContext {
+                await MainActor.run {
+                    CorrectionLearningCoordinator.shared.begin(context)
+                }
+            }
             KeychainService.addASRUsage(seconds: duration)
 
             // Note: injectionAborted and llmFailed info is already conveyed

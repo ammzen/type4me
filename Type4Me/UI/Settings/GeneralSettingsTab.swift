@@ -27,6 +27,7 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
     @AppStorage("tf_micKeepAlive") private var micKeepAlive = false
     @AppStorage(CrossModeFinishPreference.storageKey) private var allowCrossModeFinish = CrossModeFinishPreference.defaultValue
+    @AppStorage(CorrectionLearningCoordinator.enabledDefaultsKey) private var autoCorrectionLearningEnabled = false
     @AppStorage(AudioInputDevicePreferenceStore.modeKey) private var microphonePreferenceMode = AudioInputDevicePreferenceMode.systemDefault.rawValue
     @AppStorage(AudioInputDevicePreferenceStore.priorityEntriesKey) private var microphonePriorityEntriesStorage = ""
     @AppStorage("tf_selectedSpeakerUID") private var selectedSpeakerUID = ""
@@ -171,6 +172,15 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
                         ]
                     )
                 }
+                SettingsDivider()
+                settingsToggleRow(
+                    L("自动发现纠错（Beta）", "Automatic Correction Learning (Beta)"),
+                    subtitle: L(
+                        "仅在快速模式和语音润色中本地观察最近输出。中文分词和输入法组合文本可能导致候选范围不准确，请确认后再添加。",
+                        "Locally observes recent Quick Mode and Voice Polish output. Chinese segmentation and IME composition may produce an inaccurate candidate range; review before adding."
+                    ),
+                    isOn: $autoCorrectionLearningEnabled
+                )
             }
 
         }
@@ -185,6 +195,11 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
         }
         .onChange(of: micKeepAlive) { _, _ in
             AudioKeepAliveManager.syncMicState()
+        }
+        .onChange(of: autoCorrectionLearningEnabled) { _, enabled in
+            if !enabled {
+                CorrectionLearningCoordinator.shared.cancelObservation()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .audioInputDevicesDidChange)) { _ in
             refreshMicrophones()

@@ -5,9 +5,13 @@ import Carbon.HIToolbox
 final class TextInjectionEngine: @unchecked Sendable {
 
     private struct FocusedElementSnapshot {
+        let element: AXUIElement?
+        let processIdentifier: pid_t?
         let bundleIdentifier: String?
         let role: String?
+        let subrole: String?
         let value: String?
+        let selectedRange: NSRange?
         let isEditable: Bool
         /// true when AX successfully found a focused UI element; false when
         /// no element was found (e.g. desktop, no focused window).
@@ -83,7 +87,19 @@ final class TextInjectionEngine: @unchecked Sendable {
     /// Call ``finishClipboardRestore()`` afterward to restore the original clipboard.
     func inject(_ text: String) -> InjectionOutcome {
         guard !text.isEmpty else { return .inserted }
-        return injectViaClipboard(text)
+        return injectViaClipboard(text, trackingMetadata: nil).outcome
+    }
+
+    /// Inject text while capturing enough Accessibility context to observe a
+    /// later correction in the exact field Type4Me wrote into.
+    func injectTracked(_ text: String, sourceRecordID: String, modeID: UUID) -> TrackedInjectionResult {
+        guard !text.isEmpty else {
+            return TrackedInjectionResult(outcome: .inserted, observationContext: nil)
+        }
+        return injectViaClipboard(
+            text,
+            trackingMetadata: (sourceRecordID: sourceRecordID, modeID: modeID)
+        )
     }
 
     /// Restore the clipboard that was saved before injection.
@@ -117,7 +133,10 @@ final class TextInjectionEngine: @unchecked Sendable {
 
     private var pendingClipboardRestore: PendingClipboardRestore?
 
-    private func injectViaClipboard(_ text: String) -> InjectionOutcome {
+    private func injectViaClipboard(
+        _ text: String,
+        trackingMetadata: (sourceRecordID: String, modeID: UUID)?
+    ) -> TrackedInjectionResult {
         let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture() : nil
 
         // Snapshot focused element BEFORE paste for outcome detection
@@ -148,7 +167,17 @@ final class TextInjectionEngine: @unchecked Sendable {
             pendingClipboardRestore = nil
         }
 
-        return outcome
+        let context = trackingMetadata.flatMap { metadata in
+            makeObservationContext(
+                before: before,
+                after: after,
+                pastedText: text,
+                sourceRecordID: metadata.sourceRecordID,
+                modeID: metadata.modeID,
+                outcome: outcome
+            )
+        }
+        return TrackedInjectionResult(outcome: outcome, observationContext: context)
     }
 
     private func simulatePaste() {
@@ -190,9 +219,13 @@ final class TextInjectionEngine: @unchecked Sendable {
 
         guard AXIsProcessTrusted() else {
             return FocusedElementSnapshot(
+                element: nil,
+                processIdentifier: frontmostApp?.processIdentifier,
                 bundleIdentifier: frontmostBundleID,
                 role: nil,
+                subrole: nil,
                 value: nil,
+                selectedRange: nil,
                 isEditable: false,
                 hasFocusedElement: false
             )
@@ -225,9 +258,13 @@ final class TextInjectionEngine: @unchecked Sendable {
                 return snapshotFromElement(found, bundleIdentifier: frontmostBundleID)
             }
             return FocusedElementSnapshot(
+                element: nil,
+                processIdentifier: frontmostApp.processIdentifier,
                 bundleIdentifier: frontmostBundleID,
                 role: nil,
+                subrole: nil,
                 value: nil,
+                selectedRange: nil,
                 isEditable: false,
                 hasFocusedElement: false
             )
@@ -240,7 +277,11 @@ final class TextInjectionEngine: @unchecked Sendable {
     private func snapshotFromElement(_ element: AXUIElement, bundleIdentifier: String?) -> FocusedElementSnapshot {
         AXUIElementSetMessagingTimeout(element, 0.5)
         let role = copyStringAttribute(kAXRoleAttribute as CFString, from: element)
+        let subrole = copyStringAttribute(kAXSubroleAttribute as CFString, from: element)
         let value = copyStringAttribute(kAXValueAttribute as CFString, from: element)
+        let selectedRange = copyRangeAttribute(kAXSelectedTextRangeAttribute as CFString, from: element)
+        var processIdentifier: pid_t = 0
+        let pidStatus = AXUIElementGetPid(element, &processIdentifier)
         let isEditable =
             isAttributeSettable(kAXSelectedTextRangeAttribute as CFString, on: element)
             || isAttributeSettable(kAXValueAttribute as CFString, on: element)
@@ -252,9 +293,13 @@ final class TextInjectionEngine: @unchecked Sendable {
         ].contains(role)
 
         return FocusedElementSnapshot(
+            element: element,
+            processIdentifier: pidStatus == .success ? processIdentifier : nil,
             bundleIdentifier: bundleIdentifier,
             role: role,
+            subrole: subrole,
             value: value,
+            selectedRange: selectedRange,
             isEditable: isEditable,
             hasFocusedElement: true
         )
@@ -323,13 +368,121 @@ final class TextInjectionEngine: @unchecked Sendable {
         return value as? String
     }
 
+    private func copyRangeAttribute(_ attribute: CFString, from element: AXUIElement) -> NSRange? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXValueGetTypeID()
+        else { return nil }
+        let axValue = unsafeDowncast(value, to: AXValue.self)
+        guard AXValueGetType(axValue) == .cfRange else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(axValue, .cfRange, &range), range.location >= 0, range.length >= 0 else {
+            return nil
+        }
+        return NSRange(location: range.location, length: range.length)
+    }
+
+    private func makeObservationContext(
+        before: FocusedElementSnapshot?,
+        after: FocusedElementSnapshot?,
+        pastedText: String,
+        sourceRecordID: String,
+        modeID: UUID,
+        outcome: InjectionOutcome
+    ) -> CorrectionObservationContext? {
+        guard outcome == .inserted,
+              let before,
+              let after,
+              before.hasFocusedElement,
+              after.hasFocusedElement,
+              before.isEditable,
+              after.isEditable,
+              let beforeElement = before.element,
+              let afterElement = after.element,
+              CFEqual(beforeElement, afterElement),
+              let processIdentifier = after.processIdentifier,
+              let bundleIdentifier = after.bundleIdentifier,
+              let beforeValue = before.value,
+              let afterValue = after.value,
+              !isSecureTextRole(role: after.role, subrole: after.subrole),
+              let insertedRange = inferInsertedRange(
+                  beforeValue: beforeValue,
+                  afterValue: afterValue,
+                  selectedRange: before.selectedRange,
+                  pastedText: pastedText
+              )
+        else { return nil }
+
+        return CorrectionObservationContext(
+            element: afterElement,
+            processIdentifier: processIdentifier,
+            bundleIdentifier: bundleIdentifier,
+            baselineValue: afterValue,
+            injectedRange: insertedRange,
+            beforeSelectedRange: before.selectedRange,
+            afterSelectedRange: after.selectedRange,
+            injectedText: pastedText,
+            sourceRecordID: sourceRecordID,
+            modeID: modeID
+        )
+    }
+
+    private func isSecureTextRole(role: String?, subrole: String?) -> Bool {
+        [role, subrole]
+            .compactMap { $0?.lowercased() }
+            .contains { $0.contains("secure") || $0.contains("password") }
+    }
+
+    private func inferInsertedRange(
+        beforeValue: String,
+        afterValue: String,
+        selectedRange: NSRange?,
+        pastedText: String
+    ) -> NSRange? {
+        let beforeNSString = beforeValue as NSString
+        let afterNSString = afterValue as NSString
+        let pastedLength = (pastedText as NSString).length
+
+        if let selectedRange,
+           NSMaxRange(selectedRange) <= beforeNSString.length {
+            let expected = beforeNSString.replacingCharacters(in: selectedRange, with: pastedText)
+            if expected == afterValue {
+                return NSRange(location: selectedRange.location, length: pastedLength)
+            }
+        }
+
+        var prefixLength = 0
+        let sharedLength = min(beforeNSString.length, afterNSString.length)
+        while prefixLength < sharedLength,
+              beforeNSString.character(at: prefixLength) == afterNSString.character(at: prefixLength) {
+            prefixLength += 1
+        }
+
+        var suffixLength = 0
+        while suffixLength < beforeNSString.length - prefixLength,
+              suffixLength < afterNSString.length - prefixLength,
+              beforeNSString.character(at: beforeNSString.length - suffixLength - 1)
+                == afterNSString.character(at: afterNSString.length - suffixLength - 1) {
+            suffixLength += 1
+        }
+
+        let changedAfterLength = afterNSString.length - prefixLength - suffixLength
+        guard changedAfterLength == pastedLength else { return nil }
+        let changedAfter = afterNSString.substring(
+            with: NSRange(location: prefixLength, length: changedAfterLength)
+        )
+        guard changedAfter == pastedText else { return nil }
+        return NSRange(location: prefixLength, length: pastedLength)
+    }
+
     private func inferInjectionOutcome(
         before: FocusedElementSnapshot?,
         after: FocusedElementSnapshot?,
         pastedText: String
     ) -> InjectionOutcome {
-        DebugFileLogger.log("injection detect: before=\(before.map { "bundle=\($0.bundleIdentifier ?? "nil") role=\($0.role ?? "nil") editable=\($0.isEditable) hasFocus=\($0.hasFocusedElement) value=\($0.value.map { String($0.prefix(30)) } ?? "nil")" } ?? "nil")")
-        DebugFileLogger.log("injection detect: after=\(after.map { "bundle=\($0.bundleIdentifier ?? "nil") role=\($0.role ?? "nil") editable=\($0.isEditable) hasFocus=\($0.hasFocusedElement) value=\($0.value.map { String($0.prefix(30)) } ?? "nil")" } ?? "nil")")
+        DebugFileLogger.log("injection detect: before=\(before.map { "bundle=\($0.bundleIdentifier ?? "nil") role=\($0.role ?? "nil") editable=\($0.isEditable) hasFocus=\($0.hasFocusedElement) valueLength=\($0.value?.count ?? -1)" } ?? "nil")")
+        DebugFileLogger.log("injection detect: after=\(after.map { "bundle=\($0.bundleIdentifier ?? "nil") role=\($0.role ?? "nil") editable=\($0.isEditable) hasFocus=\($0.hasFocusedElement) valueLength=\($0.value?.count ?? -1)" } ?? "nil")")
 
         guard let before, let after else {
             return .inserted
