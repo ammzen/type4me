@@ -121,7 +121,7 @@ struct SelectionAskView: View {
         SelectionAskState.Turn(
             question: state.question,
             answer: answerText ?? "",
-            isLoading: answerText == nil,
+            isLoading: state.isAnswerLoading,
             errorMessage: errorText
         )
     }

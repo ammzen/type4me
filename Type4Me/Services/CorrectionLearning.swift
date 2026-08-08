@@ -431,8 +431,13 @@ final class CorrectionLearningCoordinator {
     private var active: ActiveObservation?
     private var timeoutTask: Task<Void, Never>?
     private var debounceTask: Task<Void, Never>?
-    private lazy var panelController = CorrectionLearningPanelController()
+    /// Keep the panel truly lazy. `cancelObservation()` runs at the start of
+    /// every recording, including when correction learning is disabled; using
+    /// a Swift `lazy` property there would still instantiate its NSHostingView.
+    private var panelController: CorrectionLearningPanelController?
     private let learningStore = CorrectionLearningStore()
+
+    var isPanelControllerLoaded: Bool { panelController != nil }
 
     static var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: enabledDefaultsKey)
@@ -516,7 +521,7 @@ final class CorrectionLearningCoordinator {
             )
         }
         active = nil
-        panelController.hide()
+        panelController?.hide()
     }
 
     fileprivate func accessibilityValueDidChange(element: AXUIElement) {
@@ -559,6 +564,8 @@ final class CorrectionLearningCoordinator {
                 bundleIdentifier: active.context.bundleIdentifier
             )
             stopObservingWithoutHidingPanel()
+            let panelController = panelController ?? CorrectionLearningPanelController()
+            self.panelController = panelController
             panelController.show(
                 candidate: candidate,
                 onLearn: { [weak self] in self?.learn(candidate) },
@@ -572,10 +579,10 @@ final class CorrectionLearningCoordinator {
     private func learn(_ candidate: CorrectionCandidate) {
         do {
             try learningStore.learn(candidate)
-            panelController.showLearned()
+            panelController?.showLearned()
         } catch {
             DebugFileLogger.log("correction learning save failed: bundle=\(candidate.bundleIdentifier) error=\(error.localizedDescription)")
-            panelController.showSaveFailure()
+            panelController?.showSaveFailure()
         }
     }
 

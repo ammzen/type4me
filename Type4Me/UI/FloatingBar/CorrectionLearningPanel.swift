@@ -12,6 +12,7 @@ private final class CorrectionLearningPanelState: ObservableObject {
     @Published var candidate: CorrectionCandidate?
     @Published var status: Status = .candidate
     @Published var remainingSeconds = 12
+    @Published var isPresented = false
     var onLearn: (() -> Void)?
     var onIgnore: (() -> Void)?
 }
@@ -79,6 +80,7 @@ final class CorrectionLearningPanelController {
         state.candidate = candidate
         state.status = .candidate
         state.remainingSeconds = 12
+        state.isPresented = true
         state.onLearn = onLearn
         state.onIgnore = onIgnore
         panel.positionAboveFloatingBar()
@@ -117,6 +119,7 @@ final class CorrectionLearningPanelController {
         lifecycleTask = nil
         state.onLearn = nil
         state.onIgnore = nil
+        state.isPresented = false
         guard panel.isVisible else { return }
         let expectedGeneration = generation
         NSAnimationContext.runAnimationGroup({ context in
@@ -234,12 +237,16 @@ private struct CorrectionLearningCardView: View {
             Image(systemName: "sparkles")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(primaryText)
-                .symbolEffect(.breathe, options: .repeating)
+                .symbolEffect(.breathe, options: .repeating, isActive: state.isPresented)
         } else {
             Image(systemName: state.status == .candidate ? "sparkles" : statusIcon)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(primaryText)
-                .symbolEffect(.pulse, options: .repeating, isActive: state.status == .candidate)
+                .symbolEffect(
+                    .pulse,
+                    options: .repeating,
+                    isActive: state.isPresented && state.status == .candidate
+                )
         }
     }
 

@@ -3,6 +3,21 @@ import XCTest
 
 @MainActor
 final class SelectionAskControllerTests: XCTestCase {
+    func testIdleStateDoesNotRunAnswerLoadingAnimation() {
+        let state = SelectionAskState()
+
+        XCTAssertFalse(state.isAnswerLoading)
+
+        state.phase = .loading
+        XCTAssertTrue(state.isAnswerLoading)
+
+        state.phase = .answered("Answer")
+        XCTAssertFalse(state.isAnswerLoading)
+
+        state.phase = .error("Failed")
+        XCTAssertFalse(state.isAnswerLoading)
+    }
+
     func testEscapeClosesVisiblePanelWhenFollowUpIsIdle() {
         let controller = SelectionAskController()
         controller.begin(question: "What does this mean?", selectedText: "Context")

@@ -176,6 +176,17 @@ final class CorrectionLearningStoreTests: XCTestCase {
 
 final class CorrectionLearningEligibilityTests: XCTestCase {
     @MainActor
+    func testCancellingWithoutAnObservationDoesNotCreateAnimatedPanel() {
+        let coordinator = CorrectionLearningCoordinator()
+
+        XCTAssertFalse(coordinator.isPanelControllerLoaded)
+
+        coordinator.cancelObservation()
+
+        XCTAssertFalse(coordinator.isPanelControllerLoaded)
+    }
+
+    @MainActor
     func testOnlyQuickModeAndVoicePolishAreSupported() {
         XCTAssertTrue(CorrectionLearningCoordinator.supports(modeID: ProcessingMode.directId))
         XCTAssertTrue(CorrectionLearningCoordinator.supports(modeID: ProcessingMode.formalWritingId))

@@ -26,6 +26,14 @@ final class SelectionAskState {
     var isRecordingFollowUp = false
     var followUpShortcutHint = ""
 
+    /// Whether the answer UI should run its indeterminate loading animation.
+    /// Treating `.idle` as loading keeps a hidden, eagerly-created panel
+    /// repainting continuously even when Type4Me is otherwise inactive.
+    var isAnswerLoading: Bool {
+        if case .loading = phase { return true }
+        return false
+    }
+
     var activeAnswer: String {
         switch phase {
         case .answered(let answer):
