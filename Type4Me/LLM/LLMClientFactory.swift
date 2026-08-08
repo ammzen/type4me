@@ -9,7 +9,9 @@ enum LLMClientFactory {
         case .claude:
             return ClaudeChatClient(bypassProxy: bypassProxy)
         case .codexCLI:
-            return CodexCLIClient()
+            // Codex App Server is intentionally long-lived so subsequent
+            // transformations can reuse its warm model context.
+            return CodexCLIClient.shared
         default:
             return DoubaoChatClient(provider: provider, bypassProxy: bypassProxy)
         }
