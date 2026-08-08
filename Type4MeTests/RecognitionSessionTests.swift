@@ -29,7 +29,26 @@ final class RecognitionSessionTests: XCTestCase {
         await session.setState(.recording)
         canStart = await session.canStartRecording
         XCTAssertFalse(canStart)
+
+        await session.setState(.recovering)
+        canStart = await session.canStartRecording
+        XCTAssertFalse(canStart)
         await session.setState(.idle)
+    }
+
+    func testRecoveryHotkeyRequiresSecondPressToInterrupt() async {
+        let session = RecognitionSession()
+        await session.setState(.recovering)
+
+        let first = await session.handleRecoveryHotkeyPress()
+        XCTAssertEqual(first, .prompted)
+        let stateAfterFirstPress = await session.state
+        XCTAssertEqual(stateAfterFirstPress, .recovering)
+
+        let second = await session.handleRecoveryHotkeyPress()
+        XCTAssertEqual(second, .interrupted)
+        let stateAfterSecondPress = await session.state
+        XCTAssertEqual(stateAfterSecondPress, .idle)
     }
 
     func testSwitchModeAppliesToDirect() async {

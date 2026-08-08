@@ -300,51 +300,52 @@ extension SettingsCardHelpers {
         isEnabled: Bool = true,
         action: @escaping () -> Void
     ) -> some View {
-        VStack(alignment: .trailing, spacing: 6) {
-            Button(action: action) {
-                HStack(spacing: 6) {
-                    switch status {
-                    case .idle:
-                        Text(title)
-                    case .testing:
-                        ProgressView()
-                            .scaleEffect(0.5)
-                            .frame(width: 12, height: 12)
-                        Text(title)
-                    case .saved:
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 12))
-                        Text(L("已保存", "Saved"))
-                    case .success:
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 12))
-                        Text(L("连接成功", "Connected"))
-                    case .failed:
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 12))
-                        Text(L("重试", "Retry"))
-                    }
+        Button(action: action) {
+            HStack(spacing: 6) {
+                switch status {
+                case .idle:
+                    Text(title)
+                case .testing:
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 12, height: 12)
+                    Text(title)
+                case .saved:
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                    Text(L("已保存", "Saved"))
+                case .success:
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                    Text(L("连接成功", "Connected"))
+                case .failed:
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                    Text(L("重试", "Retry"))
                 }
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(status.buttonForeground)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 8).fill(status.buttonBackground))
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .disabled(status == .testing || !isEnabled)
-            .opacity(status == .testing || isEnabled ? 1 : 0.55)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(status.buttonForeground)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 8).fill(status.buttonBackground))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(status == .testing || !isEnabled)
+        .opacity(status == .testing || isEnabled ? 1 : 0.55)
+    }
 
-            if case .failed(let msg) = status {
-                Text(msg)
-                    .font(.system(size: 10))
-                    .foregroundStyle(TF.settingsAccentRed)
-                    .multilineTextAlignment(.trailing)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 260, alignment: .trailing)
-            }
+    @ViewBuilder
+    func testStatusMessage(status: SettingsTestStatus) -> some View {
+        if case .failed(let msg) = status {
+            Text(msg)
+                .font(.system(size: 10))
+                .foregroundStyle(TF.settingsAccentRed)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.top, 6)
         }
     }
 

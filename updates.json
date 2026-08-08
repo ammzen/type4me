@@ -1,6 +1,17 @@
 {
-  "latest": "1.9.9",
+  "latest": "2.0.0",
   "releases": [
+    {
+      "version": "2.0.0",
+      "date": "2026-08-07",
+      "notes": "- 新增 Selection Ask：可围绕选中文本连续追问，并以流式 Markdown 展示回答\n- 文本处理支持使用本机已登录的 Codex CLI，无需单独配置 API Key\n- 新增 Grok 流式语音识别与 StepFun 批量转写\n- Local 版新增 Qwen3-only 本地识别模式\n- 火山语音识别支持新版 API Key，同时兼容旧版 App ID + Access Token\n- 历史用量详情、应用内 GitHub 反馈与 ElevenLabs 英文标点处理得到改进",
+      "cloud_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v2.0.0/Type4Me-v2.0.0-cloud.dmg",
+      "cloud_dmg_size": 6668597,
+      "cloud_dmg_sha256": "190d9713ef5cfb50ebcc8c6965602b3c71d88b859096e2250501b4f927f6ab42",
+      "local_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v2.0.0/Type4Me-v2.0.0-local-apple-silicon.dmg",
+      "local_dmg_size": 714446501,
+      "local_dmg_sha256": "258228e71865c8f40898bf899daec0caf041820e8fb747419fc99a32cc983623"
+    },
     {
       "version": "1.9.9",
       "date": "2026-07-03",

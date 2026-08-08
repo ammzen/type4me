@@ -75,15 +75,14 @@ final class KeychainServiceTests: XCTestCase {
         }
 
         try KeychainService.saveASRCredentials(for: .volcano, values: [
-            "appKey": "myAppKey",
-            "accessKey": "myAccessKey",
+            "apiKey": "myApiKey",
             "resourceId": "myResource",
         ])
 
         let config = KeychainService.loadASRConfig()
         XCTAssertNotNil(config)
-        XCTAssertEqual(config?.appKey, "myAppKey")
-        XCTAssertEqual(config?.accessKey, "myAccessKey")
+        XCTAssertEqual(config?.apiKey, "myApiKey")
+        XCTAssertEqual(config?.authMode, VolcanoASRConfig.authModeAPIKey)
         XCTAssertEqual(config?.resourceId, "myResource")
     }
 
@@ -91,14 +90,27 @@ final class KeychainServiceTests: XCTestCase {
         let values = KeychainService.compatibleASRCredentials(
             for: .volcano,
             stored: [
-                "appKey": "myAppKey",
-                "accessKey": "myAccessKey",
+                "apiKey": "myApiKey",
             ]
         )
 
-        XCTAssertEqual(values["appKey"], "myAppKey")
-        XCTAssertEqual(values["accessKey"], "myAccessKey")
+        XCTAssertEqual(values["apiKey"], "myApiKey")
         XCTAssertEqual(values["resourceId"], VolcanoASRConfig.resourceIdAuto)
+        XCTAssertNotNil(VolcanoASRConfig(credentials: values))
+    }
+
+    func testCompatibleASRCredentials_preservesLegacyVolcanoAuthFields() throws {
+        let values = KeychainService.compatibleASRCredentials(
+            for: .volcano,
+            stored: [
+                "appKey": "legacyAppID",
+                "accessKey": "legacyAccessToken",
+            ]
+        )
+
+        XCTAssertEqual(values["authMode"], VolcanoASRConfig.authModeLegacy)
+        XCTAssertEqual(values["appKey"], "legacyAppID")
+        XCTAssertEqual(values["accessKey"], "legacyAccessToken")
         XCTAssertNotNil(VolcanoASRConfig(credentials: values))
     }
 
@@ -117,16 +129,14 @@ final class KeychainServiceTests: XCTestCase {
     func testCompatibleCredentialsPreferStoredValuesOverLegacyFallbacks() throws {
         let values = KeychainService.compatibleASRCredentials(
             for: .volcano,
-            stored: ["appKey": "newAppKey"],
+            stored: ["apiKey": "newApiKey"],
             legacy: [
-                "appKey": "oldAppKey",
-                "accessKey": "oldAccessKey",
+                "apiKey": "oldApiKey",
                 "resourceId": "oldResourceId",
             ]
         )
 
-        XCTAssertEqual(values["appKey"], "newAppKey")
-        XCTAssertEqual(values["accessKey"], "oldAccessKey")
+        XCTAssertEqual(values["apiKey"], "newApiKey")
         XCTAssertEqual(values["resourceId"], "oldResourceId")
     }
 
@@ -141,13 +151,11 @@ final class KeychainServiceTests: XCTestCase {
         }
 
         try KeychainService.saveASRCredentials(for: .volcano, values: [
-            "appKey": "myAppKey",
-            "accessKey": "myAccessKey",
+            "apiKey": "myApiKey",
         ])
 
         let values = try XCTUnwrap(KeychainService.loadASRCredentials(for: .volcano))
-        XCTAssertEqual(values["appKey"], "myAppKey")
-        XCTAssertEqual(values["accessKey"], "myAccessKey")
+        XCTAssertEqual(values["apiKey"], "myApiKey")
         XCTAssertEqual(values["resourceId"], VolcanoASRConfig.resourceIdAuto)
         XCTAssertNotNil(KeychainService.loadASRConfig(for: .volcano))
     }
@@ -200,9 +208,10 @@ final class KeychainServiceTests: XCTestCase {
         KeychainService.migrateStoredCredentials()
 
         let values = try XCTUnwrap(KeychainService.loadASRCredentials(for: .volcano))
+        XCTAssertEqual(values["resourceId"], "legacyResource")
+        XCTAssertEqual(values["authMode"], VolcanoASRConfig.authModeLegacy)
         XCTAssertEqual(values["appKey"], "legacyAppKey")
         XCTAssertEqual(values["accessKey"], "legacyAccessKey")
-        XCTAssertEqual(values["resourceId"], "legacyResource")
         XCTAssertNil(UserDefaults.standard.object(forKey: "tf_appKey"))
         XCTAssertNil(UserDefaults.standard.object(forKey: "tf_resourceId"))
         XCTAssertNil(KeychainService.load(key: "tf_accessKey"))
@@ -245,8 +254,7 @@ final class KeychainServiceTests: XCTestCase {
 
     func testSaveASRCredentials_storesSecureFieldsOutsideCredentialsFile() throws {
         try KeychainService.saveASRCredentials(for: .volcano, values: [
-            "appKey": "myAppKey",
-            "accessKey": "myAccessKey",
+            "apiKey": "myApiKey",
             "resourceId": "myResource",
         ])
 
@@ -254,10 +262,9 @@ final class KeychainServiceTests: XCTestCase {
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: fileData) as? [String: Any])
         let stored = try XCTUnwrap(json["tf_asr_volcano"] as? [String: String])
 
-        XCTAssertEqual(stored["appKey"], "myAppKey")
         XCTAssertEqual(stored["resourceId"], "myResource")
-        XCTAssertNil(stored["accessKey"])
-        XCTAssertEqual(KeychainService.loadASRCredentials(for: .volcano)?["accessKey"], "myAccessKey")
+        XCTAssertNil(stored["apiKey"])
+        XCTAssertEqual(KeychainService.loadASRCredentials(for: .volcano)?["apiKey"], "myApiKey")
     }
 
     func testSelectedASRProviderPostsNotificationOnChange() {

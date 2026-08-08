@@ -16,6 +16,7 @@ protocol FloatingBarState: AnyObject, Observable {
     var processingFinishTime: Date? { get }
     var transcriptionText: String { get }
     var recordingStartDate: Date? { get }
+    var pinsTranscriptPopup: Bool { get }
     /// True when recording without SenseVoice streaming (Qwen3-only).
     var isQwen3OnlyMode: Bool { get }
     var effectiveProcessingLabel: String { get }
@@ -58,6 +59,12 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private var showTranscriptPopup: Bool {
+        if state.pinsTranscriptPopup {
+            return !state.segments.isEmpty
+        }
+        if state.barPhase == .recovering {
+            return !state.segments.isEmpty
+        }
         guard recordingVisualStyle.showsRecordingPanel,
               hoverTranscriptPreview,
               isHovered,
@@ -79,6 +86,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
             return recordingPeakWidth
         case .processing:
             return measureText(state.effectiveProcessingLabel) + 66.0
+        case .recovering:
+            return min(TF.barWidth, measureText(state.effectiveProcessingLabel) + 86.0)
         case .done:
             return feedbackWidth(for: state.feedbackMessage)
         case .error:
@@ -181,6 +190,12 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     insertion: .scale(scale: 0.85).combined(with: .opacity),
                     removal: .scale(scale: 0.9).combined(with: .opacity)
                 ))
+        case .recovering:
+            recoveringContent
+                .transition(.asymmetric(
+                    insertion: .scale(scale: 0.85).combined(with: .opacity),
+                    removal: .scale(scale: 0.9).combined(with: .opacity)
+                ))
         case .done:
             doneContent
                 .transition(.asymmetric(
@@ -257,6 +272,19 @@ struct FloatingBarView<S: FloatingBarState>: View {
         .frame(maxWidth: .infinity)
     }
 
+    private var recoveringContent: some View {
+        HStack(spacing: 10) {
+            PreparingDot()
+
+            Text(state.effectiveProcessingLabel)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 14)
+    }
+
     private var doneContent: some View {
         Group {
             if let icon = feedbackIcon {
@@ -324,7 +352,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .transition(.opacity)
             }
 
-            if state.barPhase == .processing || state.barPhase == .done {
+            if state.barPhase == .processing || state.barPhase == .recovering || state.barPhase == .done {
                 ProcessingProgress(
                     finishTime: state.processingFinishTime,
                     processingStartDate: processingStartDate,
@@ -357,6 +385,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
             .white.opacity(breathe ? 0.14 : 0.05)
         case .processing:
             .white.opacity(0.07)
+        case .recovering:
+            .white.opacity(0.12)
         case .done:
             switch state.feedbackKind {
             case .macActionUnsure:
@@ -397,6 +427,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 breathe = true
             }
         case .processing:
+            processingStartDate = Date()
+            doneStartDate = nil
+            breathe = false
+        case .recovering:
             processingStartDate = Date()
             doneStartDate = nil
             breathe = false

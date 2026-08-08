@@ -15,7 +15,7 @@ struct AssemblyAIASRConfig: ASRProviderConfig, Sendable {
     static var credentialFields: [CredentialField] {[
         CredentialField(
             key: "apiKey",
-            label: "API Key",
+            label: L("API Key", "API Key"),
             placeholder: L("粘贴 API Key", "Paste your API Key"),
             isSecure: true,
             isOptional: false,
@@ -23,7 +23,7 @@ struct AssemblyAIASRConfig: ASRProviderConfig, Sendable {
         ),
         CredentialField(
             key: "model",
-            label: L("Streaming Model", "Streaming Model"),
+            label: L("流式模型", "Streaming Model"),
             placeholder: defaultModel,
             isSecure: false,
             isOptional: false,

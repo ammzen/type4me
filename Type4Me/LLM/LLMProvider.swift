@@ -14,6 +14,7 @@ enum LLMProvider: String, CaseIterable, Codable, Sendable {
     case deepseek
     case zhipu
     case claude
+    case codexCLI
     case ollama
     case custom
 
@@ -30,6 +31,7 @@ enum LLMProvider: String, CaseIterable, Codable, Sendable {
         case .deepseek:    return L("DeepSeek (深度求索)", "DeepSeek")
         case .zhipu:       return L("智谱 (GLM)", "Zhipu (GLM)")
         case .claude:      return "Claude (Anthropic)"
+        case .codexCLI:    return L("Codex CLI（本地账号）", "Codex CLI (Local Account)")
         case .ollama:      return L("Ollama (本地模型)", "Ollama (Local)")
         case .custom:      return L("自定义 (OpenAI 兼容)", "Custom (OpenAI Compatible)")
         }
@@ -48,6 +50,7 @@ enum LLMProvider: String, CaseIterable, Codable, Sendable {
         case .deepseek:    return "https://api.deepseek.com"
         case .zhipu:       return "https://open.bigmodel.cn/api/paas/v4"
         case .claude:      return "https://api.anthropic.com/v1"
+        case .codexCLI:    return ""
         case .ollama:      return "http://localhost:11434/v1"
         case .custom:      return ""
         }
@@ -140,13 +143,18 @@ enum LLMProvider: String, CaseIterable, Codable, Sendable {
                 FieldOption(value: "claude-opus-4-8", label: "claude-opus-4-8"),
                 FieldOption(value: "claude-haiku-4-5-20251001", label: "claude-haiku-4-5-20251001"),
             ]
+        case .codexCLI:
+            return [
+                FieldOption(value: "gpt-5.6-luna", label: L("GPT-5.6 Luna（推荐）", "GPT-5.6 Luna (Recommended)")),
+                FieldOption(value: "gpt-5.3-codex-spark", label: L("GPT-5.3 Codex Spark（极速实验）", "GPT-5.3 Codex Spark (Fast, Experimental)")),
+            ]
         case .openrouter, .ollama, .custom:
             return []
         }
     }
 
     var isOpenAICompatible: Bool {
-        self != .claude
+        self != .claude && self != .codexCLI
     }
 
     /// Whether this is a local provider bundled with the app (no external service).
@@ -156,7 +164,14 @@ enum LLMProvider: String, CaseIterable, Codable, Sendable {
 
     /// Whether this provider requires an API key for authentication.
     var requiresAPIKey: Bool {
-        self != .ollama
+        self != .ollama && self != .codexCLI
+    }
+
+    /// Whether recording-time speculative requests are safe and economical.
+    /// CLI runtimes start a full agent process for every request, so they only
+    /// run once after the final transcript is available.
+    var supportsSpeculativeProcessing: Bool {
+        self != .ollama && self != .codexCLI
     }
 
     /// Thinking/reasoning disable strategy for this provider.

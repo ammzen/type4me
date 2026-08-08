@@ -76,6 +76,9 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
     var body: some View {
         settingsGroupCard(L("LLM 文本处理", "LLM Settings"), icon: "gearshape.fill") {
             llmProviderPicker
+            if selectedLLMProvider == .codexCLI {
+                codexRuntimeNotice
+            }
             SettingsDivider()
 
             if hasLLMCredentials && !isEditingLLM {
@@ -84,33 +87,36 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
                 dynamicCredentialFields
             }
 
-            HStack(spacing: 8) {
-                Spacer()
-                testButton(
-                    L("测试连接", "Test"),
-                    status: llmTestStatus,
-                    isEnabled: hasLLMCredentials
-                ) { testLLMConnection() }
-                if hasLLMCredentials && !isEditingLLM {
-                    secondaryButton(L("修改", "Edit")) {
-                        testTask?.cancel()
-                        llmTestStatus = .idle
-                        llmCredentialValues = [:]
-                        editedFields = []
-                        isEditingLLM = true
-                        syncCustomModeFields()
-                    }
-                } else {
-                    if hasLLMCredentials && hasStoredLLM {
-                        secondaryButton(L("取消", "Cancel")) {
+            VStack(alignment: .trailing, spacing: 0) {
+                HStack(alignment: .top, spacing: 8) {
+                    Spacer()
+                    testButton(
+                        L("测试连接", "Test"),
+                        status: llmTestStatus,
+                        isEnabled: hasLLMCredentials
+                    ) { testLLMConnection() }
+                    if hasLLMCredentials && !isEditingLLM {
+                        secondaryButton(L("修改", "Edit")) {
                             testTask?.cancel()
                             llmTestStatus = .idle
-                            loadLLMCredentials()
+                            llmCredentialValues = [:]
+                            editedFields = []
+                            isEditingLLM = true
+                            syncCustomModeFields()
                         }
+                    } else {
+                        if hasLLMCredentials && hasStoredLLM {
+                            secondaryButton(L("取消", "Cancel")) {
+                                testTask?.cancel()
+                                llmTestStatus = .idle
+                                loadLLMCredentials()
+                            }
+                        }
+                        primaryButton(L("保存", "Save")) { saveLLMCredentials() }
+                            .disabled(!hasLLMCredentials)
                     }
-                    primaryButton(L("保存", "Save")) { saveLLMCredentials() }
-                        .disabled(!hasLLMCredentials)
                 }
+                testStatusMessage(status: llmTestStatus)
             }
             .padding(.top, 12)
         }
@@ -217,11 +223,25 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
             fetchedModelOptions = []
             loadLLMCredentialsForProvider(newProvider)
 
-            // Auto-save provider switch if target already has credentials
-            if hasLLMCredentials {
+            // Auto-switch only when the target already has a saved config.
+            // Defaults alone (notably Codex CLI's model) must not change the
+            // active provider until the user explicitly saves.
+            if hasStoredLLM && hasLLMCredentials {
                 KeychainService.selectedLLMProvider = newProvider
             }
         }
+    }
+
+    private var codexRuntimeNotice: some View {
+        Text(L(
+            "使用本机已登录的 Codex CLI，无需单独配置 API Key。文本仍会发送到 OpenAI，并消耗 Codex 账号额度。",
+            "Uses the Codex CLI already signed in on this Mac, with no separate API key configuration. Text is still sent to OpenAI and uses Codex account quota."
+        ))
+        .font(.system(size: 11))
+        .foregroundStyle(TF.settingsTextSecondary)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, 6)
     }
 
     // MARK: - Credential Fields
@@ -256,7 +276,11 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
         }
 
         if let modelField {
-            rows.append([.credential(modelField), .thinkingMode])
+            if selectedLLMProvider == .codexCLI {
+                rows.append([.credential(modelField)])
+            } else {
+                rows.append([.credential(modelField), .thinkingMode])
+            }
         } else {
             rows.append([.thinkingMode])
         }
@@ -466,9 +490,7 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
                     return
                 }
                 let llmConfig = config.toLLMConfig()
-                let client: any LLMClient = provider == .claude
-                    ? ClaudeChatClient()
-                    : DoubaoChatClient(provider: provider)
+                let client = LLMClientFactory.make(for: provider)
                 let reply = try await client.process(text: "hi", prompt: "{text}", config: llmConfig)
                 guard !Task.isCancelled else { return }
                 llmTestStatus = .success

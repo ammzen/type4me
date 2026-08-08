@@ -44,7 +44,7 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
         VStack(alignment: .leading, spacing: 0) {
             if showsHeader {
                 SettingsSectionHeader(
-                    label: "GENERAL",
+                    label: L("通用", "GENERAL"),
                     title: L("通用设置", "General Settings"),
                     description: L("偏好设置与系统权限。快捷键请在「处理模式」中配置。", "Preferences and permissions. Hotkeys are configured in Modes.")
                 )

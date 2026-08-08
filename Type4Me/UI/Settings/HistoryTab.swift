@@ -383,7 +383,7 @@ struct HistoryTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsSectionHeader(
-                label: "HISTORY",
+                label: L("历史", "HISTORY"),
                 title: L("识别历史", "History"),
                 description: L("浏览和管理语音识别记录。", "Browse and manage speech recognition records.")
             )
@@ -1321,7 +1321,7 @@ struct HistoryTab: View {
             }
         }
         .padding(16)
-        .frame(width: 460)
+        .frame(width: 550)
     }
 
     private var usageDetailsHeader: some View {
@@ -1333,6 +1333,8 @@ struct HistoryTab: View {
             Text(L("7天", "7 days"))
                 .frame(width: 78, alignment: .trailing)
             Text(L("30天", "30 days"))
+                .frame(width: 78, alignment: .trailing)
+            Text(L("全部", "All time"))
                 .frame(width: 78, alignment: .trailing)
         }
         .font(.system(size: 10, weight: .semibold))
@@ -1349,9 +1351,6 @@ struct HistoryTab: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(TF.settingsText)
                     .lineLimit(1)
-                Text(L("\(row.recordCount) 条记录", "\(row.recordCount) records"))
-                    .font(.system(size: 9))
-                    .foregroundStyle(TF.settingsTextTertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -1361,6 +1360,13 @@ struct HistoryTab: View {
                 .frame(width: 78, alignment: .trailing)
             Text(formatUsageDuration(row.last30DaysDuration))
                 .frame(width: 78, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(formatUsageDuration(row.allTimeDuration))
+                Text(L("\(row.recordCount) 条记录", "\(row.recordCount) records"))
+                    .font(.system(size: 9))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+            .frame(width: 78, alignment: .trailing)
         }
         .font(.system(size: 11, weight: .medium, design: .rounded))
         .foregroundStyle(TF.settingsText)

@@ -24,7 +24,7 @@ esac
 APP_PATH="${APP_PATH:-$PROJECT_DIR/dist/${APP_NAME}.app}"
 APP_EXECUTABLE="${APP_EXECUTABLE:-Type4Me}"
 APP_ICON_NAME="${APP_ICON_NAME:-AppIcon}"
-APP_VERSION="${APP_VERSION:-1.9.9}"
+APP_VERSION="${APP_VERSION:-2.0.0}"
 APP_BUILD="${APP_BUILD:-1}"
 MIN_SYSTEM_VERSION="${MIN_SYSTEM_VERSION:-14.0}"
 VARIANT="${VARIANT:-cloud}"    # cloud or local
@@ -60,6 +60,9 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
 elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
     SIGNING_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
     echo "Using Developer ID: $SIGNING_IDENTITY"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Apple Development"; then
+    SIGNING_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep "Apple Development" | head -1 | sed 's/.*"\(.*\)"/\1/')
+    echo "Using Apple Development: $SIGNING_IDENTITY"
 elif security find-identity -v -p codesigning 2>/dev/null | grep -q "Type4Me Dev"; then
     SIGNING_IDENTITY="Type4Me Dev"
 else
@@ -272,6 +275,9 @@ WRAPPER
 
     echo "Local variant: all models bundled."
 else
+    rm -rf "$APP_PATH/Contents/Resources/Models" \
+           "$APP_PATH/Contents/Resources/qwen3-asr-server-dist" \
+           "$APP_PATH/Contents/MacOS/qwen3-asr-server"
     echo "Cloud variant: skipping model bundling."
 fi
 

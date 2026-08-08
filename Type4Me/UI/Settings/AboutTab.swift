@@ -6,12 +6,13 @@ struct AboutTab: View {
 
     @Environment(AppState.self) private var appState
     @Environment(AppUpdater.self) private var appUpdater
+    @State private var showIssueReporter = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if showsHeader {
                 SettingsSectionHeader(
-                    label: "ABOUT",
+                    label: L("关于", "ABOUT"),
                     title: L("关于 Type4Me", "About Type4Me"),
                     description: L("语音，流畅输入。基于火山引擎大模型语音识别的 macOS 原生输入工具。", "Voice to text, seamlessly. A native macOS input tool powered by large-model ASR.")
                 )
@@ -43,18 +44,19 @@ struct AboutTab: View {
                     }
                 }
                 linkButton(L("反馈", "Feedback"), icon: "envelope") {
-                    if let url = URL(string: "https://github.com/joewongjc/type4me/issues") {
-                        NSWorkspace.shared.open(url)
-                    }
+                    showIssueReporter = true
                 }
             }
 
             Spacer()
 
             // Footer
-            Text("Made with ♥ and Claude Code")
+            Text(L("用爱和 Claude Code 打造", "Made with ♥ and Claude Code"))
                 .font(.system(size: 10))
                 .foregroundStyle(TF.settingsTextTertiary)
+        }
+        .sheet(isPresented: $showIssueReporter) {
+            IssueReportSheet()
         }
     }
 

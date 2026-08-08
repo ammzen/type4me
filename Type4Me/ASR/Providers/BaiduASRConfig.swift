@@ -16,7 +16,7 @@ struct BaiduASRConfig: ASRProviderConfig, Sendable {
     static var credentialFields: [CredentialField] {[
         CredentialField(
             key: "appID",
-            label: "App ID",
+            label: L("App ID", "App ID"),
             placeholder: "123456789",
             isSecure: false,
             isOptional: false,
@@ -24,7 +24,7 @@ struct BaiduASRConfig: ASRProviderConfig, Sendable {
         ),
         CredentialField(
             key: "apiKey",
-            label: "API Key",
+            label: L("API Key", "API Key"),
             placeholder: L("百度语音 API Key", "Baidu Speech API key"),
             isSecure: true,
             isOptional: false,
@@ -32,7 +32,7 @@ struct BaiduASRConfig: ASRProviderConfig, Sendable {
         ),
         CredentialField(
             key: "devPID",
-            label: "Dev PID",
+            label: L("Dev PID", "Dev PID"),
             placeholder: defaultDevPID,
             isSecure: false,
             isOptional: true,
@@ -41,7 +41,7 @@ struct BaiduASRConfig: ASRProviderConfig, Sendable {
         ),
         CredentialField(
             key: "cuid",
-            label: "CUID",
+            label: L("CUID", "CUID"),
             placeholder: L("客户端唯一标识", "Stable client identifier"),
             isSecure: false,
             isOptional: true,
@@ -49,7 +49,7 @@ struct BaiduASRConfig: ASRProviderConfig, Sendable {
         ),
         CredentialField(
             key: "lmId",
-            label: "LM ID",
+            label: L("LM ID", "LM ID"),
             placeholder: L("自训练语言模型 ID（可选）", "Custom language model ID (optional)"),
             isSecure: false,
             isOptional: true,

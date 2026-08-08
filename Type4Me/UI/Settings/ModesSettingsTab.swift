@@ -59,7 +59,7 @@ struct ModesSettingsTab: View {
         VStack(alignment: .leading, spacing: 0) {
             if showsHeader {
                 SettingsSectionHeader(
-                    label: "MODES",
+                    label: L("模式", "MODES"),
                     title: L("处理模式", "Modes"),
                     description: L("配置语音转写与后处理流水线。快速模式实时输出，自定义模式可经 LLM 加工。", "Configure speech-to-text and post-processing pipelines. Quick Mode outputs live text, and custom modes can use LLM processing.")
                 )
@@ -454,6 +454,8 @@ struct ModesSettingsTab: View {
 
             if mode.id == ProcessingMode.macActionId {
                 macActionDescription
+            } else if mode.id == ProcessingMode.selectionAskId {
+                selectionAskDescription
             } else {
                 Text(mode.description)
                     .font(.system(size: 12))
@@ -467,7 +469,37 @@ struct ModesSettingsTab: View {
         switch mode.id {
         case ProcessingMode.formalWritingId: return "wand.and.stars"
         case ProcessingMode.macActionId: return "command.circle.fill"
+        case ProcessingMode.selectionAskId: return "sparkle.magnifyingglass"
         default: return "bolt.fill"
+        }
+    }
+
+    private var selectionAskDescription: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L(
+                "选中文本后按下热键开始录音，说出你的问题或指令，再按热键停止。Type4Me 会结合选中文本流式生成 Markdown 回答，不粘贴、不修改剪贴板。",
+                "Select text, press the hotkey to record your question or instruction, then press it again to stop. Type4Me streams a Markdown answer using the selected text without pasting or changing the clipboard."
+            ))
+                .font(.system(size: 12))
+                .foregroundStyle(TF.settingsTextSecondary)
+                .lineSpacing(3)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L("使用方式", "How it works"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(TF.settingsText)
+                ForEach(selectionAskExamples, id: \.self) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("•")
+                            .font(.system(size: 11))
+                            .foregroundStyle(TF.settingsTextTertiary)
+                        Text(item)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(TF.settingsText)
+                            .lineSpacing(2)
+                    }
+                }
+            }
         }
     }
 
@@ -548,6 +580,14 @@ struct ModesSettingsTab: View {
              L("向下翻页", "Page down")),
             (L("向上滚动", "Scroll up"),
              L("向上翻页", "Page up")),
+        ]
+    }
+
+    private var selectionAskExamples: [String] {
+        [
+            L("选中英文、系统提示、代码片段或术语。", "Select English text, system messages, code snippets, or terms."),
+            L("按下「随便问」热键，说出“翻译一下”“这是什么意思”“帮我总结”等问题。", "Press the Ask Anything hotkey and say a question such as translate this, what does this mean, or summarize it."),
+            L("再次按热键停止，在弹框中阅读流式 Markdown 回答。", "Press the hotkey again to stop and read the streamed Markdown answer in the popup."),
         ]
     }
 

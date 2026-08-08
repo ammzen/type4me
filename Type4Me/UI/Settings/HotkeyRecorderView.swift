@@ -293,24 +293,24 @@ struct HotkeyRecorderView: View {
 
         switch keyCode {
         // Modifier keys
-        case 54: return "Right Command"
-        case 55: return "Left Command"
-        case 56: return "Left Shift"
-        case 58: return "Left Option"
-        case 59: return "Left Control"
-        case 60: return "Right Shift"
-        case 61: return "Right Option"
-        case 62: return "Right Control"
-        case 63: return "fn"
+        case 54: return L("右 Command", "Right Command")
+        case 55: return L("左 Command", "Left Command")
+        case 56: return L("左 Shift", "Left Shift")
+        case 58: return L("左 Option", "Left Option")
+        case 59: return L("左 Control", "Left Control")
+        case 60: return L("右 Shift", "Right Shift")
+        case 61: return L("右 Option", "Right Option")
+        case 62: return L("右 Control", "Right Control")
+        case 63: return L("fn", "fn")
 
         // Special keys
-        case 36: return "Return"
-        case 48: return "Tab"
-        case 49: return "Space"
-        case 51: return "Delete"
-        case 53: return "Escape"
-        case 76: return "Enter"
-        case 117: return "Forward Delete"
+        case 36: return L("Return", "Return")
+        case 48: return L("Tab", "Tab")
+        case 49: return L("空格", "Space")
+        case 51: return L("删除", "Delete")
+        case 53: return L("退出", "Escape")
+        case 76: return L("Enter", "Enter")
+        case 117: return L("向前删除", "Forward Delete")
 
         // Arrows
         case 123: return "←"
@@ -333,7 +333,7 @@ struct HotkeyRecorderView: View {
         case 111: return "F12"
 
         default:
-            return ucKeyTranslateName(keyCode) ?? "Key \(keyCode)"
+            return ucKeyTranslateName(keyCode) ?? L("按键 \(keyCode)", "Key \(keyCode)")
         }
     }
 

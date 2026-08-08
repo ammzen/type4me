@@ -11,12 +11,12 @@ enum CloudLLMError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notAuthenticated: return "Please log in to Type4Me Cloud"
-        case .quotaExhausted: return "Free quota exhausted"
-        case .networkError: return "Network error"
-        case .serverError(let code): return "Server error (\(code))"
+        case .notAuthenticated: return L("请先登录 Type4Me Cloud", "Please log in to Type4Me Cloud")
+        case .quotaExhausted: return L("免费额度已用完", "Free quota exhausted")
+        case .networkError: return L("网络错误", "Network error")
+        case .serverError(let code): return L("服务器错误（\(code)）", "Server error (\(code))")
         case .remoteError(let msg): return msg
-        case .emptyResponse: return "Empty response from server"
+        case .emptyResponse: return L("服务器返回为空", "Empty response from server")
         }
     }
 }

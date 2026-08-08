@@ -163,14 +163,6 @@ enum KeychainService {
 
     // MARK: - Legacy ASR convenience (volcano-specific, kept for migration)
 
-    static func saveASRCredentials(appKey: String, accessKey: String, resourceId: String) throws {
-        try saveASRCredentials(for: .volcano, values: [
-            "appKey": appKey,
-            "accessKey": accessKey,
-            "resourceId": resourceId,
-        ])
-    }
-
     static func loadASRConfig() -> VolcanoASRConfig? {
         loadASRConfig(for: .volcano) as? VolcanoASRConfig
     }
@@ -362,7 +354,6 @@ enum KeychainService {
         }
     }
 
-    @discardableResult
     private static func removeLegacyFileKeys(_ keys: [String], from dict: inout [String: Any]) -> Bool {
         var changed = false
         for key in keys {
@@ -492,7 +483,22 @@ enum KeychainService {
         legacy: [String: String] = [:]
     ) -> [String: String] {
         let fields = ASRProviderRegistry.configType(for: provider)?.credentialFields ?? []
-        return compatibleCredentialValues(stored: stored, legacy: legacy, fields: fields)
+        var values = compatibleCredentialValues(
+            stored: stored,
+            legacy: legacy,
+            fields: fields
+        )
+        if provider == .volcano, !values.isEmpty {
+            if let explicitMode = stored["authMode"] ?? legacy["authMode"],
+               explicitMode == VolcanoASRConfig.authModeAPIKey
+                || explicitMode == VolcanoASRConfig.authModeLegacy {
+                values["authMode"] = explicitMode
+            } else {
+                values.removeValue(forKey: "authMode")
+                values["authMode"] = VolcanoASRConfig.inferredAuthMode(in: values)
+            }
+        }
+        return values
     }
 
     static func compatibleLLMCredentials(
