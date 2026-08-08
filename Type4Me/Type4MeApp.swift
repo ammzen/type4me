@@ -514,9 +514,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotkeyManager.registerBindings(bindings)
 
-        // Cross-mode stop: user pressed mode B's key while mode A was recording.
-        // Switch to mode B and stop, so the recording is processed with mode B.
-        hotkeyManager.onCrossModeStop = { [weak self] newModeId in
+        // Cross-mode finish: user pressed mode B's key while mode A was recording.
+        // The preference decides whether mode A or mode B processes the recording.
+        hotkeyManager.onCrossModeFinish = { [weak self] newModeId in
             guard let self else { return }
             guard let newMode = availableModes.first(where: { $0.id == newModeId }) else { return }
             let phase = MainActor.assumeIsolated { self.appState.barPhase }
@@ -525,17 +525,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { _ = await self.session.handleRecoveryHotkeyPress() }
                 return
             }
-            let selectedProvider = KeychainService.selectedASRProvider
-            let resolvedMode = ASRProviderRegistry.resolvedMode(for: newMode, provider: selectedProvider)
-            let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
-            NSLog("[Type4Me] >>> HOTKEY: Cross-mode stop → %@", effectiveMode.name)
-            DebugFileLogger.log("hotkey cross-mode stop → \(effectiveMode.name)")
+            let startingMode = MainActor.assumeIsolated { self.appState.currentMode }
+            let allowsModeSwitch = CrossModeFinishPreference.isEnabled()
+            let endingMode: ProcessingMode
+            if allowsModeSwitch {
+                let selectedProvider = KeychainService.selectedASRProvider
+                let resolvedMode = ASRProviderRegistry.resolvedMode(for: newMode, provider: selectedProvider)
+                endingMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
+            } else {
+                // Avoid provider resolution entirely when the starting mode must be retained.
+                endingMode = newMode
+            }
+            let processingMode = CrossModeFinishPreference.processingMode(
+                startingMode: startingMode,
+                endingMode: endingMode,
+                isEnabled: allowsModeSwitch
+            )
+            NSLog(
+                "[Type4Me] >>> HOTKEY: Cross-mode finish (start=%@, end=%@, process=%@)",
+                startingMode.name,
+                newMode.name,
+                processingMode.name
+            )
+            DebugFileLogger.log(
+                "hotkey cross-mode finish start=\(startingMode.name) end=\(newMode.name) process=\(processingMode.name)"
+            )
             MainActor.assumeIsolated {
-                self.appState.currentMode = effectiveMode
+                if allowsModeSwitch {
+                    self.appState.currentMode = processingMode
+                }
                 self.appState.stopRecording()
             }
             Task {
-                await self.session.switchMode(to: effectiveMode)
+                if allowsModeSwitch {
+                    await self.session.switchMode(to: processingMode)
+                }
                 await self.session.stopRecording()
             }
         }

@@ -673,6 +673,8 @@ struct SettingsRow: View {
 
 struct SettingsDivider: View {
     var body: some View {
-        Divider().padding(.vertical, 2)
+        Rectangle()
+            .fill(Color.black.opacity(0.045))
+            .frame(height: 1)
     }
 }

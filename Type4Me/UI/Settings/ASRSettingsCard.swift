@@ -1,5 +1,25 @@
 import SwiftUI
 
+struct LocalASREngineSelection: Equatable {
+    var senseVoiceEnabled: Bool
+    var qwen3Enabled: Bool
+
+    func settingSenseVoice(_ enabled: Bool, qwen3Available: Bool) -> Self {
+        guard !enabled, !qwen3Enabled else {
+            return Self(senseVoiceEnabled: enabled, qwen3Enabled: qwen3Enabled)
+        }
+        guard qwen3Available else { return self }
+        return Self(senseVoiceEnabled: false, qwen3Enabled: true)
+    }
+
+    func settingQwen3(_ enabled: Bool) -> Self {
+        Self(
+            senseVoiceEnabled: enabled ? senseVoiceEnabled : true,
+            qwen3Enabled: enabled
+        )
+    }
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - ASR Settings Card
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -263,12 +283,10 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     #endif
 
     private var asrProviderPicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(L("识别引擎", "Provider").uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.8)
-                .foregroundStyle(TF.settingsTextTertiary)
-            HStack(spacing: 10) {
+        settingsOptionRow(
+            L("识别引擎", "Provider"),
+            controlWidth: SettingsControlWidth.provider
+        ) {
                 let localSet = Set(Self.localProviders)
                 let availableSet = Set(ASRProvider.allCases
                     .filter { p in
@@ -305,26 +323,10 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                         }
                     }
                 } label: {
-                    HStack(spacing: 8) {
-                        Text(selectedASRProvider.displayName)
-                            .font(.system(size: 13))
-                            .foregroundStyle(TF.settingsText)
-                        Spacer()
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(TF.settingsTextTertiary)
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(TF.settingsCardAlt)
-                    )
+                    settingsDropdownLabel(selectedASRProvider.displayName)
                 }
                 .buttonStyle(.plain)
-            }
         }
-        .padding(.vertical, 6)
         .onChange(of: selectedASRProvider) { oldProvider, newProvider in
             // Skip if this is the initial load (oldProvider is the @State default, not a real switch)
             guard oldProvider == KeychainService.selectedASRProvider || oldProvider == newProvider else {
@@ -367,21 +369,10 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
 
     private var dynamicCredentialFields: some View {
         let fields = displayedASRFields
-        let rows = stride(from: 0, to: fields.count, by: 2).map { i in
-            Array(fields[i..<min(i+2, fields.count)])
-        }
         return VStack(spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+            ForEach(Array(fields.enumerated()), id: \.element.id) { index, field in
                 if index > 0 { SettingsDivider() }
-                HStack(alignment: .top, spacing: 16) {
-                    ForEach(row) { field in
-                        credentialFieldRow(field)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    if row.count == 1 {
-                        Spacer().frame(maxWidth: .infinity)
-                    }
-                }
+                credentialFieldRow(field)
             }
         }
     }
@@ -462,40 +453,33 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     }
 
     private var localModelSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             if localModelAvailable {
-                HStack(spacing: 12) {
-                    // Left: 流式识别引擎
-                    localEngineBlock(
-                        icon: "waveform",
+                    localEngineRow(
                         name: "SenseVoice",
                         subtitle: L("流式识别引擎", "Streaming Engine"),
                         description: L("录音期间实时出字。关闭后仅使用 Qwen3-ASR 最终识别，可释放约 500MB 内存。",
                                        "Real-time preview while recording. Turn it off to use only Qwen3-ASR final transcription and free ~500MB."),
-                        isRunning: sensevoiceEnabled,
+                        isOn: sensevoiceEnabled,
                         isToggling: false,
-                        onStart: { toggleSenseVoice(true) },
-                        onStop: { toggleSenseVoice(false) }
+                        onToggle: toggleSenseVoice
                     )
 
-                    // Right: 精准识别引擎
                     #if arch(arm64)
                     if hasQwen3ASR {
-                        localEngineBlock(
-                            icon: "target",
+                        SettingsDivider()
+                        localEngineRow(
                             name: "Qwen3-ASR",
                             subtitle: L("精准识别引擎", "Precision Engine"),
                             description: L("识别完成后，对语音进行更准确的校准。内存占用约 4GB。",
                                            "Post-recognition calibration for higher accuracy. ~4GB memory."),
-                            isRunning: qwen3Running,
+                            isOn: qwen3FinalEnabled,
                             isToggling: qwen3Toggling,
                             errorMessage: qwen3StartError,
-                            onStart: { toggleQwen3(true) },
-                            onStop: { toggleQwen3(false) }
+                            onToggle: toggleQwen3
                         )
                     }
                     #endif
-                }
 
                 HStack {
                     Spacer()
@@ -517,132 +501,52 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                 }
             }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 4)
     }
 
-    private func staticEngineBlock(
-        icon: String,
-        name: String,
-        subtitle: String,
-        description: String
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(TF.settingsAccentGreen))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(TF.settingsText)
-                    Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundStyle(TF.settingsTextTertiary)
-                }
-            }
-
-            Text(description)
-                .font(.system(size: 10))
-                .foregroundStyle(TF.settingsTextSecondary)
-                .lineSpacing(2)
-
-            HStack {
-                Spacer()
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(TF.settingsAccentGreen)
-                    Text(L("始终运行", "Always On"))
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(TF.settingsAccentGreen)
-                }
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
-    }
-
-    private func localEngineBlock(
-        icon: String,
+    private func localEngineRow(
         name: String,
         subtitle: String,
         description: String,
-        isRunning: Bool,
+        isOn: Bool,
         isToggling: Bool,
         errorMessage: String? = nil,
-        onStart: @escaping () -> Void,
-        onStop: @escaping () -> Void
+        onToggle: @escaping (Bool) -> Void
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(isRunning ? TF.settingsAccentGreen : TF.settingsTextTertiary))
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(TF.settingsText)
-                    Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundStyle(TF.settingsTextTertiary)
-                }
-            }
-
-            Text(description)
-                .font(.system(size: 10))
-                .foregroundStyle(TF.settingsTextSecondary)
-                .lineSpacing(2)
-
-            HStack {
-                Spacer()
+        VStack(alignment: .leading, spacing: 0) {
+            settingsOptionRow(
+                name,
+                subtitle: "\(subtitle) · \(description)",
+                controlWidth: isToggling ? 110 : SettingsControlWidth.toggle
+            ) {
                 if isToggling {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
-                        Text(L("启动中", "Starting"))
+                        Text(isOn ? L("启动中", "Starting") : L("停止中", "Stopping"))
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(TF.settingsTextSecondary)
                     }
-                } else if isRunning {
-                    HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(TF.settingsAccentGreen)
-                        Text(L("运行中", "Running"))
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(TF.settingsAccentGreen)
-                    }
-                    Button(L("停止", "Stop")) { onStop() }
-                        .font(.system(size: 11, weight: .medium))
-                        .buttonStyle(.borderedProminent)
-                        .tint(TF.settingsAccentRed)
-                        .controlSize(.small)
                 } else {
-                    Button(L("启动", "Start")) { onStart() }
-                        .font(.system(size: 11, weight: .medium))
-                        .buttonStyle(.borderedProminent)
-                        .tint(TF.settingsAccentAmber)
-                        .controlSize(.small)
+                    Toggle("", isOn: Binding(
+                        get: { isOn },
+                        set: onToggle
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .tint(.black)
                 }
             }
 
-            if let errorMessage, !isToggling, !isRunning {
+            if let errorMessage, !isToggling, !isOn {
                 Text(errorMessage)
-                    .font(.system(size: 10))
-                    .foregroundStyle(TF.settingsAccentRed)
-                    .lineLimit(3)
-                    .textSelection(.enabled)
+                .font(.system(size: 10))
+                .foregroundStyle(TF.settingsAccentRed)
+                .lineLimit(3)
+                .textSelection(.enabled)
+                .padding(.bottom, 8)
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
     }
 
     private func refreshModelStatus() {
@@ -673,11 +577,15 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     }
 
     private func toggleSenseVoice(_ enabled: Bool) {
-        if !enabled && !qwen3FinalEnabled {
-            guard hasQwen3ASR else { return }
+        let selection = LocalASREngineSelection(
+            senseVoiceEnabled: sensevoiceEnabled,
+            qwen3Enabled: qwen3FinalEnabled
+        ).settingSenseVoice(enabled, qwen3Available: hasQwen3ASR)
+        guard selection.senseVoiceEnabled == enabled else { return }
+        if selection.qwen3Enabled && !qwen3FinalEnabled {
             toggleQwen3(true)
         }
-        sensevoiceEnabled = enabled
+        sensevoiceEnabled = selection.senseVoiceEnabled
         serverRunning = enabled || qwen3Running
         if !enabled {
             #if HAS_SHERPA_ONNX
@@ -687,7 +595,15 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     }
 
     private func toggleQwen3(_ enabled: Bool) {
-        qwen3FinalEnabled = enabled
+        let selection = LocalASREngineSelection(
+            senseVoiceEnabled: sensevoiceEnabled,
+            qwen3Enabled: qwen3FinalEnabled
+        ).settingQwen3(enabled)
+        if selection.senseVoiceEnabled != sensevoiceEnabled {
+            sensevoiceEnabled = selection.senseVoiceEnabled
+            serverRunning = true
+        }
+        qwen3FinalEnabled = selection.qwen3Enabled
         qwen3Toggling = true
         qwen3StartError = nil
         Task {

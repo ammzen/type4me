@@ -129,31 +129,17 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
         selectedThinkingDisableField != nil
     }
 
-    private var thinkingModeBinding: Binding<String> {
+    private var thinkingModeBinding: Binding<Bool> {
         Binding(
             get: {
-                guard thinkingToggleAvailable else { return "unsupported" }
-                return disableThinking ? "disabled" : "default"
+                thinkingToggleAvailable && disableThinking
             },
             set: { newValue in
                 guard thinkingToggleAvailable else { return }
-                disableThinking = newValue == "disabled"
+                disableThinking = newValue
                 UserDefaults.standard.set(disableThinking, forKey: "tf_disableThinking")
             }
         )
-    }
-
-    private var thinkingModeOptions: [(value: String, label: String)] {
-        if thinkingToggleAvailable {
-            return [
-                ("disabled", L("禁用思考", "Disable Thinking")),
-                ("default", L("模型默认", "Model Default")),
-            ]
-        }
-        if selectedLLMProvider.needsReasoningSplit {
-            return [("unsupported", L("分离 reasoning", "Separate reasoning"))]
-        }
-        return [("unsupported", L("模型默认", "Model Default"))]
     }
 
     private var thinkingToggleDescription: String {
@@ -179,34 +165,21 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
     }
 
     private var thinkingModeRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) {
-                Text(L("思考模式", "Thinking Mode").uppercased())
-                    .font(.system(size: 10, weight: .semibold))
-                    .tracking(0.8)
-                    .foregroundStyle(TF.settingsTextTertiary)
-                Text("|")
-                    .font(.system(size: 10))
-                    .foregroundStyle(TF.settingsTextTertiary.opacity(0.5))
-                Text(thinkingToggleDescription)
-                    .font(.system(size: 10))
-                    .foregroundStyle(TF.settingsTextTertiary)
-                    .lineLimit(1)
-            }
-            settingsDropdown(selection: thinkingModeBinding, options: thinkingModeOptions)
-                .disabled(!thinkingToggleAvailable)
-        }
-        .padding(.vertical, 6)
+        settingsToggleRow(
+            L("禁用思考", "Disable Thinking"),
+            subtitle: thinkingToggleDescription,
+            isOn: thinkingModeBinding,
+            isEnabled: thinkingToggleAvailable
+        )
     }
 
     // MARK: - Provider Picker
 
     private var llmProviderPicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(L("服务商", "Provider").uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(0.8)
-                .foregroundStyle(TF.settingsTextTertiary)
+        settingsOptionRow(
+            L("服务商", "Provider"),
+            controlWidth: SettingsControlWidth.provider
+        ) {
             settingsDropdown(
                 selection: Binding(
                     get: { selectedLLMProvider.rawValue },
@@ -215,7 +188,6 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
                 options: LLMProvider.allCases.map { ($0.rawValue, $0.displayName) }
             )
         }
-        .padding(.vertical, 6)
         .onChange(of: selectedLLMProvider) { _, newProvider in
             testTask?.cancel()
             llmTestStatus = .idle
@@ -247,50 +219,35 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
     // MARK: - Credential Fields
 
     private var dynamicCredentialFields: some View {
-        let rows = arrangedCredentialRows()
+        let items = arrangedCredentialItems()
         return VStack(spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 if index > 0 { SettingsDivider() }
-                HStack(alignment: .top, spacing: 16) {
-                    ForEach(row) { item in
-                        credentialItemRow(item)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                    }
-                    if row.count == 1 {
-                        Spacer().frame(maxWidth: .infinity)
-                    }
-                }
+                credentialItemRow(item)
             }
         }
     }
 
-    private func arrangedCredentialRows() -> [[LLMCredentialItem]] {
+    private func arrangedCredentialItems() -> [LLMCredentialItem] {
         let fields = currentLLMFields
         let modelField = fields.first { $0.key == "model" }
         let nonModelFields = fields.filter { $0.key != "model" }
-        var rows: [[LLMCredentialItem]] = []
+        var items: [LLMCredentialItem] = []
 
-        let firstRow = nonModelFields.prefix(2).map { LLMCredentialItem.credential($0) }
-        if !firstRow.isEmpty {
-            rows.append(firstRow)
-        }
+        items.append(contentsOf: nonModelFields.prefix(2).map { .credential($0) })
 
         if let modelField {
-            if selectedLLMProvider == .codexCLI {
-                rows.append([.credential(modelField)])
-            } else {
-                rows.append([.credential(modelField), .thinkingMode])
+            items.append(.credential(modelField))
+            if selectedLLMProvider != .codexCLI {
+                items.append(.thinkingMode)
             }
         } else {
-            rows.append([.thinkingMode])
+            items.append(.thinkingMode)
         }
 
-        let remaining = Array(nonModelFields.dropFirst(2)).map { LLMCredentialItem.credential($0) }
-        for index in stride(from: 0, to: remaining.count, by: 2) {
-            rows.append(Array(remaining[index..<min(index + 2, remaining.count)]))
-        }
+        items.append(contentsOf: nonModelFields.dropFirst(2).map { .credential($0) })
 
-        return rows
+        return items
     }
 
     @ViewBuilder
@@ -338,28 +295,35 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
                     editedFields.insert(field.key)
                 }
             )
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 4) {
-                    settingsPickerField(field.label, selection: pickerBinding, options: allOptions)
-                    if field.key == "model" {
-                        Button {
-                            fetchModels()
-                        } label: {
-                            if isFetchingModels {
-                                ProgressView().controlSize(.mini)
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                                    .font(.system(size: 11))
+            settingsOptionRow(field.label, controlWidth: SettingsControlWidth.input) {
+                VStack(alignment: .trailing, spacing: 8) {
+                    HStack(spacing: 8) {
+                        if field.key == "model" {
+                            Button {
+                                fetchModels()
+                            } label: {
+                                if isFetchingModels {
+                                    ProgressView().controlSize(.mini)
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                        .font(.system(size: 11))
+                                }
                             }
+                            .buttonStyle(.plain)
+                            .help(L("从 API 获取模型列表", "Fetch models from API"))
+                            .disabled(isFetchingModels || !hasLLMCredentials)
                         }
-                        .buttonStyle(.plain)
-                        .help(L("从 API 获取模型列表", "Fetch models from API"))
-                        .disabled(isFetchingModels || !hasLLMCredentials)
-                        .padding(.top, 18)
+                        settingsDropdown(
+                            selection: pickerBinding,
+                            options: allOptions.map { ($0.value, $0.label) }
+                        )
                     }
-                }
-                if customModeFields.contains(field.key) {
-                    settingsField("", text: customBinding, prompt: field.placeholder)
+                    if customModeFields.contains(field.key) {
+                        FixedWidthTextField(text: customBinding, placeholder: field.placeholder)
+                            .padding(.horizontal, 12)
+                            .frame(height: 36)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+                    }
                 }
             }
         } else if !field.options.isEmpty {

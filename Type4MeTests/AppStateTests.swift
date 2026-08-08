@@ -311,4 +311,73 @@ final class AppStateTests: XCTestCase {
 
         XCTAssertEqual(appState.currentMode.id, customMode.id)
     }
+
+    func testCrossModeFinishPreferenceDefaultsToDisabled() {
+        let suiteName = "CrossModeFinishPreferenceTests.default.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertFalse(CrossModeFinishPreference.isEnabled(userDefaults: defaults))
+    }
+
+    func testCrossModeFinishPreferenceReadsChangesImmediately() {
+        let suiteName = "CrossModeFinishPreferenceTests.changes.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: CrossModeFinishPreference.storageKey)
+        XCTAssertTrue(CrossModeFinishPreference.isEnabled(userDefaults: defaults))
+
+        defaults.set(false, forKey: CrossModeFinishPreference.storageKey)
+        XCTAssertFalse(CrossModeFinishPreference.isEnabled(userDefaults: defaults))
+    }
+
+    func testCrossModeFinishPreferenceSelectsExpectedProcessingMode() {
+        let startingMode = ProcessingMode.direct
+        let endingMode = ProcessingMode.smartDirect
+
+        let retainedMode = CrossModeFinishPreference.processingMode(
+            startingMode: startingMode,
+            endingMode: endingMode,
+            isEnabled: false
+        )
+        XCTAssertEqual(retainedMode.id, startingMode.id)
+
+        let switchedMode = CrossModeFinishPreference.processingMode(
+            startingMode: startingMode,
+            endingMode: endingMode,
+            isEnabled: true
+        )
+        XCTAssertEqual(switchedMode.id, endingMode.id)
+    }
+
+    func testClipboardInjectionPreferencePreservesLegacyInverseStorage() {
+        XCTAssertFalse(ClipboardInjectionPreference.isEnabled(preserveClipboard: true))
+        XCTAssertTrue(ClipboardInjectionPreference.isEnabled(preserveClipboard: false))
+        XCTAssertFalse(ClipboardInjectionPreference.preserveClipboardValue(isEnabled: true))
+        XCTAssertTrue(ClipboardInjectionPreference.preserveClipboardValue(isEnabled: false))
+    }
+
+    func testLocalASREngineSelectionNeverDisablesBothEngines() {
+        let qwenOnly = LocalASREngineSelection(
+            senseVoiceEnabled: true,
+            qwen3Enabled: false
+        ).settingSenseVoice(false, qwen3Available: true)
+        XCTAssertEqual(qwenOnly, LocalASREngineSelection(senseVoiceEnabled: false, qwen3Enabled: true))
+
+        let senseVoiceOnly = LocalASREngineSelection(
+            senseVoiceEnabled: false,
+            qwen3Enabled: true
+        ).settingQwen3(false)
+        XCTAssertEqual(senseVoiceOnly, LocalASREngineSelection(senseVoiceEnabled: true, qwen3Enabled: false))
+    }
+
+    func testLocalASREngineSelectionRejectsLastEngineDisableWhenQwenUnavailable() {
+        let selection = LocalASREngineSelection(
+            senseVoiceEnabled: true,
+            qwen3Enabled: false
+        ).settingSenseVoice(false, qwen3Available: false)
+
+        XCTAssertEqual(selection, LocalASREngineSelection(senseVoiceEnabled: true, qwen3Enabled: false))
+    }
 }

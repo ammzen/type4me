@@ -146,7 +146,7 @@ final class HotkeyStateMachineTests: XCTestCase {
     }
 
     /// Path 2: hold recording (mode A) → cross-mode toggle press (mode B). The toggle
-    /// hands off to the new mode via `onCrossModeStop`; it must also clear the former
+    /// hands off to the new mode via `onCrossModeFinish`; it must also clear the former
     /// hold binding's state and timer so the safety timer can't ghost-stop it later.
     func testHoldRecording_crossModeToggleClearsFormerHold() {
         let manager = makeManager()
@@ -156,8 +156,8 @@ final class HotkeyStateMachineTests: XCTestCase {
         let hold = makeHoldBinding(modeId: modeA, counters: counters)
         let toggle = makeToggleBinding(modeId: modeB, counters: counters)
 
-        var crossModeStops: [UUID] = []
-        manager.onCrossModeStop = { crossModeStops.append($0) }
+        var crossModeFinishes: [UUID] = []
+        manager.onCrossModeFinish = { crossModeFinishes.append($0) }
 
         manager.registerBindings([hold, toggle])
         manager.simulateBindingEvent(hold, pressed: true)
@@ -171,15 +171,37 @@ final class HotkeyStateMachineTests: XCTestCase {
                        "cross-mode stop must clear the former hold binding's holdState")
         XCTAssertFalse(manager.hasPendingSafetyTimer(for: hold.bindingId),
                        "cross-mode stop must cancel the former hold binding's safety timer")
-        XCTAssertEqual(crossModeStops, [modeB],
-                       "onCrossModeStop must fire exactly once with the new mode's id")
+        XCTAssertEqual(crossModeFinishes, [modeB],
+                       "onCrossModeFinish must fire exactly once with the new mode's id")
         XCTAssertEqual(counters.stopCount, 0,
-                       "cross-mode stop must not invoke the former binding's onStop (mode switch, not same-mode stop)")
+                       "cross-mode finish must be coordinated by the application, not the former binding")
+    }
+
+    func testToggleRecording_crossModeToggleFinishesOnceAndClearsState() {
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let modeA = UUID()
+        let modeB = UUID()
+        let toggleA = makeToggleBinding(modeId: modeA, counters: counters)
+        let toggleB = makeToggleBinding(modeId: modeB, counters: counters)
+
+        var crossModeFinishes: [UUID] = []
+        manager.onCrossModeFinish = { crossModeFinishes.append($0) }
+
+        manager.registerBindings([toggleA, toggleB])
+        manager.simulateBindingEvent(toggleA, pressed: true)
+        manager.simulateBindingEvent(toggleB, pressed: true)
+
+        XCTAssertEqual(crossModeFinishes, [modeB])
+        XCTAssertFalse(manager.isActiveRecordingBinding(toggleA.bindingId))
+        XCTAssertFalse(manager.isActiveRecordingBinding(toggleB.bindingId))
+        XCTAssertEqual(counters.startCount, 1)
+        XCTAssertEqual(counters.stopCount, 0)
     }
 
     /// Path 3: hold recording (mode A) → cross-mode hold press (mode B). Same expected
     /// cleanup as path 2; the new mode's hold does not begin recording because the
-    /// cross-mode branch hands off to `onCrossModeStop`.
+    /// cross-mode branch hands off to `onCrossModeFinish`.
     func testHoldRecording_crossModeHoldClearsFormerHold() {
         let manager = makeManager()
         let counters = BindingCounters()
@@ -188,8 +210,8 @@ final class HotkeyStateMachineTests: XCTestCase {
         let holdA = makeHoldBinding(modeId: modeA, counters: counters)
         let holdB = makeHoldBinding(modeId: modeB, counters: counters)
 
-        var crossModeStops: [UUID] = []
-        manager.onCrossModeStop = { crossModeStops.append($0) }
+        var crossModeFinishes: [UUID] = []
+        manager.onCrossModeFinish = { crossModeFinishes.append($0) }
 
         manager.registerBindings([holdA, holdB])
         manager.simulateBindingEvent(holdA, pressed: true)
@@ -204,8 +226,8 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertFalse(manager.hasPendingSafetyTimer(for: holdA.bindingId),
                        "cross-mode hold must cancel the former hold binding's safety timer")
         XCTAssertFalse(manager.isHoldActive(for: holdB.bindingId),
-                       "cross-mode hold must not begin a new hold recording (it hands off to onCrossModeStop)")
-        XCTAssertEqual(crossModeStops, [modeB])
+                       "cross-mode hold must not begin a new hold recording (it hands off to onCrossModeFinish)")
+        XCTAssertEqual(crossModeFinishes, [modeB])
         XCTAssertEqual(counters.stopCount, 0)
     }
 

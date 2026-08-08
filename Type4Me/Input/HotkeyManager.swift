@@ -236,9 +236,9 @@ final class HotkeyManager: NSObject {
         previousModifierFlags = []
     }
 
-    /// Called when recording is stopped by a different mode's hotkey.
-    /// The UUID is the new mode's ID that should be used for processing.
-    var onCrossModeStop: ((UUID) -> Void)?
+    /// Called when recording is finished by a different mode's hotkey.
+    /// The application decides whether the ending mode should replace the starting mode.
+    var onCrossModeFinish: ((UUID) -> Void)?
 
     /// Called when ESC is pressed during active recording or processing (abort).
     /// Called when ESC is pressed during active recording or processing (abort).
@@ -581,9 +581,9 @@ final class HotkeyManager: NSObject {
                 // Same mode (same binding = toggle off, or a sibling binding): stop.
                 stopActiveRecording()
             } else {
-                // Different mode: stop current and switch processing to the new mode.
+                // Different mode: finish the current recording through the app's policy.
                 clearActiveRecordingState()
-                onCrossModeStop?(binding.modeId)
+                onCrossModeFinish?(binding.modeId)
             }
         } else {
             startRecording(with: binding)
@@ -602,9 +602,9 @@ final class HotkeyManager: NSObject {
                 // Do not begin a hold recording, so the eventual release is a no-op.
                 stopActiveRecording()
             } else {
-                // Different mode: stop current and switch.
+                // Different mode: finish the current recording through the app's policy.
                 clearActiveRecordingState()
-                onCrossModeStop?(binding.modeId)
+                onCrossModeFinish?(binding.modeId)
             }
             return
         }

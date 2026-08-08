@@ -59,6 +59,34 @@ enum LiveTranscriptDisplayPreference {
     }
 }
 
+enum CrossModeFinishPreference {
+    static let storageKey = "tf_allowCrossModeFinish"
+    static let defaultValue = false
+
+    static func isEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        guard userDefaults.object(forKey: storageKey) != nil else { return defaultValue }
+        return userDefaults.bool(forKey: storageKey)
+    }
+
+    static func processingMode(
+        startingMode: ProcessingMode,
+        endingMode: ProcessingMode,
+        isEnabled: Bool
+    ) -> ProcessingMode {
+        isEnabled ? endingMode : startingMode
+    }
+}
+
+enum ClipboardInjectionPreference {
+    static func isEnabled(preserveClipboard: Bool) -> Bool {
+        !preserveClipboard
+    }
+
+    static func preserveClipboardValue(isEnabled: Bool) -> Bool {
+        !isEnabled
+    }
+}
+
 /// Visual variant of the floating-bar feedback. Lets the bar prepend a status
 /// icon (and tint the border) without introducing additional phases — the phase
 /// machine still drives layout, this just modulates the look of `.done`/`.error`.
