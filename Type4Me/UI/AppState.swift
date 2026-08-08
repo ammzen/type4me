@@ -40,6 +40,17 @@ enum RecordingVisualStyle: String, CaseIterable {
     }
 }
 
+enum LiveTranscriptDisplayPreference {
+    static let storageKey = "tf_showLiveTranscript"
+    static let defaultValue = true
+
+    /// Disabling live text only affects the active recording phase. Recovery
+    /// and final-result feedback can still show text that needs the user's attention.
+    static func showsTranscript(isEnabled: Bool, phase: FloatingBarPhase) -> Bool {
+        isEnabled || phase != .recording
+    }
+}
+
 /// Visual variant of the floating-bar feedback. Lets the bar prepend a status
 /// icon (and tint the border) without introducing additional phases — the phase
 /// machine still drives layout, this just modulates the look of `.done`/`.error`.

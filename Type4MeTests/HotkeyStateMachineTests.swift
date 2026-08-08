@@ -62,6 +62,34 @@ final class HotkeyStateMachineTests: XCTestCase {
         )
     }
 
+    private func makeFnBinding(
+        style: ProcessingMode.HotkeyStyle,
+        modeId: UUID,
+        counters: BindingCounters
+    ) -> ModeBinding {
+        ModeBinding(
+            bindingId: UUID(),
+            modeId: modeId,
+            keyCode: 63,
+            modifiers: [],
+            style: style,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() }
+        )
+    }
+
+    private func makeFnShiftBinding(modeId: UUID, counters: BindingCounters) -> ModeBinding {
+        ModeBinding(
+            bindingId: UUID(),
+            modeId: modeId,
+            keyCode: 56,
+            modifiers: .maskSecondaryFn,
+            style: .toggle,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() }
+        )
+    }
+
     // MARK: - Tests
 
     /// Direct stop path: hold press → stopActiveRecording. Before the fix this path
@@ -200,5 +228,84 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertFalse(manager.hasPendingSafetyTimer(for: binding.bindingId))
         XCTAssertFalse(manager.isActiveRecordingBinding(binding.bindingId))
         XCTAssertEqual(counters.stopCount, 1, "onStop must be called exactly once on release")
+    }
+
+    /// Regression: fn is deferred when fn+Shift is also bound. A quick fn tap
+    /// releases before that delay and must not enqueue an asynchronous recording
+    /// start after its stop has already been ignored by the idle UI.
+    func testQuickFnReleaseBeforePrefixDelayDoesNotStartHoldBinding() {
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let fnHold = makeFnBinding(style: .hold, modeId: UUID(), counters: counters)
+        let fnShift = makeFnShiftBinding(modeId: UUID(), counters: counters)
+        manager.registerBindings([fnHold, fnShift])
+
+        manager.simulateModifierFlags(.maskSecondaryFn)
+        manager.simulateModifierFlags([])
+
+        XCTAssertEqual(counters.startCount, 0)
+        XCTAssertEqual(counters.stopCount, 0)
+        XCTAssertFalse(manager.isHoldActive(for: fnHold.bindingId))
+        XCTAssertFalse(manager.isActiveRecordingBinding(fnHold.bindingId))
+        XCTAssertFalse(manager.hasPendingSafetyTimer(for: fnHold.bindingId))
+    }
+
+    /// Toggle bindings intentionally treat the same quick prefix tap as a press,
+    /// so the hold-only fix must not remove their established behavior.
+    func testQuickFnReleaseBeforePrefixDelayStillStartsToggleBinding() {
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let fnToggle = makeFnBinding(style: .toggle, modeId: UUID(), counters: counters)
+        let fnShift = makeFnShiftBinding(modeId: UUID(), counters: counters)
+        manager.registerBindings([fnToggle, fnShift])
+
+        manager.simulateModifierFlags(.maskSecondaryFn)
+        manager.simulateModifierFlags([])
+
+        XCTAssertEqual(counters.startCount, 1)
+        XCTAssertEqual(counters.stopCount, 0)
+        XCTAssertTrue(manager.isActiveRecordingBinding(fnToggle.bindingId))
+    }
+
+    /// Regression: Fn's state is not reliably present in
+    /// `CGEventSource.flagsState(.combinedSessionState)`. A hold that remains down
+    /// beyond the prefix delay must use the event tap's observed flags and start.
+    func testHeldFnPastPrefixDelayStartsAndReleaseStopsHoldBinding() {
+        let defaults = UserDefaults.standard
+        let key = HotkeyManager.modifierPrefixTriggerDelayKey
+        let priorValue = defaults.object(forKey: key)
+        defaults.set(0.02, forKey: key)
+        defer {
+            if let priorValue {
+                defaults.set(priorValue, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let fnHold = makeFnBinding(style: .hold, modeId: UUID(), counters: counters)
+        let fnShift = makeFnShiftBinding(modeId: UUID(), counters: counters)
+        manager.registerBindings([fnHold, fnShift])
+
+        manager.simulateModifierFlags(.maskSecondaryFn)
+
+        let delayElapsed = expectation(description: "modifier prefix delay elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+            delayElapsed.fulfill()
+        }
+        wait(for: [delayElapsed], timeout: 0.5)
+
+        XCTAssertEqual(counters.startCount, 1)
+        XCTAssertEqual(counters.stopCount, 0)
+        XCTAssertTrue(manager.isHoldActive(for: fnHold.bindingId))
+        XCTAssertTrue(manager.isActiveRecordingBinding(fnHold.bindingId))
+
+        manager.simulateModifierFlags([])
+
+        XCTAssertEqual(counters.stopCount, 1)
+        XCTAssertFalse(manager.isHoldActive(for: fnHold.bindingId))
+        XCTAssertFalse(manager.isActiveRecordingBinding(fnHold.bindingId))
     }
 }

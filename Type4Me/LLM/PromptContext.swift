@@ -16,11 +16,19 @@ struct PromptContext: Sendable {
         let clipboard = await MainActor.run {
             NSPasteboard.general.string(forType: .string) ?? ""
         }
-        var selected = await readSelectedTextAsync(timeoutMs: 500)
-        if selected.isEmpty {
-            selected = await readSelectedTextByTemporaryCopy(timeoutMs: 250)
-        }
+        let axSelectedText = await readSelectedTextAsync(timeoutMs: 500)
+        let selected = shouldUseTemporaryCopy(axSelectedText: axSelectedText)
+            ? await readSelectedTextByTemporaryCopy(timeoutMs: 250)
+            : (axSelectedText ?? "")
         return PromptContext(selectedText: selected, clipboardText: clipboard)
+    }
+
+    /// An empty string is a successful AX result meaning the focused control has
+    /// no selection. Simulating Command+C in that case makes many apps play the
+    /// macOS error beep. Only fall back to temporary copy when AX is unavailable,
+    /// unsupported, or timed out (`nil`).
+    internal static func shouldUseTemporaryCopy(axSelectedText: String?) -> Bool {
+        axSelectedText == nil
     }
 
     /// Expand context variables (`{selected}`, `{clipboard}`, `{tools_json}`) in
@@ -59,12 +67,12 @@ struct PromptContext: Sendable {
     /// accessibility implementation is slow or deadlocked, it blocks indefinitely.
     /// Uses two racing detached tasks (AX read vs timeout) with OSAllocatedUnfairLock
     /// to ensure the continuation is resumed exactly once.
-    private static func readSelectedTextAsync(timeoutMs: Int) async -> String {
-        guard AXIsProcessTrusted() else { return "" }
-        return await withCheckedContinuation { continuation in
+    private static func readSelectedTextAsync(timeoutMs: Int) async -> String? {
+        guard AXIsProcessTrusted() else { return nil }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let finished = OSAllocatedUnfairLock(initialState: false)
             Task.detached {
-                let text = readSelectedText() ?? ""
+                let text = readSelectedText()
                 if finished.withLock({ let old = $0; $0 = true; return !old }) {
                     continuation.resume(returning: text)
                 }
@@ -72,7 +80,7 @@ struct PromptContext: Sendable {
             Task.detached {
                 try? await Task.sleep(for: .milliseconds(timeoutMs))
                 if finished.withLock({ let old = $0; $0 = true; return !old }) {
-                    continuation.resume(returning: "")
+                    continuation.resume(returning: nil)
                 }
             }
         }

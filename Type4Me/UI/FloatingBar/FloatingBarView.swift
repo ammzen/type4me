@@ -40,6 +40,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     @State private var processingStartDate: Date?
     @State private var doneStartDate: Date?
     @State private var isHovered = false
+    @AppStorage(LiveTranscriptDisplayPreference.storageKey) private var showLiveTranscript = LiveTranscriptDisplayPreference.defaultValue
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
     @AppStorage(RecordingVisualStyle.storageKey) private var visualStyle = RecordingVisualStyle.defaultValue
 
@@ -47,6 +48,13 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var recordingVisualStyle: RecordingVisualStyle {
         RecordingVisualStyle(rawValue: visualStyle) ?? .timeline
+    }
+
+    private var showsTranscriptInCurrentPhase: Bool {
+        LiveTranscriptDisplayPreference.showsTranscript(
+            isEnabled: showLiveTranscript,
+            phase: state.barPhase
+        )
     }
 
     private var shouldRenderCapsule: Bool {
@@ -59,6 +67,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private var showTranscriptPopup: Bool {
+        guard showsTranscriptInCurrentPhase else { return false }
         if state.pinsTranscriptPopup {
             return !state.segments.isEmpty
         }
@@ -80,6 +89,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         case .preparing:
             return TF.barHeight
         case .recording:
+            guard showLiveTranscript else { return TF.barHeight }
             if state.segments.isEmpty {
                 return state.isQwen3OnlyMode ? 110 : TF.barHeight
             }
@@ -127,12 +137,13 @@ struct FloatingBarView<S: FloatingBarState>: View {
         .animation(TF.springSnappy, value: state.barPhase != .hidden)
         .animation(TF.springSnappy, value: shouldRenderCapsule)
         .animation(TF.springSnappy, value: visualStyle)
+        .animation(TF.springSnappy, value: showLiveTranscript)
         .animation(TF.springSnappy, value: showTranscriptPopup)
         .onChange(of: state.barPhase) { _, newPhase in
             handlePhaseChange(newPhase)
         }
         .onChange(of: state.segments) { _, newSegments in
-            guard state.barPhase == .recording else { return }
+            guard state.barPhase == .recording, showLiveTranscript else { return }
             let text = newSegments.map(\.text).joined()
             let textWidth = measureText(text)
             let needed = min(TF.barWidth, max(TF.barHeight, textWidth + 66.0))
@@ -227,11 +238,11 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
             // Module 2: text container (fills remaining space, grows with frame)
             // Uses overlay so text sizing never affects HStack layout
-            if state.segments.isEmpty && state.isQwen3OnlyMode {
+            if showLiveTranscript && state.segments.isEmpty && state.isQwen3OnlyMode {
                 Text(L("录音中", "Recording"))
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.white)
-            } else if !state.segments.isEmpty {
+            } else if showLiveTranscript && !state.segments.isEmpty {
                 Color.clear
                     .overlay(alignment: .trailing) {
                         Text(state.transcriptionText)

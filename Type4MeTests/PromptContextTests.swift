@@ -3,6 +3,14 @@ import XCTest
 
 final class PromptContextTests: XCTestCase {
 
+    func testEmptyAXSelectionDoesNotFallBackToCommandCopy() {
+        XCTAssertFalse(PromptContext.shouldUseTemporaryCopy(axSelectedText: ""))
+    }
+
+    func testUnavailableAXSelectionFallsBackToCommandCopy() {
+        XCTAssertTrue(PromptContext.shouldUseTemporaryCopy(axSelectedText: nil))
+    }
+
     func testExpandContextVariables_replacesSelected() {
         let ctx = PromptContext(selectedText: "hello world", clipboardText: "")
         let result = ctx.expandContextVariables("Fix: {selected}")

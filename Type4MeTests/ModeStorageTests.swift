@@ -35,6 +35,35 @@ final class ModeStorageTests: XCTestCase {
         XCTAssertTrue(savedJSON.contains("\"description\""))
     }
 
+    func testReorderedModesKeepExactOrderAcrossRestartLoad() throws {
+        let preferenceKeys = [
+            "tf_translateToChineseModeSeeded",
+            "tf_agentModeSeeded",
+            "tf_shortTextExemptionMigrated",
+        ]
+        let previousValues = Dictionary(uniqueKeysWithValues: preferenceKeys.map {
+            ($0, UserDefaults.standard.object(forKey: $0))
+        })
+        defer {
+            for key in preferenceKeys {
+                if let value = previousValues[key] as? Any {
+                    UserDefaults.standard.set(value, forKey: key)
+                } else {
+                    UserDefaults.standard.removeObject(forKey: key)
+                }
+            }
+        }
+        preferenceKeys.forEach { UserDefaults.standard.set(true, forKey: $0) }
+
+        let storage = ModeStorage(fileURL: testURL)
+        let reordered = Array(ProcessingMode.defaults.reversed())
+
+        try storage.save(reordered)
+        let loadedAfterRestart = storage.load()
+
+        XCTAssertEqual(loadedAfterRestart.map(\.id), reordered.map(\.id))
+    }
+
     func testLoadMissing_returnsBuiltins() {
         let storage = ModeStorage(fileURL: testURL)
         let loaded = storage.load()

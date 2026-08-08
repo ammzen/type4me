@@ -122,6 +122,36 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(showCount, 1)
     }
 
+    func testDisabledLiveTranscriptOnlyHidesTextWhileRecording() {
+        XCTAssertFalse(
+            LiveTranscriptDisplayPreference.showsTranscript(
+                isEnabled: false,
+                phase: .recording
+            )
+        )
+        XCTAssertTrue(
+            LiveTranscriptDisplayPreference.showsTranscript(
+                isEnabled: false,
+                phase: .recovering
+            )
+        )
+        XCTAssertTrue(
+            LiveTranscriptDisplayPreference.showsTranscript(
+                isEnabled: false,
+                phase: .done
+            )
+        )
+    }
+
+    func testEnabledLiveTranscriptShowsTextWhileRecording() {
+        XCTAssertTrue(
+            LiveTranscriptDisplayPreference.showsTranscript(
+                isEnabled: true,
+                phase: .recording
+            )
+        )
+    }
+
     func testSetLiveTranscriptReplacesExistingConfirmedSegments() {
         let appState = AppState()
         appState.setLiveTranscript(

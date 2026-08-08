@@ -685,6 +685,13 @@ final class HotkeyManager: NSObject {
         handleBindingEvent(binding: binding, pressed: pressed)
     }
 
+    /// Drive the modifier-combo evaluator with synthetic flags. This covers the
+    /// prefix-delay path used by modifier-only bindings such as fn and fn+Shift.
+    @discardableResult
+    internal func simulateModifierFlags(_ flags: CGEventFlags) -> Bool {
+        evaluateModifierBindings(currentFlags: flags)
+    }
+
     /// Stop the active recording (same path as ESC / safety timer / reset).
     internal func simulateStopActiveRecording() {
         stopActiveRecording()
@@ -807,6 +814,15 @@ final class HotkeyManager: NSObject {
 
     private func consumePendingModifierRelease(for binding: ModeBinding) -> Bool {
         guard let pending = pendingModifierTriggers.removeValue(forKey: binding.bindingId) else { return false }
+
+        // A hold binding released before its prefix delay elapsed was never
+        // physically active. Starting and stopping it back-to-back is both
+        // useless and racy: onStart schedules the recording asynchronously,
+        // so onStop can run first and observe an idle UI, leaving the later
+        // recording start unstopped. A quick release should therefore cancel
+        // the pending hold entirely. Toggle bindings still need a synthesized
+        // press/release so a quick tap retains toggle semantics.
+        guard pending.binding.style == .toggle else { return true }
         handleBindingEvent(binding: pending.binding, pressed: true)
         handleBindingEvent(binding: pending.binding, pressed: false)
         return true
@@ -824,12 +840,13 @@ final class HotkeyManager: NSObject {
             keyCode: Int(binding.keyCode),
             modifiers: binding.modifiers.rawValue
         ) else { return false }
-        let stateFlags = CGEventSource.flagsState(.combinedSessionState)
-        var current = normalizedModifierFlags(stateFlags)
-        if stateFlags.contains(.maskSecondaryFn) {
-            current.insert(.maskSecondaryFn)
-        }
-        return current == expected
+
+        // `CGEventSource.flagsState` does not reliably report `.maskSecondaryFn`
+        // while Fn is held. The event tap has already observed the authoritative
+        // flagsChanged state, and updates `previousModifierFlags` before scheduling
+        // the prefix delay. Use that state so a deferred Fn hold can actually fire;
+        // a release event clears it before the pending trigger gets a chance to run.
+        return previousModifierFlags == expected
     }
 
     // MARK: - Safety Timer

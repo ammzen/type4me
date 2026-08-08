@@ -23,6 +23,7 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     @AppStorage("tf_bypassProxy") private var bypassProxy = "off"
     @AppStorage("tf_stripTrailingPunctuation") private var stripTrailingPunctuation = "off"
     @AppStorage("tf_preserveCJKLatinSpacing") private var preserveCJKLatinSpacing = true
+    @AppStorage(LiveTranscriptDisplayPreference.storageKey) private var showLiveTranscript = LiveTranscriptDisplayPreference.defaultValue
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
     @AppStorage("tf_micKeepAlive") private var micKeepAlive = false
     @AppStorage(AudioInputDevicePreferenceStore.modeKey) private var microphonePreferenceMode = AudioInputDevicePreferenceMode.systemDefault.rawValue
@@ -91,13 +92,21 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
 
                 SettingsDivider()
 
-                // Row 2: 去句末标点 / 中英文空格 / 悬停文字预览
+                // Row 2: 实时文字 / 悬停文字预览
+                HStack(alignment: .top, spacing: 16) {
+                    liveTranscriptRow
+                        .frame(maxWidth: .infinity)
+                    hoverPreviewRow
+                        .frame(maxWidth: .infinity)
+                }
+
+                SettingsDivider()
+
+                // Row 3: 去句末标点 / 中英文空格
                 HStack(alignment: .top, spacing: 16) {
                     stripPunctuationRow
                         .frame(maxWidth: .infinity)
                     cjkLatinSpacingRow
-                        .frame(maxWidth: .infinity)
-                    hoverPreviewRow
                         .frame(maxWidth: .infinity)
                 }
             }
@@ -428,6 +437,29 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
                     ("off", L("关闭", "Off")),
                 ]
             )
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var liveTranscriptRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L("实时展示文本", "Live Transcript").uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(TF.settingsTextTertiary)
+            settingsDropdown(
+                selection: Binding(
+                    get: { showLiveTranscript ? "on" : "off" },
+                    set: { showLiveTranscript = $0 == "on" }
+                ),
+                options: [
+                    ("on", L("开启", "On")),
+                    ("off", L("关闭", "Off")),
+                ]
+            )
+            Text(L("关闭后录音时只展示动效", "Show only animation while recording"))
+                .font(.system(size: 10))
+                .foregroundStyle(TF.settingsTextTertiary)
         }
         .padding(.vertical, 6)
     }

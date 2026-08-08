@@ -79,6 +79,11 @@ struct ModeStorage {
                 }
                 return d
             }
+            if mode.id == ProcessingMode.macActionId {
+                var d = ProcessingMode.macAction
+                d.hotkeyBindings = mode.hotkeyBindings
+                return d
+            }
             if mode.id == ProcessingMode.translate.id {
                 return migrateSeededDefaultPrompt(
                     mode,

@@ -629,7 +629,12 @@ struct ModesSettingsTab: View {
     }
 
     private func persistModes() {
-        try? ModeStorage().save(modes)
+        do {
+            try ModeStorage().save(modes)
+        } catch {
+            NSLog("[Type4Me] Failed to persist mode order/settings: %@", error.localizedDescription)
+            DebugFileLogger.log("failed to persist mode order/settings: \(error)")
+        }
         appState.availableModes = modes
         NotificationCenter.default.post(name: .modesDidChange, object: nil)
         if let updatedCurrentMode = modes.first(where: { $0.id == appState.currentMode.id }) {
@@ -676,6 +681,11 @@ private struct ModeDropDelegate: DropDelegate {
                 toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex
             )
         }
+        // `dropEntered` is the point where the visible order actually changes.
+        // Persist here instead of relying only on `performDrop`: AppKit may end a
+        // drag over row gaps or scroll-view edges without calling the row's
+        // `performDrop`, which previously left a reordered UI backed by stale disk data.
+        onReorder()
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
