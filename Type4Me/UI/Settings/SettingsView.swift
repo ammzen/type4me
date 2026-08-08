@@ -101,6 +101,17 @@ struct SettingsView: View {
 
             HStack(spacing: 0) {
                 sidebar
+                    .overlay(alignment: .topLeading) {
+                        // Fresh standard window buttons placed exactly 25pt from
+                        // the window's top/left (15pt inside the 10pt-inset card),
+                        // wired to performClose/Miniaturize/Zoom. Living in the
+                        // content layer keeps clicks/hover reliable; the native
+                        // traffic lights are hidden by the cluster.
+                        WindowControlsCluster()
+                            .frame(width: 54, height: 14)
+                            .padding(.leading, 15)
+                            .padding(.top, 15)
+                    }
                     .padding(.leading, 10)
                     .padding(.vertical, 10)
                     .fixedSize(horizontal: true, vertical: false)
@@ -201,7 +212,9 @@ struct SettingsView: View {
         }
         .frame(width: 224)
         .background(
-            RoundedRectangle(cornerRadius: 26, style: .continuous)
+            // Floating card with a 10pt margin on top/left/bottom; rounded to
+            // read like the window's own corner curvature (Apple Reminders).
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(TF.settingsSidebar)
         )
     }
@@ -463,40 +476,159 @@ private struct SettingsWindowConfigurator: NSViewRepresentable {
                 alpha: 1
             )
             window.titlebarAppearsTransparent = true
-            window.isMovableByWindowBackground = true
+            // Only the native (transparent) title bar strip should move the window;
+            // dragging elsewhere is reserved for in-content interactions like
+            // reordering the mode list.
+            window.isMovableByWindowBackground = false
             window.contentMinSize = NSSize(width: 900, height: 600)
-
-            let controls: [(NSWindow.ButtonType, CGFloat)] = [
-                (.closeButton, 25),
-                (.miniaturizeButton, 48),
-                (.zoomButton, 71)
-            ]
-            for (type, leading) in controls {
-                guard let button = window.standardWindowButton(type),
-                      let titlebar = button.superview
-                else { continue }
-
-                button.isHidden = false
-
-                let constraintPrefix = "Type4Me.windowControl.\(type.rawValue)."
-                NSLayoutConstraint.deactivate(titlebar.constraints.filter {
-                    $0.identifier?.hasPrefix(constraintPrefix) == true
-                })
-
-                button.translatesAutoresizingMaskIntoConstraints = false
-                let constraints = [
-                    button.leadingAnchor.constraint(equalTo: titlebar.leadingAnchor, constant: leading),
-                    button.topAnchor.constraint(equalTo: titlebar.topAnchor, constant: 25),
-                    button.widthAnchor.constraint(equalToConstant: 14),
-                    button.heightAnchor.constraint(equalToConstant: 14)
-                ]
-                for (index, constraint) in constraints.enumerated() {
-                    constraint.identifier = "\(constraintPrefix)\(index)"
-                }
-                NSLayoutConstraint.activate(constraints)
-            }
+            // The native traffic lights are hidden by `WindowControlsCluster`,
+            // which draws fresh standard buttons at the desired inset inside
+            // the sidebar card (see SettingsView body).
         }
     }
+
+}
+
+/// Draws fresh standard macOS window buttons (close/miniaturize/zoom) at an
+/// arbitrary position inside the content layer and hides the window's native
+/// traffic lights, per Apple's documented approach for custom placement.
+///
+/// The buttons are created via `NSWindow.standardWindowButton(_:for:)` and wired
+/// to `performClose(_:)` / `performMiniaturize(_:)` / `performZoom(_:)` through
+/// the responder chain, so they behave exactly like the originals. Living in the
+/// SwiftUI content hierarchy (not the fragile titlebar layer) keeps clicks and
+/// hover glyphs reliable.
+private struct WindowControlsCluster: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowControlsClusterView {
+        WindowControlsClusterView()
+    }
+
+    func updateNSView(_ nsView: WindowControlsClusterView, context: Context) {
+        nsView.hideNativeButtons()
+    }
+}
+
+private final class WindowControlsClusterView: NSView {
+    private static let style: NSWindow.StyleMask =
+        [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+    private static let spacing: CGFloat = 20
+    private static let diameter: CGFloat = 14
+
+    private let close: NSButton
+    private let mini: NSButton
+    private let zoom: NSButton
+    private let glyphs: [WindowControlGlyphView]
+    private var mouseInside = false {
+        didSet {
+            guard mouseInside != oldValue else { return }
+            glyphs.forEach { $0.isHovered = mouseInside }
+        }
+    }
+
+    override init(frame frameRect: NSRect) {
+        close = NSWindow.standardWindowButton(.closeButton, for: Self.style) ?? NSButton()
+        mini = NSWindow.standardWindowButton(.miniaturizeButton, for: Self.style) ?? NSButton()
+        zoom = NSWindow.standardWindowButton(.zoomButton, for: Self.style) ?? NSButton()
+        glyphs = [
+            WindowControlGlyphView(symbolName: "xmark"),
+            WindowControlGlyphView(symbolName: "minus"),
+            WindowControlGlyphView(symbolName: "arrow.up.left.and.arrow.down.right")
+        ]
+        super.init(frame: frameRect)
+
+        for button in [close, mini, zoom] {
+            button.target = nil  // routed up the responder chain to the window
+            addSubview(button)
+        }
+        glyphs.forEach(addSubview)
+        close.action = #selector(NSWindow.performClose(_:))
+        mini.action = #selector(NSWindow.performMiniaturize(_:))
+        zoom.action = #selector(NSWindow.performZoom(_:))
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    // Flipped so button origins are measured from the top edge.
+    override var isFlipped: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        hideNativeButtons()
+    }
+
+    /// Hide the window's real traffic lights so only our cluster is visible.
+    func hideNativeButtons() {
+        guard let window else { return }
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(kind)?.isHidden = true
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        for (index, button) in [close, mini, zoom].enumerated() {
+            let frame = NSRect(
+                x: CGFloat(index) * Self.spacing,
+                y: 0,
+                width: Self.diameter,
+                height: Self.diameter
+            )
+            button.frame = frame
+            glyphs[index].frame = frame
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        // Pad the tracking region so the glyphs light up as the cursor
+        // approaches the cluster, matching native traffic-light behavior.
+        let region = bounds.insetBy(dx: -4, dy: -4)
+        addTrackingArea(
+            NSTrackingArea(
+                rect: region,
+                options: [.mouseEnteredAndExited, .activeAlways],
+                owner: self,
+                userInfo: nil
+            )
+        )
+        // Handle the case where the cursor is already inside when the tracking
+        // area is (re)created — mouseEntered won't fire on its own then.
+        if let window, window.isVisible {
+            let pointInWindow = window.mouseLocationOutsideOfEventStream
+            let pointInView = convert(pointInWindow, from: nil)
+            mouseInside = region.contains(pointInView)
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        mouseInside = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        mouseInside = false
+    }
+}
+
+/// A visual-only overlay. Returning `nil` from hit-testing lets the native
+/// window button underneath retain clicks, accessibility, and the zoom menu.
+private final class WindowControlGlyphView: NSImageView {
+    var isHovered = false {
+        didSet { isHidden = !isHovered }
+    }
+
+    init(symbolName: String) {
+        super.init(frame: .zero)
+        image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 7, weight: .bold))
+        imageScaling = .scaleProportionallyDown
+        contentTintColor = NSColor(calibratedWhite: 0.12, alpha: 0.78)
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 // MARK: - Reusable Components

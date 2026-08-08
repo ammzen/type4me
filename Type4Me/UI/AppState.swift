@@ -63,6 +63,29 @@ struct TranscriptionSegment: Identifiable, Equatable {
     }
 }
 
+// MARK: - Hotkey Binding
+
+/// A single hotkey bound to a mode. A mode may have any number of these,
+/// mixing keyboard / mouse / media keys and hold / toggle styles freely.
+struct HotkeyBinding: Codable, Identifiable, Equatable, Hashable {
+    let id: UUID
+    var keyCode: Int
+    var modifiers: UInt64?
+    var style: ProcessingMode.HotkeyStyle
+
+    init(
+        id: UUID = UUID(),
+        keyCode: Int,
+        modifiers: UInt64? = nil,
+        style: ProcessingMode.HotkeyStyle? = nil
+    ) {
+        self.id = id
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        self.style = style ?? ProcessingMode.defaultHotkeyStyle
+    }
+}
+
 // MARK: - Processing Mode
 
 struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
@@ -72,9 +95,10 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     var prompt: String
     var isBuiltin: Bool
     var processingLabel: String
-    var hotkeyCode: Int?
-    var hotkeyModifiers: UInt64?
-    var hotkeyStyle: HotkeyStyle
+    var hotkeyBindings: [HotkeyBinding]
+    /// Per-mode short-text-skip threshold. When the recognized text is shorter
+    /// than this many characters, LLM post-processing is skipped. 0 disables it.
+    var shortTextExemption: Int
 
     enum HotkeyStyle: String, Codable, CaseIterable {
         case hold    // press and hold to record
@@ -102,9 +126,8 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         prompt: String,
         isBuiltin: Bool,
         processingLabel: String = L("处理中", "Processing"),
-        hotkeyCode: Int? = nil,
-        hotkeyModifiers: UInt64? = nil,
-        hotkeyStyle: HotkeyStyle? = nil
+        hotkeyBindings: [HotkeyBinding] = [],
+        shortTextExemption: Int = 0
     ) {
         self.id = id
         self.name = name
@@ -112,13 +135,14 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         self.prompt = prompt
         self.isBuiltin = isBuiltin
         self.processingLabel = processingLabel
-        self.hotkeyCode = hotkeyCode
-        self.hotkeyModifiers = hotkeyModifiers
-        self.hotkeyStyle = hotkeyStyle ?? Self.defaultHotkeyStyle
+        self.hotkeyBindings = hotkeyBindings
+        self.shortTextExemption = shortTextExemption
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, prompt, isBuiltin, processingLabel
+        case hotkeyBindings, shortTextExemption
+        // Legacy single-hotkey keys, decoded for backward compatibility only.
         case hotkeyCode, hotkeyModifiers, hotkeyStyle
     }
 
@@ -131,9 +155,33 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         prompt = try container.decode(String.self, forKey: .prompt)
         isBuiltin = try container.decode(Bool.self, forKey: .isBuiltin)
         processingLabel = try container.decodeIfPresent(String.self, forKey: .processingLabel) ?? L("处理中", "Processing")
-        hotkeyCode = try container.decodeIfPresent(Int.self, forKey: .hotkeyCode)
-        hotkeyModifiers = try container.decodeIfPresent(UInt64.self, forKey: .hotkeyModifiers)
-        hotkeyStyle = try container.decodeIfPresent(HotkeyStyle.self, forKey: .hotkeyStyle) ?? Self.defaultHotkeyStyle
+        shortTextExemption = try container.decodeIfPresent(Int.self, forKey: .shortTextExemption) ?? 0
+
+        if let bindings = try container.decodeIfPresent([HotkeyBinding].self, forKey: .hotkeyBindings) {
+            // New format: use the binding array directly.
+            hotkeyBindings = bindings
+        } else if let legacyCode = try container.decodeIfPresent(Int.self, forKey: .hotkeyCode) {
+            // Legacy format: migrate the single hotkey into a one-element array.
+            let legacyModifiers = try container.decodeIfPresent(UInt64.self, forKey: .hotkeyModifiers)
+            let legacyStyle = try container.decodeIfPresent(HotkeyStyle.self, forKey: .hotkeyStyle)
+                ?? Self.defaultHotkeyStyle
+            hotkeyBindings = [HotkeyBinding(keyCode: legacyCode, modifiers: legacyModifiers, style: legacyStyle)]
+        } else {
+            hotkeyBindings = []
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(description, forKey: .description)
+        try container.encode(prompt, forKey: .prompt)
+        try container.encode(isBuiltin, forKey: .isBuiltin)
+        try container.encode(processingLabel, forKey: .processingLabel)
+        try container.encode(shortTextExemption, forKey: .shortTextExemption)
+        // Only the new array format is written; legacy keys are intentionally omitted.
+        try container.encode(hotkeyBindings, forKey: .hotkeyBindings)
     }
 
     // MARK: - Built-in Mode IDs (stable, never change)
@@ -141,6 +189,16 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     static let smartDirectId = UUID(uuidString: "00000000-0000-0000-0000-000000000006")!
     static let translateId = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
     static let macActionId = UUID(uuidString: "00000000-0000-0000-0000-000000000008")!
+
+    // MARK: - Built-in default hotkey binding IDs (stable seeds)
+    // Deterministic so the computed `builtins`/`defaults` seeds don't churn on
+    // each access. Once persisted, user edits own the binding IDs.
+    private static let directBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+    private static let formalWritingBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000002")!
+    private static let promptOptimizeBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000003")!
+    private static let translateBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000004")!
+    private static let agentModeBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000005")!
+    private static let macActionBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000006")!
 
     /// Descriptions for records written before the `description` field existed.
     /// Stable IDs let official modes migrate without deriving UI copy from prompts.
@@ -173,7 +231,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             name: L("快速模式", "Quick Mode"),
             description: defaultDescription(for: directId),
             prompt: "", isBuiltin: true,
-            hotkeyCode: 62, hotkeyModifiers: 0, hotkeyStyle: .toggle
+            hotkeyBindings: [HotkeyBinding(id: directBindingId, keyCode: 62, modifiers: 0, style: .toggle)]
         )
     }
 
@@ -390,7 +448,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: formalWritingPromptTemplate,
             isBuiltin: true,
             processingLabel: L("润色中", "Polishing"),
-            hotkeyCode: 18, hotkeyModifiers: 524288, hotkeyStyle: .toggle
+            hotkeyBindings: [HotkeyBinding(id: formalWritingBindingId, keyCode: 18, modifiers: 524288, style: .toggle)]
         )
     }
 
@@ -499,7 +557,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             """#,
             isBuiltin: false,
             processingLabel: L("优化中", "Optimizing"),
-            hotkeyCode: 19, hotkeyModifiers: 524288, hotkeyStyle: .toggle
+            hotkeyBindings: [HotkeyBinding(id: promptOptimizeBindingId, keyCode: 19, modifiers: 524288, style: .toggle)]
         )
     }
 
@@ -511,7 +569,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: translatePromptTemplate,
             isBuiltin: false,
             processingLabel: L("翻译中", "Translating"),
-            hotkeyCode: 20, hotkeyModifiers: 524288, hotkeyStyle: .toggle
+            hotkeyBindings: [HotkeyBinding(id: translateBindingId, keyCode: 20, modifiers: 524288, style: .toggle)]
         )
     }
 
@@ -522,8 +580,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             description: defaultDescription(for: commandModeId),
             prompt: "你是一个文字处理工具，\n现在选择的内容是：\"{selected}\"\n现在剪切板(复制)的内容是:\"{clipboard}\"\n请在以下规则下执行命令\n1. 不用解释，直接输出\n2. 不要使用任何 markdown 语法\n命令如下：{text}",
             isBuiltin: false,
-            processingLabel: L("执行中", "Executing"),
-            hotkeyStyle: .toggle
+            processingLabel: L("执行中", "Executing")
         )
     }
 
@@ -601,7 +658,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: macActionPromptTemplate,
             isBuiltin: true,
             processingLabel: L("执行中", "Executing"),
-            hotkeyCode: 23, hotkeyModifiers: 524288, hotkeyStyle: .toggle
+            hotkeyBindings: [HotkeyBinding(id: macActionBindingId, keyCode: 23, modifiers: 524288, style: .toggle)]
         )
     }
 
@@ -752,7 +809,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: agentModePromptTemplate,
             isBuiltin: false,
             processingLabel: L("处理中", "Handling"),
-            hotkeyCode: 21, hotkeyModifiers: 524288, hotkeyStyle: .toggle
+            hotkeyBindings: [HotkeyBinding(id: agentModeBindingId, keyCode: 21, modifiers: 524288, style: .toggle)]
         )
     }
 

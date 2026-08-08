@@ -33,9 +33,8 @@ struct ModeStorage {
         var result = saved.compactMap { mode -> ProcessingMode? in
             if mode.id == ProcessingMode.directId {
                 var d = ProcessingMode.direct
-                d.hotkeyCode = mode.hotkeyCode
-                d.hotkeyModifiers = mode.hotkeyModifiers
-                d.hotkeyStyle = mode.hotkeyStyle
+                d.hotkeyBindings = mode.hotkeyBindings
+                d.shortTextExemption = mode.shortTextExemption
                 return d
             }
             if mode.id == ProcessingMode.smartDirectId {
@@ -58,10 +57,9 @@ struct ModeStorage {
                     || mode.prompt.contains("内容包含多个要点时")
                     || isV4
                 var d = ProcessingMode.formalWriting
-                d.hotkeyCode = mode.hotkeyCode
-                d.hotkeyModifiers = mode.hotkeyModifiers
-                d.hotkeyStyle = mode.hotkeyStyle
+                d.hotkeyBindings = mode.hotkeyBindings
                 d.description = mode.description
+                d.shortTextExemption = mode.shortTextExemption
                 // If user customized the prompt, keep theirs
                 if !isLegacy {
                     d.name = mode.name
@@ -83,9 +81,7 @@ struct ModeStorage {
                     || (mode.prompt.contains("不编造具体方向") && !mode.prompt.contains("分析/研究/方案类任务"))  // V3 without complexity fix
                 if isLegacy {
                     var migrated = ProcessingMode.promptOptimize
-                    migrated.hotkeyCode = mode.hotkeyCode
-                    migrated.hotkeyModifiers = mode.hotkeyModifiers
-                    migrated.hotkeyStyle = mode.hotkeyStyle
+                    migrated.hotkeyBindings = mode.hotkeyBindings
                     migrated.description = mode.description
                     return migrated
                 }
@@ -133,6 +129,21 @@ struct ModeStorage {
             UserDefaults.standard.set(true, forKey: agentSeedKey)
         }
 
+        // One-time migration: the short-text-skip threshold used to be a single
+        // global UserDefaults value that only applied to 语音润色 (formal writing).
+        // Move it onto that mode so the per-mode setting preserves existing behavior.
+        let exemptionMigratedKey = "tf_shortTextExemptionMigrated"
+        if !UserDefaults.standard.bool(forKey: exemptionMigratedKey) {
+            let legacyGlobal = Int(UserDefaults.standard.string(forKey: "tf_shortTextExemption") ?? "0") ?? 0
+            if legacyGlobal > 0,
+               let idx = result.firstIndex(where: { $0.id == ProcessingMode.formalWritingId }),
+               result[idx].shortTextExemption == 0 {
+                result[idx].shortTextExemption = legacyGlobal
+                try? save(result)
+            }
+            UserDefaults.standard.set(true, forKey: exemptionMigratedKey)
+        }
+
         return result
     }
 
@@ -149,9 +160,8 @@ struct ModeStorage {
         if !mode.description.isEmpty {
             migrated.description = mode.description
         }
-        migrated.hotkeyCode = mode.hotkeyCode
-        migrated.hotkeyModifiers = mode.hotkeyModifiers
-        migrated.hotkeyStyle = mode.hotkeyStyle
+        migrated.hotkeyBindings = mode.hotkeyBindings
+        migrated.shortTextExemption = mode.shortTextExemption
         migrated.isBuiltin = false
         return migrated
     }

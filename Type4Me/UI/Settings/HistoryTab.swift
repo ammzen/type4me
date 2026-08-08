@@ -1187,8 +1187,10 @@ struct HistoryTab: View {
             )
         }
         .padding(.vertical, 4)
-        .background(TF.settingsCard)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(TF.settingsCard)
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(TF.settingsBorder, lineWidth: 1)

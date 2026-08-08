@@ -765,8 +765,8 @@ actor RecognitionSession {
         // Early label override for short text exemption (语音润色 only).
         // Use streaming transcript to update UI immediately, before ASR teardown,
         // so the floating bar doesn't flash "润色中" → "校准中".
-        if needsLLM && currentMode.id == ProcessingMode.formalWritingId {
-            let exemptionThreshold = Int(UserDefaults.standard.string(forKey: "tf_shortTextExemption") ?? "0") ?? 0
+        if needsLLM && currentMode.shortTextExemption > 0 {
+            let exemptionThreshold = currentMode.shortTextExemption
             if exemptionThreshold > 0 {
                 let streamingText = currentTranscript.composedText
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -836,10 +836,8 @@ actor RecognitionSession {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             finalASRText = SnippetStorage.applyEffective(to: finalASRText, bundleId: targetBundleId)
 
-            // Short text exemption: skip LLM for short texts (语音润色 only)
-            let exemptionThreshold = currentMode.id == ProcessingMode.formalWritingId
-                ? (Int(UserDefaults.standard.string(forKey: "tf_shortTextExemption") ?? "0") ?? 0)
-                : 0
+            // Short text exemption: skip LLM for short texts (per-mode threshold)
+            let exemptionThreshold = currentMode.shortTextExemption
             if exemptionThreshold > 0 && finalASRText.count < exemptionThreshold {
                 DebugFileLogger.log("stop: short text exemption (\(finalASRText.count) < \(exemptionThreshold) chars), skipping LLM")
                 needsLLM = false
@@ -943,9 +941,9 @@ actor RecognitionSession {
             // Apply snippet replacements before LLM (e.g. "我的邮箱" → actual email)
             finalText = SnippetStorage.applyEffective(to: finalText, bundleId: targetBundleId)
 
-            // Short text exemption (for non-streaming providers, 语音润色 only)
-            if needsLLM && earlyLLMTask == nil && currentMode.id == ProcessingMode.formalWritingId {
-                let exemptionThreshold = Int(UserDefaults.standard.string(forKey: "tf_shortTextExemption") ?? "0") ?? 0
+            // Short text exemption (for non-streaming providers, per-mode threshold)
+            if needsLLM && earlyLLMTask == nil && currentMode.shortTextExemption > 0 {
+                let exemptionThreshold = currentMode.shortTextExemption
                 if exemptionThreshold > 0 && finalText.count < exemptionThreshold {
                     DebugFileLogger.log("stop: short text exemption (\(finalText.count) < \(exemptionThreshold) chars), skipping LLM (sync path)")
                     needsLLM = false

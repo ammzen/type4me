@@ -282,77 +282,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func registerHotkeys(for provider: ASRProvider) {
         let availableModes = appState.availableModes
         let modes = ASRProviderRegistry.supportedModes(from: availableModes, for: provider)
-        let bindings: [ModeBinding] = modes.compactMap { mode in
-            guard let code = mode.hotkeyCode else { return nil }
-            let modifiers = CGEventFlags(rawValue: mode.hotkeyModifiers ?? 0)
+        let bindings: [ModeBinding] = modes.flatMap { mode -> [ModeBinding] in
             let capturedMode = mode
-            return ModeBinding(
-                modeId: mode.id,
-                keyCode: CGKeyCode(code),
-                modifiers: modifiers,
-                style: capturedMode.hotkeyStyle,
-                onStart: { [weak self] in
-                    guard let self else { return }
+            let onStart: @Sendable () -> Void = { [weak self] in
+                guard let self else { return }
 
-                    let phase = MainActor.assumeIsolated { self.appState.barPhase }
+                let phase = MainActor.assumeIsolated { self.appState.barPhase }
 
-                    // Safety: if already recording, the toggle state is out of sync.
-                    // Redirect to stop so we don't discard accumulated text.
-                    if phase == .recording || phase == .preparing {
-                        NSLog("[Type4Me] >>> HOTKEY: toggle desync – onStart while recording, redirecting to STOP (phase=%@)", String(describing: phase))
-                        DebugFileLogger.log("hotkey toggle desync: onStart while recording, redirecting to stop phase=\(phase)")
-                        MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
-                        MainActor.assumeIsolated { self.appState.stopRecording() }
-                        if phase == .preparing {
-                            Task { await self.session.cancelRecording() }
-                        } else {
-                            Task { await self.session.stopRecording() }
-                        }
-                        return
-                    }
-
-                    // Block new recording while LLM/injection is still in progress.
-                    // The current session must finish (paste + history save) before a new one can start.
-                    if phase == .processing {
-                        NSLog("[Type4Me] >>> HOTKEY: onStart blocked – still processing")
-                        DebugFileLogger.log("hotkey onStart blocked: still processing")
-                        MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
-                        return
-                    }
-
-                    let selectedProvider = KeychainService.selectedASRProvider
-                    let resolvedMode = ASRProviderRegistry.resolvedMode(for: capturedMode, provider: selectedProvider)
-                    let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
-                    NSLog("[Type4Me] >>> HOTKEY: Record START (mode: %@)", effectiveMode.name)
-                    DebugFileLogger.log("hotkey record start mode=\(effectiveMode.name)")
-                    Task { @MainActor in
-                        self.appState.currentMode = effectiveMode
-                        self.appState.startRecording()
-                    }
-                    Task {
-                        // Wait for previous session to fully clean up before starting
-                        let ready = await self.session.awaitIdle()
-                        if !ready {
-                            NSLog("[Type4Me] >>> HOTKEY: previous session did not reach idle in time")
-                            DebugFileLogger.log("hotkey start: awaitIdle timed out")
-                        }
-                        await self.session.startRecording(mode: effectiveMode)
-                    }
-                },
-                onStop: { [weak self] in
-                    guard let self else { return }
-
-                    let phase = MainActor.assumeIsolated { self.appState.barPhase }
-                    NSLog("[Type4Me] >>> HOTKEY: Record STOP (phase=%@)", String(describing: phase))
-                    DebugFileLogger.log("hotkey record stop phase=\(phase)")
+                // Safety: if already recording, the toggle state is out of sync.
+                // Redirect to stop so we don't discard accumulated text.
+                if phase == .recording || phase == .preparing {
+                    NSLog("[Type4Me] >>> HOTKEY: toggle desync – onStart while recording, redirecting to STOP (phase=%@)", String(describing: phase))
+                    DebugFileLogger.log("hotkey toggle desync: onStart while recording, redirecting to stop phase=\(phase)")
+                    MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
                     MainActor.assumeIsolated { self.appState.stopRecording() }
                     if phase == .preparing {
                         Task { await self.session.cancelRecording() }
                     } else {
                         Task { await self.session.stopRecording() }
                     }
+                    return
                 }
-            )
+
+                // Block new recording while LLM/injection is still in progress.
+                // The current session must finish (paste + history save) before a new one can start.
+                if phase == .processing {
+                    NSLog("[Type4Me] >>> HOTKEY: onStart blocked – still processing")
+                    DebugFileLogger.log("hotkey onStart blocked: still processing")
+                    MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
+                    return
+                }
+
+                let selectedProvider = KeychainService.selectedASRProvider
+                let resolvedMode = ASRProviderRegistry.resolvedMode(for: capturedMode, provider: selectedProvider)
+                let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
+                NSLog("[Type4Me] >>> HOTKEY: Record START (mode: %@)", effectiveMode.name)
+                DebugFileLogger.log("hotkey record start mode=\(effectiveMode.name)")
+                Task { @MainActor in
+                    self.appState.currentMode = effectiveMode
+                    self.appState.startRecording()
+                }
+                Task {
+                    // Wait for previous session to fully clean up before starting
+                    let ready = await self.session.awaitIdle()
+                    if !ready {
+                        NSLog("[Type4Me] >>> HOTKEY: previous session did not reach idle in time")
+                        DebugFileLogger.log("hotkey start: awaitIdle timed out")
+                    }
+                    await self.session.startRecording(mode: effectiveMode)
+                }
+            }
+            let onStop: @Sendable () -> Void = { [weak self] in
+                guard let self else { return }
+
+                let phase = MainActor.assumeIsolated { self.appState.barPhase }
+                NSLog("[Type4Me] >>> HOTKEY: Record STOP (phase=%@)", String(describing: phase))
+                DebugFileLogger.log("hotkey record stop phase=\(phase)")
+                MainActor.assumeIsolated { self.appState.stopRecording() }
+                if phase == .preparing {
+                    Task { await self.session.cancelRecording() }
+                } else {
+                    Task { await self.session.stopRecording() }
+                }
+            }
+
+            // Fan out: one ModeBinding per hotkey binding, all sharing this mode's callbacks.
+            return mode.hotkeyBindings.map { hk in
+                ModeBinding(
+                    bindingId: hk.id,
+                    modeId: mode.id,
+                    keyCode: CGKeyCode(hk.keyCode),
+                    modifiers: CGEventFlags(rawValue: hk.modifiers ?? 0),
+                    style: hk.style,
+                    onStart: onStart,
+                    onStop: onStop
+                )
+            }
         }
         hotkeyManager.registerBindings(bindings)
 
@@ -500,6 +505,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc
     private func dockIconPreferenceChanged(_ notification: Notification) {
+        // `UserDefaults.didChangeNotification` is delivered on whatever thread
+        // performed the change. When another process (e.g. System Settings /
+        // tccd while the user grants a permission) triggers a cross-process
+        // preferences sync, this fires on a background thread. Touching NSApp
+        // off the main thread is unsafe and crashes the app, so always hop to
+        // main before reading/mutating the activation policy.
+        if Thread.isMainThread {
+            Self.applyDockIconPreference()
+        } else {
+            DispatchQueue.main.async { Self.applyDockIconPreference() }
+        }
+    }
+
+    private static func applyDockIconPreference() {
         let showDock = UserDefaults.standard.object(forKey: "tf_showDockIcon") as? Bool ?? true
         let current = NSApp.activationPolicy()
         let desired: NSApplication.ActivationPolicy = showDock ? .regular : .accessory
@@ -603,6 +622,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Present the settings window from anywhere (URL command, Dock reopen,
+    /// etc.). Uses the standard SwiftUI settings-open selector so it works
+    /// even before the MenuBarExtra scene has registered `openSettingsAction`,
+    /// and retries on the next runloop until a window is visible.
+    func presentSettings(remainingAttempts: Int = 25) {
+        let hasVisibleAppWindow = NSApp.windows.contains {
+            $0.isVisible && !$0.className.contains("NSStatusBar")
+        }
+        if hasVisibleAppWindow {
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        _ = NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        Self.openSettingsAction?()
+        NSApp.activate(ignoringOtherApps: true)
+        guard remainingAttempts > 1 else {
+            NSLog("[Type4Me] Timed out while opening Settings")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.presentSettings(remainingAttempts: remainingAttempts - 1)
+        }
+    }
+
     #if DEBUG
     private func presentSettingsWhenReady(remainingAttempts: Int) {
         let hasVisibleAppWindow = NSApp.windows.contains {
@@ -647,6 +690,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 SenseVoiceServerManager.syncHotwordsAndRestart()
             case "auth":
                 NSLog("[Type4Me] URL command: auth (no-op, code-based auth now)")
+            case "settings", "preferences":
+                NSLog("[Type4Me] URL command: settings")
+                presentSettings()
             default:
                 NSLog("[Type4Me] Unknown URL command: \(url)")
             }
@@ -729,10 +775,12 @@ struct MenuBarContent: View {
                     name: .navigateToMode, object: mode.id
                 )
             } label: {
-                let hotkey = mode.hotkeyCode.map {
-                    HotkeyRecorderView.keyDisplayName(keyCode: $0, modifiers: mode.hotkeyModifiers)
-                }
-                Text("\(mode.name)  [\(hotkey ?? L("未绑定", "Unbound"))]")
+                let hotkeyText = mode.hotkeyBindings.isEmpty
+                    ? L("未绑定", "Unbound")
+                    : mode.hotkeyBindings
+                        .map { HotkeyRecorderView.keyDisplayName(keyCode: $0.keyCode, modifiers: $0.modifiers) }
+                        .joined(separator: " / ")
+                Text("\(mode.name)  [\(hotkeyText)]")
             }
         }
 

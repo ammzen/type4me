@@ -107,12 +107,12 @@ final class ModeStorageTests: XCTestCase {
         var legacyFormalWriting = ProcessingMode.formalWriting
         legacyFormalWriting.prompt = ProcessingMode.legacyFormalWritingPromptTemplate
         legacyFormalWriting.processingLabel = "我的润色中"
-        legacyFormalWriting.hotkeyCode = 30
+        legacyFormalWriting.hotkeyBindings = [HotkeyBinding(keyCode: 30, modifiers: 0, style: .toggle)]
 
         var legacyTranslate = ProcessingMode.translate
         legacyTranslate.prompt = ProcessingMode.legacyTranslatePromptTemplate
         legacyTranslate.processingLabel = "我的翻译中"
-        legacyTranslate.hotkeyCode = 31
+        legacyTranslate.hotkeyBindings = [HotkeyBinding(keyCode: 31, modifiers: 0, style: .toggle)]
 
         try storage.save([ProcessingMode.direct, legacyFormalWriting, legacyTranslate])
         let loaded = storage.load()
@@ -122,11 +122,11 @@ final class ModeStorageTests: XCTestCase {
 
         XCTAssertEqual(formalWriting?.prompt, ProcessingMode.formalWriting.prompt)
         XCTAssertEqual(formalWriting?.processingLabel, ProcessingMode.formalWriting.processingLabel)
-        XCTAssertEqual(formalWriting?.hotkeyCode, 30)
+        XCTAssertEqual(formalWriting?.hotkeyBindings.first?.keyCode, 30)
 
         XCTAssertEqual(translate?.prompt, ProcessingMode.translate.prompt)
         XCTAssertEqual(translate?.processingLabel, "我的翻译中")
-        XCTAssertEqual(translate?.hotkeyCode, 31)
+        XCTAssertEqual(translate?.hotkeyBindings.first?.keyCode, 31)
     }
 
     func testCustomizedSeededDefaultPromptsArePreserved() throws {
@@ -150,24 +150,77 @@ final class ModeStorageTests: XCTestCase {
         )
     }
 
-    // MARK: - Hotkey field tests
+    // MARK: - Hotkey binding tests
 
-    func testHotkeyFieldsArePersisted() throws {
+    func testHotkeyBindingsArePersisted() throws {
         let storage = ModeStorage(fileURL: testURL)
         var mode = ProcessingMode(
             id: UUID(), name: "Test", prompt: "{text}", isBuiltin: false
         )
-        mode.hotkeyCode = 61
-        mode.hotkeyModifiers = 0
-        mode.hotkeyStyle = .hold
+        mode.hotkeyBindings = [HotkeyBinding(keyCode: 61, modifiers: 0, style: .hold)]
 
         try storage.save([ProcessingMode.direct, mode])
         let loaded = storage.load()
         let loadedMode = loaded.first { $0.name == "Test" }
 
-        XCTAssertEqual(loadedMode?.hotkeyCode, 61)
-        XCTAssertEqual(loadedMode?.hotkeyModifiers, 0)
-        XCTAssertEqual(loadedMode?.hotkeyStyle, .hold)
+        XCTAssertEqual(loadedMode?.hotkeyBindings.count, 1)
+        XCTAssertEqual(loadedMode?.hotkeyBindings.first?.keyCode, 61)
+        XCTAssertEqual(loadedMode?.hotkeyBindings.first?.modifiers, 0)
+        XCTAssertEqual(loadedMode?.hotkeyBindings.first?.style, .hold)
+    }
+
+    func testMultipleMixedStyleBindingsRoundTrip() throws {
+        let storage = ModeStorage(fileURL: testURL)
+        let bindings = [
+            HotkeyBinding(keyCode: 61, modifiers: 0, style: .hold),
+            HotkeyBinding(keyCode: 20, modifiers: 524288, style: .toggle),
+            HotkeyBinding(keyCode: ModeBinding.mouseKeyCode(for: 2), modifiers: 0, style: .toggle),
+        ]
+        var mode = ProcessingMode(
+            id: UUID(), name: "Multi", prompt: "{text}", isBuiltin: false,
+            hotkeyBindings: bindings
+        )
+        mode.name = "Multi"
+
+        try storage.save([ProcessingMode.direct, mode])
+        let loaded = storage.load()
+        let loadedMode = loaded.first { $0.name == "Multi" }
+
+        XCTAssertEqual(loadedMode?.hotkeyBindings, bindings)
+    }
+
+    func testEmptyBindingsRoundTrip() throws {
+        let storage = ModeStorage(fileURL: testURL)
+        let mode = ProcessingMode(
+            id: UUID(), name: "NoKeys", prompt: "{text}", isBuiltin: false,
+            hotkeyBindings: []
+        )
+
+        try storage.save([ProcessingMode.direct, mode])
+        let loaded = storage.load()
+        let loadedMode = loaded.first { $0.name == "NoKeys" }
+
+        XCTAssertNotNil(loadedMode)
+        XCTAssertTrue(loadedMode?.hotkeyBindings.isEmpty ?? false)
+    }
+
+    func testLegacySingleHotkeyFieldsMigrateToBinding() throws {
+        let customId = UUID()
+        // Old on-disk format used flat hotkeyCode/hotkeyModifiers/hotkeyStyle fields.
+        let json = """
+        [
+          {"id":"\(customId.uuidString)","name":"Legacy","prompt":"Do {text}","isBuiltin":false,"processingLabel":"处理中","hotkeyCode":58,"hotkeyModifiers":524288,"hotkeyStyle":"hold"}
+        ]
+        """
+        try json.data(using: .utf8)!.write(to: testURL)
+
+        let loaded = ModeStorage(fileURL: testURL).load()
+        let migrated = loaded.first { $0.id == customId }
+
+        XCTAssertEqual(migrated?.hotkeyBindings.count, 1)
+        XCTAssertEqual(migrated?.hotkeyBindings.first?.keyCode, 58)
+        XCTAssertEqual(migrated?.hotkeyBindings.first?.modifiers, 524288)
+        XCTAssertEqual(migrated?.hotkeyBindings.first?.style, .hold)
     }
 
     func testMissingHotkeyFieldsDefaultGracefully() throws {
@@ -180,8 +233,9 @@ final class ModeStorageTests: XCTestCase {
         let loaded = storage.load()
         let direct = loaded.first { $0.id == ProcessingMode.direct.id }
 
-        // Old JSON has no hotkey fields - should decode gracefully to today's builtin default.
-        XCTAssertEqual(direct?.hotkeyStyle, ProcessingMode.direct.hotkeyStyle)
+        // Old JSON has no hotkey fields - should decode gracefully to an empty binding list.
+        XCTAssertNotNil(direct)
+        XCTAssertTrue(direct?.hotkeyBindings.isEmpty ?? false)
     }
 
     func testMissingDescriptionMigratesOfficialModesAndKeepsCustomModesBlank() throws {
@@ -211,14 +265,13 @@ final class ModeStorageTests: XCTestCase {
         var mode = ProcessingMode(
             id: UUID(), name: "Toggle Mode", prompt: "{text}", isBuiltin: false
         )
-        mode.hotkeyCode = 58
-        mode.hotkeyStyle = .toggle
+        mode.hotkeyBindings = [HotkeyBinding(keyCode: 58, modifiers: 0, style: .toggle)]
 
         try storage.save([ProcessingMode.direct, mode])
         let loaded = storage.load()
         let loadedMode = loaded.first { $0.name == "Toggle Mode" }
 
-        XCTAssertEqual(loadedMode?.hotkeyCode, 58)
-        XCTAssertEqual(loadedMode?.hotkeyStyle, .toggle)
+        XCTAssertEqual(loadedMode?.hotkeyBindings.first?.keyCode, 58)
+        XCTAssertEqual(loadedMode?.hotkeyBindings.first?.style, .toggle)
     }
 }

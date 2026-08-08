@@ -6,13 +6,18 @@ struct HomeDashboardView: View {
     let isActive: Bool
     let openModesEditor: () -> Void
 
-    @State private var modes: [ProcessingMode] = []
+    @Environment(AppState.self) private var appState
     @State private var statistics: HistoryStore.Statistics?
     @State private var hoveredMetric: Metric?
     @State private var isModesButtonHovered = false
 
     private let historyStore = HistoryStore()
     private let assumedTypingSpeed = 40.0
+
+    /// Drive the list from the same live, observable source the menu bar reads
+    /// (`appState.availableModes`), so reordering in the Modes editor is
+    /// reflected here immediately without depending on notification/disk timing.
+    private var modes: [ProcessingMode] { appState.availableModes }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -54,7 +59,10 @@ struct HomeDashboardView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .selectMode)) { _ in
-            reloadModes()
+            refreshDashboard()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .modesDidChange)) { _ in
+            refreshDashboard()
         }
     }
 
@@ -172,34 +180,15 @@ struct HomeDashboardView: View {
         .frame(minHeight: 66)
     }
 
-    private func hotkeyBadge(_ mode: ProcessingMode) -> some View {
-        HStack(spacing: 8) {
-            if let keyCode = mode.hotkeyCode {
-                HStack(spacing: 4) {
-                    Image(systemName: mode.hotkeyStyle == .hold ? "hand.point.up.left" : "arrow.triangle.2.circlepath")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text(hotkeyStyleLabel(mode.hotkeyStyle))
-                        .font(.system(size: 10, weight: .medium))
-                }
-                .foregroundStyle(TF.settingsTextTertiary)
+    private static let hotkeyBadgeVisibleLimit = 2
 
-                Text(HotkeyRecorderView.keyDisplayName(
-                    keyCode: keyCode,
-                    modifiers: mode.hotkeyModifiers
-                ))
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(TF.settingsText)
-                .padding(.horizontal, 10)
-                .frame(height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(TF.settingsBg)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(TF.settingsBorder, lineWidth: 1)
-                )
-            } else {
+    private func hotkeyBadge(_ mode: ProcessingMode) -> some View {
+        let bindings = mode.hotkeyBindings
+        let visible = Array(bindings.prefix(Self.hotkeyBadgeVisibleLimit))
+        let overflow = bindings.count - visible.count
+
+        return HStack(spacing: 6) {
+            if bindings.isEmpty {
                 Text(L("未设置", "Not set"))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(TF.settingsTextTertiary)
@@ -213,9 +202,87 @@ struct HomeDashboardView: View {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .stroke(TF.settingsBorder, lineWidth: 1)
                     )
+            } else {
+                ForEach(visible) { binding in
+                    hotkeyChip(binding)
+                }
+
+                if overflow > 0 {
+                    Text("+\(overflow)")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(TF.settingsTextSecondary)
+                        .padding(.horizontal, 7)
+                        .frame(height: 30)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(TF.settingsBg)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(TF.settingsBorder, lineWidth: 1)
+                        )
+                        .help(bindings
+                            .map { hotkeyChipTooltip($0) }
+                            .joined(separator: "\n"))
+                }
             }
         }
         .fixedSize()
+    }
+
+    /// Compact, visually distinct chip for a single hotkey binding.
+    /// Hold vs. Toggle are differentiated by a leading colored glyph rather than a
+    /// space-consuming text label.
+    private func hotkeyChip(_ binding: HotkeyBinding) -> some View {
+        let accent = hotkeyStyleColor(binding.style)
+        return HStack(spacing: 5) {
+            Image(systemName: hotkeyStyleIcon(binding.style))
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(accent)
+
+            Text(HotkeyRecorderView.keyDisplayName(
+                keyCode: binding.keyCode,
+                modifiers: binding.modifiers
+            ))
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundStyle(TF.settingsText)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 10)
+        .frame(height: 30)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(accent.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(accent.opacity(0.35), lineWidth: 1)
+        )
+        .help(hotkeyChipTooltip(binding))
+    }
+
+    private func hotkeyChipTooltip(_ binding: HotkeyBinding) -> String {
+        let key = HotkeyRecorderView.keyDisplayName(
+            keyCode: binding.keyCode, modifiers: binding.modifiers)
+        return "\(key) · \(hotkeyStyleLabel(binding.style))"
+    }
+
+    private func hotkeyStyleIcon(_ style: ProcessingMode.HotkeyStyle) -> String {
+        switch style {
+        case .hold:
+            return "hand.tap.fill"
+        case .toggle:
+            return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    private func hotkeyStyleColor(_ style: ProcessingMode.HotkeyStyle) -> Color {
+        switch style {
+        case .hold:
+            return Color(red: 0.20, green: 0.60, blue: 0.86)
+        case .toggle:
+            return Color(red: 0.36, green: 0.56, blue: 0.32)
+        }
     }
 
     private func hotkeyStyleLabel(_ style: ProcessingMode.HotkeyStyle) -> String {
@@ -312,14 +379,9 @@ struct HomeDashboardView: View {
     }
 
     private func refreshDashboard() {
-        reloadModes()
         Task {
             statistics = await historyStore.getStatistics()
         }
-    }
-
-    private func reloadModes() {
-        modes = ModeStorage().load()
     }
 
     private func modeSummary(_ mode: ProcessingMode) -> String {
