@@ -342,24 +342,73 @@ bash scripts/build-sherpa.sh
 # 3. (Optional) Setup Qwen3-ASR server (needs python3.12, Apple Silicon only)
 cd qwen3-asr-server && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && cd ..
 
-# 4. Deploy (builds, bundles .app, signs, installs to /Applications, launches)
-bash scripts/deploy.sh
+# 4. Dev deploy (builds, signs, installs /Applications/Type4Me Dev.app, launches)
+# Complete the one-time Xcode signing setup below before the first run.
+bash scripts/dev-run.sh
 
 # Subsequent updates
-git pull && bash scripts/deploy.sh
+git pull && bash scripts/dev-run.sh
 ```
 
 Steps 2-3 are optional. Skipping them disables local ASR, but cloud ASR works fine.
 
 ### Code signing & permissions
 
-`deploy.sh` handles code signing automatically to **preserve macOS permissions across rebuilds**:
+Stable development signing is required to preserve Keychain, Accessibility, and
+Microphone permissions across rebuilds. Complete this one-time setup before the
+first Dev deploy:
 
-- **First deploy** auto-creates a self-signed certificate ("Type4Me Local", valid 10 years) if no signing identity exists. This may trigger a **Keychain password prompt** that requires human interaction.
-- **Subsequent deploys** reuse the same certificate. Accessibility/Microphone permissions persist, no re-grant needed.
-- After first launch, the user must grant **Accessibility permission** once (System Settings > Privacy & Security > Accessibility > enable Type4Me).
-- To override signing identity: `CODESIGN_IDENTITY="Your Cert" bash scripts/deploy.sh`
-- Fallback to ad-hoc signing: `CODESIGN_IDENTITY="-" bash scripts/deploy.sh` (Accessibility permission will reset each build)
+1. Install and open the full Xcode application. Xcode Command Line Tools alone
+   cannot configure the signing account.
+2. Open **Xcode > Settings > Accounts**, click **+**, choose **Apple Account**,
+   and sign in. A paid Apple Developer membership is not required; Xcode can use
+   the account's **Personal Team** for local development signing.
+3. Select the account and confirm that a Team is listed. You may create the
+   certificate manually through **Manage Certificates... > + > Apple
+   Development**, or let the repository setup script request it from Xcode:
+
+   ```bash
+   bash scripts/setup-dev-signing.sh
+   ```
+
+4. Confirm that macOS Keychain contains a valid signing identity:
+
+   ```bash
+   security find-identity -v -p codesigning
+   ```
+
+   The output must include an `Apple Development: ...` identity. If multiple
+   Xcode teams are configured, select one explicitly:
+
+   ```bash
+   DEVELOPMENT_TEAM=<team-id> bash scripts/setup-dev-signing.sh
+   ```
+
+5. Build and install the development app:
+
+   ```bash
+   bash scripts/dev-run.sh
+   ```
+
+`dev-run.sh` uses `/Applications/Type4Me Dev.app` and the dedicated
+`com.type4me.dev` bundle ID. On the first signed deploy it may ask once for the
+Login Keychain password to migrate existing Type4Me credential access from
+changing binary hashes to the stable Apple Team ID. The password is held in
+memory only and is never stored.
+
+After first launch, grant Microphone and Accessibility access to **Type4Me Dev**
+once in **System Settings > Privacy & Security**. Subsequent Dev builds reuse the
+same Apple identity, Team ID, bundle ID, and install path, so these permissions
+remain valid.
+
+> Here, "development/self signing" means an Xcode-managed **Apple Development**
+> certificate associated with the developer's Apple Account. It is not ad-hoc
+> signing (`-`). Dev deploys intentionally fail when no stable identity is
+> available. `ALLOW_ADHOC_SIGNING=1 bash scripts/dev-run.sh` is an emergency-only
+> fallback and may cause macOS to request permissions again after every rebuild.
+
+For non-Dev packaging, a signing identity can be supplied explicitly with
+`CODESIGN_IDENTITY="Your Cert" bash scripts/deploy.sh`.
 
 ### Key architecture points
 
