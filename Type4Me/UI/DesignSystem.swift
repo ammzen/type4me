@@ -98,9 +98,20 @@ enum TF {
     static let barWidthCompact: CGFloat = 180
     static let barHeight: CGFloat = 55
     static let barBottomOffset: CGFloat = 48
-    static let recordingControlSize: CGFloat = 45
-    static let recordingEdgeInset: CGFloat = 5
+    static let recordingControlSize: CGFloat = 35
+    static let recordingEdgeInset: CGFloat = 10
     static let recordingControlGap: CGFloat = 8
+    static let recordingTooltipGap: CGFloat = 5
+    static let recordingTooltipMaxWidth: CGFloat = 180
+    static let recordingTooltipBadge = Color(
+        red: 138 / 255,
+        green: 138 / 255,
+        blue: 138 / 255
+    )
+    static let recordingTooltipOverhang: CGFloat = max(
+        0,
+        recordingTooltipMaxWidth / 2 - recordingEdgeInset - recordingControlSize / 2
+    )
     static let recordingChromeWidth: CGFloat = recordingControlSize * 2
         + recordingEdgeInset * 2
         + recordingControlGap * 2

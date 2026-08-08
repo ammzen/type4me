@@ -123,7 +123,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     var body: some View {
-        VStack(spacing: TF.transcriptPopupGap) {
+        VStack(spacing: topOverlayGap) {
             if let overlay = activeTopOverlay {
                 topOverlay(overlay)
             }
@@ -254,7 +254,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .allowsHitTesting(false)
             } else {
                 Image(systemName: "xmark")
-                    .font(.system(size: 24, weight: .regular))
+                    .font(.system(size: 19, weight: .regular))
                     .foregroundStyle(TF.floatingBackground)
                     .allowsHitTesting(false)
             }
@@ -480,6 +480,15 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     // MARK: - Top overlays
 
+    private var topOverlayGap: CGFloat {
+        switch activeTopOverlay {
+        case .action, .mode:
+            return TF.recordingTooltipGap
+        case .transcript, nil:
+            return TF.transcriptPopupGap
+        }
+    }
+
     @ViewBuilder
     private func topOverlay(_ overlay: FloatingBarTopOverlay) -> some View {
         switch overlay {
@@ -492,16 +501,49 @@ struct FloatingBarView<S: FloatingBarState>: View {
             hintBubble(text: state.currentMode.name)
                 .transaction { $0.animation = nil }
         case .action(.finish):
-            alignedHint(text: L("完成录制", "Finish Recording"), alignment: .leading)
+            alignedActionHint(.finish)
         case .action(.cancel):
-            alignedHint(text: L("取消录制（ESC）", "Cancel Recording (ESC)"), alignment: .trailing)
+            alignedActionHint(.cancel)
         }
     }
 
-    private func alignedHint(text: String, alignment: Alignment) -> some View {
-        hintBubble(text: text)
-            .frame(width: capsuleWidth, alignment: alignment)
-            .padding(.horizontal, TF.recordingEdgeInset)
+    private func alignedActionHint(_ action: RecordingControlAction) -> some View {
+        let distanceFromCenter = capsuleWidth / 2
+            - TF.recordingEdgeInset
+            - TF.recordingControlSize / 2
+        let horizontalOffset = action == .finish ? -distanceFromCenter : distanceFromCenter
+
+        return actionHintBubble(action)
+            .offset(x: horizontalOffset)
+            .frame(width: capsuleWidth)
+    }
+
+    private func actionHintBubble(_ action: RecordingControlAction) -> some View {
+        HStack(spacing: 7) {
+            Text(action == .finish
+                ? L("完成录制", "Finish Recording")
+                : L("取消录制", "Cancel Recording"))
+
+            if action == .cancel {
+                Text("esc")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(TF.floatingText)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(TF.recordingTooltipBadge))
+            }
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(TF.floatingText)
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous)
+                .fill(TF.floatingBackground)
+        )
+        .frame(maxWidth: TF.recordingTooltipMaxWidth)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func hintBubble(text: String) -> some View {
