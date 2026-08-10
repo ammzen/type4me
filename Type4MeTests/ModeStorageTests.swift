@@ -64,22 +64,66 @@ final class ModeStorageTests: XCTestCase {
         XCTAssertEqual(loadedAfterRestart.map(\.id), reordered.map(\.id))
     }
 
+    func testNewDefaultHotkeysDoNotOverwriteExistingUserBindingsOrOrder() throws {
+        let suite = "ModeStorageTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "tf_agentModeSeeded")
+        defaults.set(true, forKey: "tf_shortTextExemptionMigrated")
+
+        var existing = [
+            ProcessingMode.selectionAsk,
+            ProcessingMode.translation(target: .japanese),
+            ProcessingMode.direct,
+            ProcessingMode.formalWriting,
+            ProcessingMode.macAction,
+            ProcessingMode.intelliSense,
+            ProcessingMode.promptOptimize,
+            ProcessingMode.agentMode,
+        ]
+        for index in existing.indices {
+            existing[index].hotkeyBindings = [
+                HotkeyBinding(
+                    keyCode: 70 + index,
+                    modifiers: UInt64(index),
+                    style: index.isMultiple(of: 2) ? .hold : .toggle
+                ),
+            ]
+        }
+        let storage = ModeStorage(fileURL: testURL, userDefaults: defaults)
+        try storage.save(existing)
+
+        let loaded = storage.load()
+
+        XCTAssertEqual(loaded.map(\.id), existing.map(\.id))
+        for mode in existing {
+            XCTAssertEqual(
+                loaded.first { $0.id == mode.id }?.hotkeyBindings,
+                mode.hotkeyBindings
+            )
+        }
+    }
+
     func testLoadMissing_returnsBuiltins() {
         let storage = ModeStorage(fileURL: testURL)
         let loaded = storage.load()
         XCTAssertEqual(loaded, ProcessingMode.defaults)
     }
 
-    func testFreshDefaultsPlaceIntelliSenseBetweenQuickAndVoicePolish() {
+    func testFreshDefaultsUseProductModeOrder() {
         let ids = ProcessingMode.defaults.map(\.id)
 
-        XCTAssertEqual(ids.prefix(3), [
+        XCTAssertEqual(ids, [
             ProcessingMode.directId,
             ProcessingMode.intelliSenseId,
+            ProcessingMode.translationModeId,
+            ProcessingMode.selectionAskId,
+            ProcessingMode.macActionId,
             ProcessingMode.formalWritingId,
+            ProcessingMode.promptOptimizeId,
+            ProcessingMode.agentModeId,
         ])
         XCTAssertTrue(ProcessingMode.intelliSense.isBuiltin)
-        XCTAssertTrue(ProcessingMode.intelliSense.hotkeyBindings.isEmpty)
     }
 
     func testExistingInstallAppendsIntelliSenseWithoutReorderingModes() throws {
@@ -250,17 +294,54 @@ final class ModeStorageTests: XCTestCase {
         XCTAssertFalse(secondLoad.contains { $0.id == ProcessingMode.translateToChineseId })
     }
 
-    func testFreshDefaultsContainOnlyNewTranslationWithOption3() {
+    func testFreshDefaultsContainOnlyNewTranslationMode() {
         let translationModes = ProcessingMode.defaults.filter {
             $0.id == ProcessingMode.translationModeId
         }
 
         XCTAssertEqual(translationModes.count, 1)
+        XCTAssertEqual(translationModes[0].name, L("翻译模式", "Translation Mode"))
         XCTAssertFalse(ProcessingMode.defaults.contains { ProcessingMode.legacyTranslationModeIDs.contains($0.id) })
         XCTAssertEqual(translationModes[0].translationTargetLanguageCode, "en")
-        XCTAssertEqual(translationModes[0].hotkeyBindings.count, 1)
-        XCTAssertEqual(translationModes[0].hotkeyBindings[0].keyCode, 20)
-        XCTAssertEqual(translationModes[0].hotkeyBindings[0].modifiers, 524288)
+        XCTAssertEqual(translationModes[0].hotkeyBindings.count, 2)
+        XCTAssertEqual(translationModes[0].hotkeyBindings[0].keyCode, 56)
+        XCTAssertEqual(translationModes[0].hotkeyBindings[0].modifiers, 8388608)
+        XCTAssertEqual(translationModes[0].hotkeyBindings[1].keyCode, 19)
+        XCTAssertEqual(translationModes[0].hotkeyBindings[1].modifiers, 524288)
+    }
+
+    func testFreshDefaultHotkeysMatchProductSpecification() throws {
+        let modes = ProcessingMode.defaults
+
+        func bindings(_ id: UUID) throws -> [(Int, UInt64)] {
+            try XCTUnwrap(modes.first { $0.id == id }).hotkeyBindings.map {
+                ($0.keyCode, $0.modifiers ?? 0)
+            }
+        }
+
+        XCTAssertEqual(try bindings(ProcessingMode.directId).map(\.0), [63])
+        XCTAssertEqual(try bindings(ProcessingMode.directId).map(\.1), [0])
+        XCTAssertEqual(try bindings(ProcessingMode.intelliSenseId).map(\.0), [59, 18])
+        XCTAssertEqual(try bindings(ProcessingMode.intelliSenseId).map(\.1), [8388608, 524288])
+        XCTAssertEqual(try bindings(ProcessingMode.translationModeId).map(\.0), [56, 19])
+        XCTAssertEqual(try bindings(ProcessingMode.translationModeId).map(\.1), [8388608, 524288])
+        XCTAssertEqual(try bindings(ProcessingMode.selectionAskId).map(\.0), [49, 20])
+        XCTAssertEqual(try bindings(ProcessingMode.selectionAskId).map(\.1), [8388608, 524288])
+        XCTAssertEqual(try bindings(ProcessingMode.macActionId).map(\.0), [21])
+        XCTAssertEqual(try bindings(ProcessingMode.macActionId).map(\.1), [524288])
+        XCTAssertEqual(try bindings(ProcessingMode.formalWritingId).map(\.0), [23])
+        XCTAssertEqual(try bindings(ProcessingMode.formalWritingId).map(\.1), [524288])
+        XCTAssertTrue(try bindings(ProcessingMode.promptOptimizeId).isEmpty)
+        XCTAssertTrue(try bindings(ProcessingMode.agentModeId).isEmpty)
+    }
+
+    func testRemovedLegacyAndSupersededModesAreNotFreshDefaults() {
+        let ids = Set(ProcessingMode.defaults.map(\.id))
+
+        XCTAssertFalse(ids.contains(ProcessingMode.translateId))
+        XCTAssertFalse(ids.contains(ProcessingMode.translateToChineseId))
+        XCTAssertFalse(ids.contains(ProcessingMode.translate.id))
+        XCTAssertFalse(ProcessingMode.defaults.contains { $0.name == ProcessingMode.commandMode.name })
     }
 
     func testExistingLegacyTranslationRecordsArePreservedAndNewModeAppended() throws {

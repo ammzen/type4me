@@ -7,7 +7,7 @@
 
 ## 1. 设计摘要
 
-本次改造新增一个全新稳定 ID 的内置“翻译 / Translation”模式。该模式不复用、合并或规范化任何旧“英文翻译”或“中文翻译”记录。
+本次改造新增一个全新稳定 ID 的内置“翻译模式 / Translation Mode”。该模式不复用、合并或规范化任何旧“英文翻译”或“中文翻译”记录。
 
 核心实现原则：
 
@@ -18,7 +18,7 @@
 5. 目标语言在录音开始时冻结，异步处理期间不受设置变化影响；
 6. Prompt 由统一 Builder 动态构造，所有语言共享同一套边界和保护规则；
 7. 翻译失败或明显输出错误语言时不注入 ASR 原文；
-8. 新安装默认绑定 `⌥ + 3`，老用户升级新增模式时不自动绑定快捷键。
+8. 新安装默认绑定 `fn + 左 Shift` 和 `⌥ + 2`，老用户升级新增模式时不自动绑定快捷键。
 
 ## 2. 当前实现分析
 
@@ -118,20 +118,23 @@ static let translationModeId = UUID(
 
 ### 4.2 默认快捷键 Binding ID
 
-新安装使用独立稳定 Binding ID：
+新安装使用两个独立稳定 Binding ID：
 
 ```swift
-private static let translationBindingId = UUID(
+private static let translationOption2BindingId = UUID(
     uuidString: "10000000-0000-0000-0000-000000000008"
+)!
+private static let translationFnShiftBindingId = UUID(
+    uuidString: "10000000-0000-0000-0000-00000000000B"
 )!
 ```
 
-该 Binding 仅进入新安装的 `defaults`，不进入老用户补入使用的无快捷键 seed。
+这两个 Binding 仅进入新安装的 `defaults`，不进入老用户补入使用的无快捷键 seed。
 
 ### 4.3 用户可见命名
 
 ```swift
-name: L("翻译", "Translation")
+name: L("翻译模式", "Translation Mode")
 description: L(
     "自动识别口述语言并翻译为目标语言",
     "Automatically detect spoken language and translate it to your target language"
@@ -227,8 +230,14 @@ static var translationForFreshInstall: ProcessingMode {
         target: .english,
         hotkeyBindings: [
             HotkeyBinding(
-                id: translationBindingId,
-                keyCode: 20,
+                id: translationFnShiftBindingId,
+                keyCode: 56,
+                modifiers: 8388608,
+                style: .toggle
+            ),
+            HotkeyBinding(
+                id: translationOption2BindingId,
+                keyCode: 19,
                 modifiers: 524288,
                 style: .toggle
             )
@@ -237,7 +246,7 @@ static var translationForFreshInstall: ProcessingMode {
 }
 ```
 
-`keyCode: 20 + Option` 对应 `⌥ + 3`。
+`keyCode: 56 + Fn` 对应 `fn + 左 Shift`，`keyCode: 19 + Option` 对应 `⌥ + 2`。
 
 ## 6. 默认模式集合
 
@@ -250,39 +259,40 @@ static var builtins: [ProcessingMode] {
     [
         .direct,
         .intelliSense,
-        .formalWriting,
         .translation(),
-        .macAction,
         .selectionAsk,
+        .macAction,
+        .formalWriting,
     ]
 }
 ```
 
-`builtins` 中的翻译模式不携带 `⌥ + 3`，因为该数组同时用于给已有模式文件补入新内置模式。
+`builtins` 中的翻译模式不携带默认快捷键，因为该数组同时用于给已有模式文件补入新内置模式。
 
 ### 6.2 Defaults
 
-新安装默认列表移除旧 `.translate` 和 `.translateToChinese`，加入：
+新安装默认列表移除旧 `.translate`、`.translateToChinese` 和 `.commandMode`，加入：
 
 ```swift
 .translationForFreshInstall
 ```
 
-为降低无关排序变化，建议放在旧 `.translate` 所在位置：
+完整默认顺序为：
 
 ```swift
 [
     .direct,
     .intelliSense,
+    .translationForFreshInstall,
+    .selectionAsk,
+    .macAction,
     .formalWriting,
     .promptOptimize,
-    .translationForFreshInstall,
     .agentMode,
-    .commandMode,
-    .macAction,
-    .selectionAsk,
 ]
 ```
+
+对应快捷键为：快速模式 `fn`；智能感知 `fn + 左 Control`、`⌥ + 1`；翻译模式 `fn + 左 Shift`、`⌥ + 2`；随便问 `fn + Space`、`⌥ + 3`；Mac 操作 `⌥ + 4`；语音润色 `⌥ + 5`；Prompt 优化和代办模式无默认快捷键。
 
 ### 6.3 旧模式定义
 
@@ -767,7 +777,7 @@ Picker 变化时：
 
 需要验证：
 
-- 新安装 `⌥ + 3` 正常注册；
+- 新安装 `fn + 左 Shift` 和 `⌥ + 2` 正常注册；
 - 老用户旧英文翻译仍占用 `⌥ + 3` 时，新模式无默认绑定，不发生冲突；
 - 用户在新模式详情添加已占用快捷键时，沿用现有冲突确认流程；
 - 同模式多个 binding 都解析到同一个 `translationModeId`；
@@ -782,7 +792,7 @@ Picker 变化时：
 
 - `rawText`：ASR 原文；
 - `processedText`：成功译文；
-- `processingMode`：稳定显示名称“翻译”；
+- `processingMode`：稳定显示名称“翻译模式”；
 - LLM provider、model 和耗时。
 
 建议同时增加可选目标语言字段，便于历史详情解释输出方向：
@@ -822,7 +832,7 @@ translation failed reason=unexpectedOutputLanguage target=ja detected=en
 
 - 新 translation ID 与所有旧 ID 不同；
 - 新模式 `isBuiltin == true`；
-- fresh factory 有 `⌥ + 3`；
+- fresh factory 有 `fn + 左 Shift` 和 `⌥ + 2`；
 - upgrade factory 无快捷键；
 - `shortTextExemption == 0`；
 - target code 正确编码；
@@ -834,7 +844,7 @@ translation failed reason=unexpectedOutputLanguage target=ja detected=en
 
 | 输入 | 期望 |
 |---|---|
-| 无 modes 文件 | defaults 只有一个新官方翻译，目标英语，绑定 `⌥ + 3` |
+| 无 modes 文件 | defaults 只有一个新官方翻译模式，目标英语，绑定 `fn + 左 Shift` 和 `⌥ + 2` |
 | 只有旧英文翻译 | 旧记录逐字段相等，新模式追加且无快捷键 |
 | 只有旧中文翻译 | 旧记录逐字段相等，新模式追加且无快捷键 |
 | 两个旧模式都有 | 两条旧记录和顺序不变，只追加一个新模式 |

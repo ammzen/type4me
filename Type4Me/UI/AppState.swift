@@ -304,6 +304,10 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     private static let macActionBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000006")!
     private static let selectionAskBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000007")!
     private static let translationModeBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000008")!
+    private static let intelliSenseFnControlBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000009")!
+    private static let intelliSenseOption1BindingId = UUID(uuidString: "10000000-0000-0000-0000-00000000000A")!
+    private static let translationFnShiftBindingId = UUID(uuidString: "10000000-0000-0000-0000-00000000000B")!
+    private static let selectionAskFnSpaceBindingId = UUID(uuidString: "10000000-0000-0000-0000-00000000000C")!
 
     /// Descriptions for records written before the `description` field existed.
     /// Stable IDs let official modes migrate without deriving UI copy from prompts.
@@ -347,7 +351,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             name: L("快速模式", "Quick Mode"),
             description: defaultDescription(for: directId),
             prompt: "", isBuiltin: true,
-            hotkeyBindings: [HotkeyBinding(id: directBindingId, keyCode: 62, modifiers: 0, style: .toggle)]
+            hotkeyBindings: [HotkeyBinding(id: directBindingId, keyCode: 63, modifiers: 0, style: .toggle)]
         )
     }
 
@@ -358,7 +362,21 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             description: defaultDescription(for: intelliSenseId),
             prompt: IntelliSensePromptBuilder.baseTemplate,
             isBuiltin: true,
-            processingLabel: L("整理中", "Polishing")
+            processingLabel: L("整理中", "Polishing"),
+            hotkeyBindings: [
+                HotkeyBinding(
+                    id: intelliSenseFnControlBindingId,
+                    keyCode: 59,
+                    modifiers: 8388608,
+                    style: .toggle
+                ),
+                HotkeyBinding(
+                    id: intelliSenseOption1BindingId,
+                    keyCode: 18,
+                    modifiers: 524288,
+                    style: .toggle
+                ),
+            ]
         )
     }
 
@@ -616,7 +634,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: formalWritingPromptTemplate,
             isBuiltin: true,
             processingLabel: L("润色中", "Polishing"),
-            hotkeyBindings: [HotkeyBinding(id: formalWritingBindingId, keyCode: 18, modifiers: 524288, style: .toggle)]
+            hotkeyBindings: [HotkeyBinding(id: formalWritingBindingId, keyCode: 23, modifiers: 524288, style: .toggle)]
         )
     }
 
@@ -725,7 +743,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             """#,
             isBuiltin: false,
             processingLabel: L("优化中", "Optimizing"),
-            hotkeyBindings: [HotkeyBinding(id: promptOptimizeBindingId, keyCode: 19, modifiers: 524288, style: .toggle)]
+            hotkeyBindings: []
         )
     }
 
@@ -761,7 +779,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     ) -> ProcessingMode {
         ProcessingMode(
             id: translationModeId,
-            name: L("翻译", "Translation"),
+            name: L("翻译模式", "Translation Mode"),
             description: defaultDescription(for: translationModeId),
             prompt: TranslationPromptBuilder.baseTemplate,
             isBuiltin: true,
@@ -778,8 +796,14 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             target: .english,
             hotkeyBindings: [
                 HotkeyBinding(
+                    id: translationFnShiftBindingId,
+                    keyCode: 56,
+                    modifiers: 8388608,
+                    style: .toggle
+                ),
+                HotkeyBinding(
                     id: translationModeBindingId,
-                    keyCode: 20,
+                    keyCode: 19,
                     modifiers: 524288,
                     style: .toggle
                 ),
@@ -890,7 +914,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: macActionPromptTemplate,
             isBuiltin: true,
             processingLabel: L("执行中", "Executing"),
-            hotkeyBindings: [HotkeyBinding(id: macActionBindingId, keyCode: 23, modifiers: 524288, style: .toggle)]
+            hotkeyBindings: [HotkeyBinding(id: macActionBindingId, keyCode: 21, modifiers: 524288, style: .toggle)]
         )
     }
 
@@ -931,7 +955,20 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: selectionAskPromptTemplate,
             isBuiltin: true,
             processingLabel: L("思考中", "Thinking"),
-            hotkeyBindings: [HotkeyBinding(id: selectionAskBindingId, keyCode: 22, modifiers: 524288, style: .toggle)],
+            hotkeyBindings: [
+                HotkeyBinding(
+                    id: selectionAskFnSpaceBindingId,
+                    keyCode: 49,
+                    modifiers: 8388608,
+                    style: .toggle
+                ),
+                HotkeyBinding(
+                    id: selectionAskBindingId,
+                    keyCode: 20,
+                    modifiers: 524288,
+                    style: .toggle
+                ),
+            ],
             shortTextExemption: 0,
             executionKind: .selectionAsk
         )
@@ -1084,15 +1121,24 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: agentModePromptTemplate,
             isBuiltin: false,
             processingLabel: L("处理中", "Handling"),
-            hotkeyBindings: [HotkeyBinding(id: agentModeBindingId, keyCode: 21, modifiers: 524288, style: .toggle)]
+            hotkeyBindings: []
         )
     }
 
     static var builtins: [ProcessingMode] {
-        [.direct, .intelliSense, .formalWriting, .translation(), .macAction, .selectionAsk]
+        [.direct, .intelliSense, .translation(), .selectionAsk, .macAction, .formalWriting]
     }
     static var defaults: [ProcessingMode] {
-        [.direct, .intelliSense, .formalWriting, .promptOptimize, .translationForFreshInstall, .agentMode, .commandMode, .macAction, .selectionAsk]
+        [
+            .direct,
+            .intelliSense,
+            .translationForFreshInstall,
+            .selectionAsk,
+            .macAction,
+            .formalWriting,
+            .promptOptimize,
+            .agentMode,
+        ]
     }
 }
 
