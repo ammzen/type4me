@@ -10,11 +10,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case history
     case preferences
     case about
+    case debug
     #if HAS_CLOUD_SUBSCRIPTION
     case account
-    #endif
-    #if HAS_CLOUD_SUBSCRIPTION
-    case debug
     #endif
 
     var id: String { rawValue }
@@ -39,9 +37,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .history:     return L("历史", "History")
         case .preferences: return L("设置", "Settings")
         case .about:       return L("关于", "About")
+        case .debug:       return L("调试", "Debug")
         #if HAS_CLOUD_SUBSCRIPTION
         case .account:     return L("账户", "Account")
-        case .debug:       return L("调试", "Debug")
         #endif
         }
     }
@@ -55,9 +53,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .history:     return L("会话与日志保留", "Sessions & logs")
         case .preferences: return L("偏好与系统权限", "Preferences & permissions")
         case .about:       return L("版本、许可证与支持", "Version, license & support")
+        case .debug:       return L("运行状态、日志与诊断", "Runtime, logs & diagnostics")
         #if HAS_CLOUD_SUBSCRIPTION
         case .account:     return L("登录与订阅管理", "Login & subscription")
-        case .debug:       return L("区域、端点与诊断", "Region, endpoints & diagnostics")
         #endif
         }
     }
@@ -71,9 +69,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .history:     return "clock.arrow.circlepath"
         case .preferences: return "gearshape"
         case .about:       return "questionmark.circle"
+        case .debug:       return "ladybug"
         #if HAS_CLOUD_SUBSCRIPTION
         case .account:     return "person.crop.circle"
-        case .debug:       return "ladybug"
         #endif
         }
     }
@@ -88,6 +86,8 @@ struct SettingsView: View {
     @State private var hoveredTab: SettingsTab?
     @State private var hoveredSettingsTab: SettingsTab?
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
+    @AppStorage(DebugSettingsAvailability.defaultsKey)
+    private var debugPanelEnabled = DebugSettingsAvailability.defaultEnabled
     #if HAS_CLOUD_SUBSCRIPTION
     @State private var showDeviceConflict = false
     @AppStorage("tf_app_edition") private var editionRaw: String?
@@ -168,6 +168,11 @@ struct SettingsView: View {
                 VocabularyNavigationCenter.shared.consumeSettingsNavigation()
             }
         }
+        .onChange(of: debugPanelEnabled) { _, isEnabled in
+            if !isEnabled && selectedTab == .debug {
+                selectedTab = .preferences
+            }
+        }
     }
 
     // MARK: - Sidebar
@@ -199,12 +204,10 @@ struct SettingsView: View {
 
             Spacer()
 
-            #if HAS_CLOUD_SUBSCRIPTION
-            if DebugTab.isEnabled && edition == .member {
+            if debugPanelEnabled {
                 navItem(.debug)
                     .padding(.horizontal, 10)
             }
-            #endif
             #if HAS_CLOUD_SUBSCRIPTION
             if edition == .member {
                 navItem(.account)
@@ -387,11 +390,9 @@ struct SettingsView: View {
                 tabPage(.account) { AccountTab() }
             }
             #endif
-            #if HAS_CLOUD_SUBSCRIPTION
-            if DebugTab.isEnabled && edition == .member {
-                tabPage(.debug) { DebugTab() }
+            if debugPanelEnabled {
+                tabPage(.debug) { DebugSettingsTab() }
             }
-            #endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(TF.settingsWindowBackground)
