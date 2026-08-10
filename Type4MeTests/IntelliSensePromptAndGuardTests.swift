@@ -217,6 +217,47 @@ final class IntelliSenseOutputGuardTests: XCTestCase {
             IntelliSenseOutputGuard.evaluate(input: "请保留 https://example.com/a", output: "请保留 https://example.com/b"),
             .reject(.protectedTokenChanged)
         )
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "配置文件在 /Users/demo/config.json",
+                output: "配置文件在 /Users/demo/other.json"
+            ),
+            .reject(.protectedTokenChanged)
+        )
+    }
+
+    func testDiscourseMarkerAndTechnicalIdentifierChangesDoNotDiscardPolish() {
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "能够让用户感受到，OK，这个产品功能很强大。",
+                output: "能够让用户感受到这个产品功能很强大。"
+            ),
+            .acceptWithWarnings([.sourceProtectedTokenChanged])
+        )
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "我们用 SwiftUI 实现这个界面。",
+                output: "我们用新的界面框架实现。"
+            ),
+            .acceptWithWarnings([.sourceProtectedTokenChanged])
+        )
+        XCTAssertFalse(ProtectedFactExtractor.isHardProtectedToken("OK"))
+        XCTAssertFalse(ProtectedFactExtractor.isHardProtectedToken("SwiftUI"))
+        XCTAssertTrue(ProtectedFactExtractor.isHardProtectedToken("1200"))
+        XCTAssertTrue(ProtectedFactExtractor.isHardProtectedToken("https://example.com/a"))
+        XCTAssertTrue(ProtectedFactExtractor.isHardProtectedToken("/Users/demo/config.json"))
+    }
+
+    func testRealLongFormListPolishIsNotDiscardedForOKOrListOrdinals() {
+        let input = "很多人还是愿意实时看到整个文字的反写过程的。这样呢，会给自己更多的心理暗示，以及更清楚地知道自己现在在说什么东西。我觉得优点有以下几个吧。第一就是降低用户的心理负担，不用去猜测现在是什么。第二，就是可以给用户一个感觉，好像整体的时延会比较低。否则你等到所有内容全部输出完了，你再去处理输出，好像等的时间就会比较漫长。第三，也是一种炫技。能够让用户感受到，OK，这个产品的功能很强大，技术很扎实。"
+        let output = "很多人仍然愿意实时看到文字的生成过程，因为这样既能获得心理暗示，也能更清楚地知道自己正在表达什么。主要有以下三个优点：\n1. 降低心理负担，不必猜测当前状态；\n2. 降低感知时延，避免等待全部内容处理完成后才输出；\n3. 展示产品能力，让用户感受到功能强大、技术扎实。"
+
+        let decision = IntelliSenseOutputGuard.evaluate(input: input, output: output)
+        guard case .acceptWithWarnings(let warnings) = decision else {
+            return XCTFail("Expected polished list to be accepted with warnings, got \(decision)")
+        }
+        XCTAssertTrue(warnings.contains(.sourceProtectedTokenChanged))
+        XCTAssertTrue(warnings.contains(.listStructureChanged))
     }
 
     func testRejectsCodeFenceListLossAndLanguageReplacement() {
@@ -330,6 +371,20 @@ final class IntelliSenseOutputGuardTests: XCTestCase {
                 output: "成本还没算清楚，不过可以先确认完再决定。"
             ),
             .accept
+        )
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "如果不行就明天再试",
+                output: "失败的话就明天再试。"
+            ),
+            .acceptWithWarnings([.negationCountChanged])
+        )
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "绝不发布这个版本",
+                output: "可以发布这个版本。"
+            ),
+            .reject(.negationChanged)
         )
     }
 

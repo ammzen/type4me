@@ -99,18 +99,32 @@ enum ProtectedFactExtractor {
         let range: Range<String.Index>
     }
 
-    private static let patterns = [
+    private static let hardPatterns = [
         #"https?://[^\s<>]+"#,
         #"(?i)[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"#,
-        #"(?:^|\s)(?:--?[A-Za-z][A-Za-z0-9_-]*)(?=\s|=|$)"#,
         #"(?:/[^\s/]+){2,}"#,
         #"(?<![A-Za-z0-9])\d+(?:[.,:/-]\d+)*(?![A-Za-z0-9])"#,
         #"(?:周|星期|礼拜)[一二三四五六日天]"#,
+    ]
+
+    private static let softPatterns = [
+        #"(?:^|\s)(?:--?[A-Za-z][A-Za-z0-9_-]*)(?=\s|=|$)"#,
         #"\b[A-Za-z_$][A-Za-z0-9_$]*(?:[-_.$][A-Za-z0-9_$-]+|[A-Z][A-Za-z0-9_$]*)+\b"#,
     ]
 
+    private static let patterns = hardPatterns + softPatterns
+
     static func tokens(in text: String) -> Set<String> {
         Set(tokensWithRanges(in: text).map(\.token))
+    }
+
+    static func isHardProtectedToken(_ token: String) -> Bool {
+        hardPatterns.contains { pattern in
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+            let fullRange = NSRange(token.startIndex..<token.endIndex, in: token)
+            guard let match = regex.firstMatch(in: token, range: fullRange) else { return false }
+            return match.range == fullRange
+        }
     }
 
     static func tokensWithRanges(in text: String) -> [Match] {

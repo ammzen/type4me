@@ -92,7 +92,9 @@ public enum IntelliSenseOutputValidator {
         guard !looksLikeAnswerOrExplanation(trimmed) else { return .reject(.answerOrExplanation) }
         guard !claimsExecution(input: input, output: trimmed) else { return .reject(.claimedExecution) }
 
-        for token in analysis.requiredProtectedTokens where !contains(token: token, in: trimmed) {
+        for token in analysis.requiredProtectedTokens
+        where ProtectedFactExtractor.isHardProtectedToken(token)
+            && !contains(token: token, in: trimmed) {
             return .reject(.protectedTokenChanged)
         }
         let outputNegations = CorrectionIntentAnalysis.analyze(trimmed).semanticNegationCounts
@@ -145,11 +147,10 @@ public enum IntelliSenseOutputValidator {
         _ input: [String: Int],
         _ output: [String: Int]
     ) -> Bool {
-        let inputTotal = input.values.reduce(0, +)
-        let outputTotal = output.values.reduce(0, +)
-        guard inputTotal == outputTotal else { return false }
-        // Prohibitions and emphatic "never" carry distinct force. Other
-        // surface forms may be valid paraphrases, e.g. “如果不行” -> “未完成”.
+        // During product evaluation, only strong prohibitions and emphatic
+        // "never" relations justify discarding the entire polished result.
+        // Other negation changes are observable warnings because valid
+        // paraphrases frequently change their surface count.
         return input["prohibition", default: 0] == output["prohibition", default: 0]
             && input["never", default: 0] == output["never", default: 0]
     }
@@ -243,7 +244,25 @@ public enum IntelliSenseOutputValidator {
         // New Arabic facts are hard errors when the source already contained
         // protected facts. For ASR-shaped Chinese-number normalization, emit no
         // hard rejection because the source may not contain an Arabic token.
-        return !inputTokens.isEmpty && additions.contains { $0.rangeOfCharacter(from: .decimalDigits) != nil }
+        return !inputTokens.isEmpty && additions.contains { token in
+            token.rangeOfCharacter(from: .decimalDigits) != nil
+                && !appearsOnlyAsListMarker(token, in: output)
+        }
+    }
+
+    private static func appearsOnlyAsListMarker(_ token: String, in text: String) -> Bool {
+        let escaped = NSRegularExpression.escapedPattern(for: token)
+        guard let marker = try? NSRegularExpression(
+            pattern: #"(?m)^\s*"# + escaped + #"[.)、]\s*"#
+        ) else { return false }
+        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard marker.firstMatch(in: text, range: fullRange) != nil else { return false }
+        let withoutMarkers = marker.stringByReplacingMatches(
+            in: text,
+            range: fullRange,
+            withTemplate: ""
+        )
+        return !contains(token: token, in: withoutMarkers)
     }
 
     private static func adoptedContextTerm(
