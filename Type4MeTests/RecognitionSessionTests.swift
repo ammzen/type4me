@@ -71,6 +71,42 @@ final class RecognitionSessionTests: XCTestCase {
         XCTAssertEqual(mode.id, ProcessingMode.directId)
     }
 
+    func testTranslationTargetAndPromptAreFrozenForSession() async throws {
+        let session = RecognitionSession()
+        let english = ProcessingMode.translation(target: .english)
+        try await session.freezeTranslationModeForTesting(english)
+
+        let firstPrompt = await session.promptForCurrentModeForTesting()
+        var changedSetting = ProcessingMode.translation(target: .japanese)
+        changedSetting.translationTargetLanguageCode = TranslationLanguage.japanese.rawValue
+        await session.replaceTranslationModeSnapshotForTesting(changedSetting)
+        let secondPrompt = await session.promptForCurrentModeForTesting()
+
+        let frozenTarget = await session.frozenTranslationTargetForTesting()
+        XCTAssertEqual(frozenTarget, .english)
+        XCTAssertEqual(secondPrompt, firstPrompt)
+        XCTAssertTrue(secondPrompt.contains("English (en)"))
+        XCTAssertFalse(secondPrompt.contains("Japanese (ja)"))
+    }
+
+    func testUnknownTranslationTargetCannotBeFrozen() async {
+        let session = RecognitionSession()
+        var mode = ProcessingMode.translation()
+        mode.translationTargetLanguageCode = "x-future"
+
+        do {
+            try await session.freezeTranslationModeForTesting(mode)
+            XCTFail("Expected unsupported target")
+        } catch let error as TranslationError {
+            XCTAssertEqual(error.errorDescription, L(
+                "暂不支持目标语言：x-future",
+                "Unsupported target language: x-future"
+            ))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testShouldAttemptBatchFallbackWhenStreamingErrorWasObserved() {
         let shouldFallback = RecognitionSession.shouldAttemptBatchFallback(
             uploadFailed: false,

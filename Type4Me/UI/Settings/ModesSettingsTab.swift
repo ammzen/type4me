@@ -57,6 +57,7 @@ struct ModesSettingsTab: View {
     @State private var selectedASRProvider: ASRProvider = KeychainService.selectedASRProvider
     @State private var showClearAskAnythingConfirmation = false
     @State private var askAnythingSettingsError: String?
+    @State private var translationStatusMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -320,10 +321,20 @@ struct ModesSettingsTab: View {
             dragDots
                 .opacity(isHovered || isDragging ? 1 : 0)
 
-            Text(mode.name)
-                .font(.system(size: 13, weight: isActive ? .semibold : .medium))
-                .foregroundStyle(TF.settingsText)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(mode.name)
+                    .font(.system(size: 13, weight: isActive ? .semibold : .medium))
+                    .foregroundStyle(TF.settingsText)
+                    .lineLimit(1)
+                if mode.id == ProcessingMode.translationModeId,
+                   let code = mode.translationTargetLanguageCode,
+                   let target = TranslationLanguage(rawValue: code) {
+                    Text(L("目标：\(target.displayName)", "Target: \(target.displayName)"))
+                        .font(.system(size: 9))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                        .lineLimit(1)
+                }
+            }
 
             if mode.isBuiltin {
                 Text(L("内置", "BUILT-IN"))
@@ -399,7 +410,9 @@ struct ModesSettingsTab: View {
 
     @ViewBuilder
     private func modeDetail(_ mode: ProcessingMode) -> some View {
-        if mode.id == ProcessingMode.intelliSenseId {
+        if mode.id == ProcessingMode.translationModeId {
+            translationModeDetail(mode)
+        } else if mode.id == ProcessingMode.intelliSenseId {
             IntelliSenseModeDetail(
                 mode: mode,
                 onEditBinding: { editBinding(mode, $0) },
@@ -503,9 +516,104 @@ struct ModesSettingsTab: View {
     private func builtinIcon(for mode: ProcessingMode) -> String {
         switch mode.id {
         case ProcessingMode.formalWritingId: return "wand.and.stars"
+        case ProcessingMode.translationModeId: return "character.book.closed.fill"
         case ProcessingMode.macActionId: return "command.circle.fill"
         case ProcessingMode.selectionAskId: return "sparkle.magnifyingglass"
         default: return "bolt.fill"
+        }
+    }
+
+    private func translationModeDetail(_ mode: ProcessingMode) -> some View {
+        let currentCode = mode.translationTargetLanguageCode ?? TranslationLanguage.english.rawValue
+        let currentLanguage = TranslationLanguage(rawValue: currentCode)
+
+        return VStack(alignment: .leading, spacing: 18) {
+            builtinModeDetail(mode)
+
+            VStack(alignment: .leading, spacing: 7) {
+                fieldLabel(L("目标语言", "Target language"), L("所有快捷键共用", "Shared by all hotkeys"))
+
+                Picker(
+                    L("目标语言", "Target language"),
+                    selection: Binding(
+                        get: { currentCode },
+                        set: { updateTranslationTarget($0) }
+                    )
+                ) {
+                    if currentLanguage == nil {
+                        Text(L("暂不支持的语言（\(currentCode)）", "Unsupported language (\(currentCode))"))
+                            .tag(currentCode)
+                    }
+                    ForEach(TranslationLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: 320, alignment: .leading)
+                .accessibilityLabel(L("翻译目标语言", "Translation target language"))
+                .accessibilityHint(L(
+                    "Type4Me 会自动识别口述语言并翻译为所选语言",
+                    "Type4Me automatically detects the spoken language and translates it to the selected language"
+                ))
+
+                Text(L(
+                    "Type4Me 会自动识别你的口述语言；下一次录音开始时会冻结当前目标语言。",
+                    "Type4Me automatically detects your spoken language. The current target is frozen when the next recording starts."
+                ))
+                .font(.system(size: 10))
+                .foregroundStyle(TF.settingsTextTertiary)
+                .lineSpacing(2)
+
+                if currentLanguage == nil {
+                    Label(
+                        L("这个语言代码来自较新版本。请选择一个当前支持的语言后再使用翻译模式。", "This language code came from a newer version. Select a supported language before using Translation."),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsAccentAmber)
+                }
+
+                if let translationStatusMessage {
+                    Label(translationStatusMessage, systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(TF.settingsAccentGreen)
+                        .transition(.opacity)
+                }
+            }
+
+            HotkeySectionView(
+                bindings: mode.hotkeyBindings,
+                onEdit: { editBinding(mode, $0) },
+                onDelete: { deleteBinding(mode.id, $0) },
+                onAdd: { addBinding(mode) }
+            )
+
+            Text(L(
+                "翻译模式只翻译口述内容，不回答其中的问题，也不执行其中的命令。代码、路径、链接、数字和标识符会尽量保持原样。",
+                "Translation only translates what you dictate. It does not answer questions or execute commands found in the input. Code, paths, links, numbers, and identifiers are preserved whenever possible."
+            ))
+            .font(.system(size: 11))
+            .foregroundStyle(TF.settingsTextSecondary)
+            .lineSpacing(3)
+        }
+        .padding(.bottom, 8)
+    }
+
+    private func updateTranslationTarget(_ code: String) {
+        guard TranslationLanguage(rawValue: code) != nil,
+              let index = modes.firstIndex(where: { $0.id == ProcessingMode.translationModeId })
+        else { return }
+
+        modes[index].translationTargetLanguageCode = code
+        persistModes()
+        if let language = TranslationLanguage(rawValue: code) {
+            withAnimation(.easeOut(duration: 0.15)) {
+                translationStatusMessage = L(
+                    "目标语言已设为\(language.displayName)",
+                    "Target language set to \(language.displayName)"
+                )
+            }
         }
     }
 

@@ -385,6 +385,14 @@ struct HomeDashboardView: View {
     }
 
     private func modeSummary(_ mode: ProcessingMode) -> String {
+        if mode.id == ProcessingMode.translationModeId,
+           let code = mode.translationTargetLanguageCode,
+           let target = TranslationLanguage(rawValue: code) {
+            return L(
+                "目标：\(target.displayName) · 自动识别口述语言",
+                "Target: \(target.displayName) · Auto-detect spoken language"
+            )
+        }
         let summary = mode.description.trimmingCharacters(in: .whitespacesAndNewlines)
         return summary.isEmpty ? L("自定义处理模式", "Custom processing mode") : summary
     }

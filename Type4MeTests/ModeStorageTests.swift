@@ -107,7 +107,7 @@ final class ModeStorageTests: XCTestCase {
         XCTAssertEqual(persisted.filter { $0.id == ProcessingMode.intelliSenseId }.count, 1)
     }
 
-    func testLoadMigratesLegacyBuiltinModesToDeletableModes() throws {
+    func testLoadMigratesLegacySmartModeButPreservesLegacyTranslationRecord() throws {
         let storage = ModeStorage(fileURL: testURL)
         let legacyModes = [
             ProcessingMode.direct,
@@ -130,12 +130,11 @@ final class ModeStorageTests: XCTestCase {
         let loaded = storage.load()
 
         let smart = loaded.first(where: { $0.id == ProcessingMode.smartDirect.id })
-        let translate = loaded.first(where: { $0.id == ProcessingMode.translate.id })
+        let translate = loaded.first(where: { $0.id == ProcessingMode.translateId })
 
         XCTAssertEqual(smart?.isBuiltin, false)
         XCTAssertEqual(smart?.prompt, ProcessingMode.smartDirect.prompt)
-        XCTAssertEqual(translate?.isBuiltin, false)
-        XCTAssertEqual(translate?.prompt, ProcessingMode.translate.prompt)
+        XCTAssertEqual(translate, legacyModes[2])
     }
 
     func testDeletedDefaultModesAreNotReinserted() throws {
@@ -190,7 +189,7 @@ final class ModeStorageTests: XCTestCase {
         XCTAssertEqual(formalWriting?.processingLabel, ProcessingMode.formalWriting.processingLabel)
         XCTAssertEqual(formalWriting?.hotkeyBindings.first?.keyCode, 30)
 
-        XCTAssertEqual(translate?.prompt, ProcessingMode.translate.prompt)
+        XCTAssertEqual(translate?.prompt, ProcessingMode.legacyTranslatePromptTemplate)
         XCTAssertEqual(translate?.processingLabel, "我的翻译中")
         XCTAssertEqual(translate?.hotkeyBindings.first?.keyCode, 31)
     }
@@ -226,7 +225,7 @@ final class ModeStorageTests: XCTestCase {
         XCTAssertTrue(mode.prompt.contains("代码、命令、URL、邮箱、文件路径、变量名、版本号等必须原样保留"))
     }
 
-    func testTranslateToChineseIsSeededOnceForExistingInstalls() throws {
+    func testTranslateToChineseSeedFlagIsIgnoredAndDeletedLegacyModeStaysDeleted() throws {
         let seedKey = "tf_translateToChineseModeSeeded"
         let previousSeedValue = UserDefaults.standard.object(forKey: seedKey)
         defer {
@@ -242,11 +241,100 @@ final class ModeStorageTests: XCTestCase {
         try storage.save([ProcessingMode.direct])
 
         let firstLoad = storage.load()
-        XCTAssertTrue(firstLoad.contains { $0.id == ProcessingMode.translateToChineseId })
+        XCTAssertFalse(firstLoad.contains { $0.id == ProcessingMode.translateToChineseId })
+        XCTAssertTrue(firstLoad.contains { $0.id == ProcessingMode.translationModeId })
 
-        try storage.save(firstLoad.filter { $0.id != ProcessingMode.translateToChineseId })
+        try storage.save(firstLoad)
+        UserDefaults.standard.set(true, forKey: seedKey)
         let secondLoad = storage.load()
         XCTAssertFalse(secondLoad.contains { $0.id == ProcessingMode.translateToChineseId })
+    }
+
+    func testFreshDefaultsContainOnlyNewTranslationWithOption3() {
+        let translationModes = ProcessingMode.defaults.filter {
+            $0.id == ProcessingMode.translationModeId
+        }
+
+        XCTAssertEqual(translationModes.count, 1)
+        XCTAssertFalse(ProcessingMode.defaults.contains { ProcessingMode.legacyTranslationModeIDs.contains($0.id) })
+        XCTAssertEqual(translationModes[0].translationTargetLanguageCode, "en")
+        XCTAssertEqual(translationModes[0].hotkeyBindings.count, 1)
+        XCTAssertEqual(translationModes[0].hotkeyBindings[0].keyCode, 20)
+        XCTAssertEqual(translationModes[0].hotkeyBindings[0].modifiers, 524288)
+    }
+
+    func testExistingLegacyTranslationRecordsArePreservedAndNewModeAppended() throws {
+        let suite = "ModeStorageTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "tf_agentModeSeeded")
+        defaults.set(true, forKey: "tf_shortTextExemptionMigrated")
+
+        var english = ProcessingMode.translate
+        english.name = "My English Workflow"
+        english.prompt = "My private prompt: {text}"
+        english.description = "My description"
+        english.processingLabel = "Working"
+        english.hotkeyBindings = [
+            HotkeyBinding(keyCode: 20, modifiers: 524288, style: .hold),
+            HotkeyBinding(keyCode: 21, modifiers: 0, style: .toggle),
+        ]
+        english.shortTextExemption = 7
+        var chinese = ProcessingMode.translateToChinese
+        chinese.prompt = "My Chinese prompt: {text}"
+        let original = [ProcessingMode.direct, english, chinese]
+        let storage = ModeStorage(fileURL: testURL, userDefaults: defaults)
+        try storage.save(original)
+
+        let loaded = storage.load()
+
+        XCTAssertEqual(loaded.first { $0.id == english.id }, english)
+        XCTAssertEqual(loaded.first { $0.id == chinese.id }, chinese)
+        XCTAssertLessThan(
+            try XCTUnwrap(loaded.firstIndex { $0.id == english.id }),
+            try XCTUnwrap(loaded.firstIndex { $0.id == chinese.id })
+        )
+        let translation = loaded.first { $0.id == ProcessingMode.translationModeId }
+        XCTAssertEqual(translation?.translationTargetLanguageCode, "en")
+        XCTAssertTrue(translation?.hotkeyBindings.isEmpty == true)
+        XCTAssertEqual(loaded.filter { $0.id == ProcessingMode.translationModeId }.count, 1)
+        XCTAssertEqual(storage.load(), loaded)
+    }
+
+    func testExistingUserTargetUsesLastSelectedLegacyChineseMode() throws {
+        let suite = "ModeStorageTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(ProcessingMode.translateToChineseId.uuidString, forKey: ModeSelectionPreference.storageKey)
+        defaults.set(true, forKey: "tf_agentModeSeeded")
+        defaults.set(true, forKey: "tf_shortTextExemptionMigrated")
+        let storage = ModeStorage(fileURL: testURL, userDefaults: defaults)
+        try storage.save([ProcessingMode.direct, ProcessingMode.translateToChinese])
+
+        let loaded = storage.load()
+
+        XCTAssertEqual(
+            loaded.first { $0.id == ProcessingMode.translationModeId }?.translationTargetLanguageCode,
+            "zh-Hans"
+        )
+    }
+
+    func testNewTranslationCanonicalizationPreservesBindingsAndUnknownTarget() throws {
+        let storage = ModeStorage(fileURL: testURL)
+        let bindings = [HotkeyBinding(keyCode: 42, modifiers: 123, style: .hold)]
+        var stored = ProcessingMode.translation(target: .japanese, hotkeyBindings: bindings)
+        stored.name = "Tampered system name"
+        stored.prompt = "Tampered prompt"
+        stored.translationTargetLanguageCode = "x-future-language"
+        try storage.save([ProcessingMode.direct, stored])
+
+        let loaded = storage.load().first { $0.id == ProcessingMode.translationModeId }
+
+        XCTAssertEqual(loaded?.name, ProcessingMode.translation().name)
+        XCTAssertEqual(loaded?.prompt, TranslationPromptBuilder.baseTemplate)
+        XCTAssertEqual(loaded?.hotkeyBindings, bindings)
+        XCTAssertEqual(loaded?.translationTargetLanguageCode, "x-future-language")
+        XCTAssertEqual(loaded?.shortTextExemption, 0)
     }
 
     // MARK: - Hotkey binding tests

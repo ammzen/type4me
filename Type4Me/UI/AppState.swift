@@ -177,6 +177,9 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     /// than this many characters, LLM post-processing is skipped. 0 disables it.
     var shortTextExemption: Int
     var executionKind: ExecutionKind
+    /// BCP 47 target code used only by the built-in Translation mode. Keeping
+    /// this as a String preserves future codes written by newer app versions.
+    var translationTargetLanguageCode: String?
 
     enum HotkeyStyle: String, Codable, CaseIterable {
         case hold    // press and hold to record
@@ -211,7 +214,8 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         processingLabel: String = L("处理中", "Processing"),
         hotkeyBindings: [HotkeyBinding] = [],
         shortTextExemption: Int = 0,
-        executionKind: ExecutionKind = .recording
+        executionKind: ExecutionKind = .recording,
+        translationTargetLanguageCode: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -222,11 +226,12 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         self.hotkeyBindings = hotkeyBindings
         self.shortTextExemption = shortTextExemption
         self.executionKind = executionKind
+        self.translationTargetLanguageCode = translationTargetLanguageCode
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, prompt, isBuiltin, processingLabel
-        case hotkeyBindings, shortTextExemption, executionKind
+        case hotkeyBindings, shortTextExemption, executionKind, translationTargetLanguageCode
         // Legacy single-hotkey keys, decoded for backward compatibility only.
         case hotkeyCode, hotkeyModifiers, hotkeyStyle
     }
@@ -256,6 +261,10 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         }
 
         executionKind = try container.decodeIfPresent(ExecutionKind.self, forKey: .executionKind) ?? .recording
+        translationTargetLanguageCode = try container.decodeIfPresent(
+            String.self,
+            forKey: .translationTargetLanguageCode
+        )
     }
 
     func encode(to encoder: Encoder) throws {
@@ -270,6 +279,10 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         // Only the new array format is written; legacy keys are intentionally omitted.
         try container.encode(hotkeyBindings, forKey: .hotkeyBindings)
         try container.encode(executionKind, forKey: .executionKind)
+        try container.encodeIfPresent(
+            translationTargetLanguageCode,
+            forKey: .translationTargetLanguageCode
+        )
     }
 
     // MARK: - Built-in Mode IDs (stable, never change)
@@ -278,6 +291,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     static let translateId = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
     static let macActionId = UUID(uuidString: "00000000-0000-0000-0000-000000000008")!
     static let intelliSenseId = UUID(uuidString: "00000000-0000-0000-0000-00000000000A")!
+    static let translationModeId = UUID(uuidString: "00000000-0000-0000-0000-00000000000B")!
 
     // MARK: - Built-in default hotkey binding IDs (stable seeds)
     // Deterministic so the computed `builtins`/`defaults` seeds don't churn on
@@ -289,6 +303,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     private static let agentModeBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000005")!
     private static let macActionBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000006")!
     private static let selectionAskBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000007")!
+    private static let translationModeBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000008")!
 
     /// Descriptions for records written before the `description` field existed.
     /// Stable IDs let official modes migrate without deriving UI copy from prompts.
@@ -309,6 +324,11 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             return L("将口述需求优化成结构清晰的 Prompt", "Turn spoken requests into structured prompts")
         case defaultTranslateId, translateId:
             return L("将中文口述自然翻译为英文", "Translate spoken Chinese into natural English")
+        case translationModeId:
+            return L(
+                "自动识别口述语言并翻译为目标语言",
+                "Automatically detect spoken language and translate it to your target language"
+            )
         case commandModeId:
             return L("根据口述指令处理选中文本或剪贴板内容", "Transform selected or clipboard text with spoken commands")
         case agentModeId:
@@ -732,6 +752,47 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         )
     }
 
+    /// Canonical built-in Translation mode used when upgrading an existing
+    /// modes file. It intentionally has no hotkey so it cannot steal the
+    /// legacy English Translation mode's Option+3 binding.
+    static func translation(
+        target: TranslationLanguage = .english,
+        hotkeyBindings: [HotkeyBinding] = []
+    ) -> ProcessingMode {
+        ProcessingMode(
+            id: translationModeId,
+            name: L("翻译", "Translation"),
+            description: defaultDescription(for: translationModeId),
+            prompt: TranslationPromptBuilder.baseTemplate,
+            isBuiltin: true,
+            processingLabel: L("翻译中", "Translating"),
+            hotkeyBindings: hotkeyBindings,
+            shortTextExemption: 0,
+            executionKind: .recording,
+            translationTargetLanguageCode: target.rawValue
+        )
+    }
+
+    static var translationForFreshInstall: ProcessingMode {
+        translation(
+            target: .english,
+            hotkeyBindings: [
+                HotkeyBinding(
+                    id: translationModeBindingId,
+                    keyCode: 20,
+                    modifiers: 524288,
+                    style: .toggle
+                ),
+            ]
+        )
+    }
+
+    static let legacyTranslationModeIDs: Set<UUID> = [
+        translateId,
+        defaultTranslateId,
+        translateToChineseId,
+    ]
+
     static var commandMode: ProcessingMode {
         ProcessingMode(
             id: commandModeId,
@@ -1027,9 +1088,11 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         )
     }
 
-    static var builtins: [ProcessingMode] { [.direct, .intelliSense, .formalWriting, .macAction, .selectionAsk] }
+    static var builtins: [ProcessingMode] {
+        [.direct, .intelliSense, .formalWriting, .translation(), .macAction, .selectionAsk]
+    }
     static var defaults: [ProcessingMode] {
-        [.direct, .intelliSense, .formalWriting, .promptOptimize, .translate, .translateToChinese, .agentMode, .commandMode, .macAction, .selectionAsk]
+        [.direct, .intelliSense, .formalWriting, .promptOptimize, .translationForFreshInstall, .agentMode, .commandMode, .macAction, .selectionAsk]
     }
 }
 

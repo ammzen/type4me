@@ -11,6 +11,26 @@ private final class UploadFailureFlag: Sendable {
     }
 }
 
+enum TranslationError: LocalizedError, Sendable {
+    case unsupportedTarget(String)
+    case llmUnavailable
+    case emptyOutput
+    case unsafeOutput
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedTarget(let code):
+            return L("暂不支持目标语言：\(code)", "Unsupported target language: \(code)")
+        case .llmUnavailable:
+            return L("翻译失败，请检查 LLM 设置后重试。", "Translation failed. Check your LLM settings and try again.")
+        case .emptyOutput:
+            return L("翻译模型没有返回有效内容，请重试。", "The translation model returned no usable text. Please try again.")
+        case .unsafeOutput:
+            return L("翻译结果包含异常结构，已停止粘贴。", "The translation contained an unsafe structure and was not pasted.")
+        }
+    }
+}
+
 actor RecognitionSession {
 
     // MARK: - State
@@ -56,6 +76,36 @@ actor RecognitionSession {
     /// Exposed for testing; production code should resolve modes through startRecording / switchMode.
     func currentModeForTesting() -> ProcessingMode {
         currentMode
+    }
+
+    /// Test seam for request-freezing behavior without starting microphone I/O.
+    func freezeTranslationModeForTesting(_ mode: ProcessingMode) throws {
+        guard mode.id == ProcessingMode.translationModeId else {
+            throw TranslationError.unsupportedTarget("")
+        }
+        let code = mode.translationTargetLanguageCode ?? TranslationLanguage.english.rawValue
+        guard let target = TranslationLanguage(rawValue: code) else {
+            throw TranslationError.unsupportedTarget(code)
+        }
+        sessionGeneration &+= 1
+        currentMode = mode
+        translationRequestContext = TranslationRequestContext(
+            generation: sessionGeneration,
+            target: target,
+            prompt: TranslationPromptBuilder.prompt(target: target)
+        )
+    }
+
+    func replaceTranslationModeSnapshotForTesting(_ mode: ProcessingMode) {
+        currentMode = mode
+    }
+
+    func frozenTranslationTargetForTesting() -> TranslationLanguage? {
+        translationRequestContext?.target
+    }
+
+    func promptForCurrentModeForTesting() async -> String {
+        await promptForCurrentMode()
     }
 
     // MARK: - Dependencies
@@ -278,6 +328,14 @@ actor RecognitionSession {
     private var intelliSenseCrossModeFallback = false
     private var intelliSenseGuardRejected = false
     private var intelliSenseLastProcessingResult: IntelliSenseProcessingResult?
+
+    private struct TranslationRequestContext: Sendable {
+        let generation: Int
+        let target: TranslationLanguage
+        let prompt: String
+    }
+
+    private var translationRequestContext: TranslationRequestContext?
     /// Provider/model paired with the LLM request whose result this history row uses.
     private var historyLLMProvider: String?
     private var historyLLMModel: String?
@@ -423,6 +481,26 @@ actor RecognitionSession {
         historyASRDurationSeconds = nil
         historyLLMDurationSeconds = nil
         clearIntelliSenseSessionContext()
+        clearTranslationSessionContext()
+        if effectiveMode.id == ProcessingMode.translationModeId {
+            let code = effectiveMode.translationTargetLanguageCode
+                ?? TranslationLanguage.english.rawValue
+            guard let target = TranslationLanguage(rawValue: code) else {
+                SoundFeedback.playError()
+                state = .idle
+                onASREvent?(.error(TranslationError.unsupportedTarget(code)))
+                onASREvent?(.completed)
+                return
+            }
+            translationRequestContext = TranslationRequestContext(
+                generation: myGeneration,
+                target: target,
+                prompt: TranslationPromptBuilder.prompt(target: target)
+            )
+            DebugFileLogger.log(
+                "translation start target=\(target.rawValue) generation=\(myGeneration)"
+            )
+        }
         intelliSenseGuardRejected = false
         if effectiveMode.id == ProcessingMode.intelliSenseId {
             let settings = await IntelliSenseSettingsStore.shared.load()
@@ -526,7 +604,8 @@ actor RecognitionSession {
 
         // Intelli Sense never reads selection or clipboard context. Other modes
         // preserve the existing prompt-variable behavior.
-        if effectiveMode.id == ProcessingMode.intelliSenseId {
+        if effectiveMode.id == ProcessingMode.intelliSenseId
+            || effectiveMode.id == ProcessingMode.translationModeId {
             promptContext = PromptContext(selectedText: "", clipboardText: "")
         } else {
             promptContext = await PromptContext.capture()
@@ -715,6 +794,21 @@ actor RecognitionSession {
     /// Switch the processing mode before stopping. Used for cross-mode hotkey stops.
     func switchMode(to mode: ProcessingMode) async {
         let resolved = ASRProviderRegistry.resolvedMode(for: mode, provider: activeProvider)
+        let previousModeID = currentMode.id
+        if previousModeID != resolved.id {
+            // A speculative result belongs to the prompt of the mode that
+            // started it. Never reuse it after a cross-mode finish.
+            speculativeDebounceTask?.cancel()
+            speculativeDebounceTask = nil
+            speculativeLLMTask?.cancel()
+            speculativeLLMTask = nil
+            speculativeLLMText = ""
+            speculativeThrottle.reset()
+            pendingLLMError = nil
+            historyLLMProvider = nil
+            historyLLMModel = nil
+            historyLLMDurationSeconds = nil
+        }
         if currentMode.id == ProcessingMode.intelliSenseId,
            resolved.id != ProcessingMode.intelliSenseId {
             clearIntelliSenseSessionContext()
@@ -724,6 +818,22 @@ actor RecognitionSession {
             intelliSenseSettings = await IntelliSenseSettingsStore.shared.load()
             intelliSenseStartedModeID = currentMode.id
             intelliSenseCrossModeFallback = true
+        }
+        if previousModeID != ProcessingMode.translationModeId,
+           resolved.id == ProcessingMode.translationModeId {
+            let code = resolved.translationTargetLanguageCode ?? TranslationLanguage.english.rawValue
+            if let target = TranslationLanguage(rawValue: code) {
+                translationRequestContext = TranslationRequestContext(
+                    generation: sessionGeneration,
+                    target: target,
+                    prompt: TranslationPromptBuilder.prompt(target: target)
+                )
+            } else {
+                translationRequestContext = nil
+            }
+        } else if previousModeID == ProcessingMode.translationModeId,
+                  resolved.id != ProcessingMode.translationModeId {
+            clearTranslationSessionContext()
         }
         currentMode = resolved
     }
@@ -967,6 +1077,13 @@ actor RecognitionSession {
         // Set state BEFORE any await to prevent a second stop from
         // slipping through the guard during the suspension point.
         state = .finishing
+        if let translationContext = translationRequestContext,
+           currentMode.id == ProcessingMode.translationModeId {
+            onASREvent?(.processingLabelOverride(L(
+                "正在翻译为\(translationContext.target.displayName)…",
+                "Translating to \(translationContext.target.displayName)…"
+            )))
+        }
         maxDurationTask?.cancel()
         maxDurationTask = nil
 
@@ -1344,17 +1461,37 @@ actor RecognitionSession {
                         )
                         return
                     }
-                    let guarded = applyIntelliSenseGuard(
-                        output: cleaned,
-                        input: intelliSenseGuardInput
-                    )
-                    processedText = guarded.rejected ? nil : guarded.text
-                    finalText = guarded.text
-                    onASREvent?(.processingResult(text: guarded.text))
+                    if currentMode.id == ProcessingMode.translationModeId {
+                        do {
+                            let translated = try resolveTranslationOutput(cleaned)
+                            processedText = translated
+                            finalText = translated
+                            onASREvent?(.processingResult(text: translated))
+                        } catch {
+                            await failTranslation(error, rawText: rawText, myGeneration: myGeneration)
+                            return
+                        }
+                    } else {
+                        let guarded = applyIntelliSenseGuard(
+                            output: cleaned,
+                            input: intelliSenseGuardInput
+                        )
+                        processedText = guarded.rejected ? nil : guarded.text
+                        finalText = guarded.text
+                        onASREvent?(.processingResult(text: guarded.text))
+                    }
                 } else {
                     let err = pendingLLMError ?? LLMError.emptyResponse(nil)
-                    DebugFileLogger.log("stop: early LLM failed, falling back to raw text: \(err)")
+                    DebugFileLogger.log("stop: early LLM failed: \(err)")
                     pendingLLMError = nil
+                    if currentMode.id == ProcessingMode.translationModeId {
+                        await failTranslation(
+                            TranslationError.llmUnavailable,
+                            rawText: rawText,
+                            myGeneration: myGeneration
+                        )
+                        return
+                    }
                     llmFailed = true
                     onASREvent?(.processingResult(text: rawText))
                 }
@@ -1420,19 +1557,47 @@ actor RecognitionSession {
                             )
                             return
                         }
-                        let guarded = applyIntelliSenseGuard(
-                            output: cleaned,
-                            input: intelliSenseGuardInput
-                        )
-                        processedText = guarded.rejected ? nil : guarded.text
-                        finalText = guarded.text
-                        onASREvent?(.processingResult(text: guarded.text))
+                        if currentMode.id == ProcessingMode.translationModeId {
+                            do {
+                                let translated = try resolveTranslationOutput(cleaned)
+                                processedText = translated
+                                finalText = translated
+                                onASREvent?(.processingResult(text: translated))
+                            } catch {
+                                await failTranslation(error, rawText: rawText, myGeneration: myGeneration)
+                                return
+                            }
+                        } else {
+                            let guarded = applyIntelliSenseGuard(
+                                output: cleaned,
+                                input: intelliSenseGuardInput
+                            )
+                            processedText = guarded.rejected ? nil : guarded.text
+                            finalText = guarded.text
+                            onASREvent?(.processingResult(text: guarded.text))
+                        }
                     } else {
+                        if currentMode.id == ProcessingMode.translationModeId {
+                            await failTranslation(
+                                TranslationError.llmUnavailable,
+                                rawText: rawText,
+                                myGeneration: myGeneration
+                            )
+                            return
+                        }
                         llmFailed = true
                         onASREvent?(.processingResult(text: rawText))
                     }
                 } else {
-                    DebugFileLogger.log("stop: no LLM credentials, falling back to raw text")
+                    DebugFileLogger.log("stop: no LLM credentials")
+                    if currentMode.id == ProcessingMode.translationModeId {
+                        await failTranslation(
+                            TranslationError.llmUnavailable,
+                            rawText: rawText,
+                            myGeneration: myGeneration
+                        )
+                        return
+                    }
                     llmFailed = true
                     onASREvent?(.processingResult(text: rawText))
                 }
@@ -2144,6 +2309,11 @@ actor RecognitionSession {
     }
 
     private func promptForCurrentMode() async -> String {
+        if currentMode.id == ProcessingMode.translationModeId,
+           let context = translationRequestContext,
+           context.generation == sessionGeneration {
+            return context.prompt
+        }
         guard currentMode.id == ProcessingMode.intelliSenseId else {
             return promptContext.expandContextVariables(currentMode.prompt)
         }
@@ -2218,6 +2388,76 @@ actor RecognitionSession {
         intelliSenseLastProcessingResult = nil
     }
 
+    private func clearTranslationSessionContext() {
+        translationRequestContext = nil
+    }
+
+    private func resolveTranslationOutput(_ candidate: String) throws -> String {
+        guard let context = translationRequestContext,
+              context.generation == sessionGeneration else {
+            throw TranslationError.llmUnavailable
+        }
+        let decision = TranslationOutputValidator.production.validate(
+            candidate,
+            target: context.target
+        )
+        switch decision {
+        case .accept:
+            DebugFileLogger.log(
+                "translation validation decision=accept target=\(context.target.rawValue)"
+            )
+            return candidate
+        case .acceptWithWarning(let warning):
+            DebugFileLogger.log(
+                "translation validation decision=warning target=\(context.target.rawValue) warning=\(String(describing: warning))"
+            )
+            return candidate
+        case .reject(.emptyOutput):
+            throw TranslationError.emptyOutput
+        case .reject:
+            throw TranslationError.unsafeOutput
+        }
+    }
+
+    private func failTranslation(
+        _ error: Error,
+        rawText: String,
+        myGeneration: Int
+    ) async {
+        DebugFileLogger.log("translation failed reason=\(String(describing: error))")
+        let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        await historyStore.insert(HistoryRecord(
+            id: UUID().uuidString,
+            createdAt: Date(),
+            durationSeconds: duration,
+            rawText: rawText,
+            processingMode: currentMode.name,
+            processedText: nil,
+            finalText: rawText,
+            status: "translation_error",
+            characterCount: rawText.count,
+            asrProvider: activeProvider.displayName,
+            asrModel: currentASRModelLabel(for: activeProvider),
+            llmProvider: historyLLMProvider,
+            llmModel: historyLLMModel,
+            asrDurationSeconds: historyASRDurationSeconds,
+            llmDurationSeconds: historyLLMDurationSeconds
+        ))
+        KeychainService.addASRUsage(seconds: duration)
+        SoundFeedback.playError()
+        onASREvent?(.error(error))
+        onASREvent?(.completed)
+        if sessionGeneration == myGeneration {
+            state = .idle
+            currentTranscript = .empty
+            hasEmittedReadyForCurrentSession = false
+        }
+        resetSpeculativeLLM()
+        clearTranslationSessionContext()
+        SystemVolumeManager.restore()
+        warmUpASRConnection()
+    }
+
     private func makeIntelliSenseHistoryTraceJSON(
         input: String,
         finalText: String,
@@ -2269,6 +2509,7 @@ actor RecognitionSession {
         speculativeLLMText = ""
         speculativeThrottle.reset()
         clearIntelliSenseSessionContext()
+        clearTranslationSessionContext()
     }
 
     // MARK: - Timeout Helper

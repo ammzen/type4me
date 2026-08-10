@@ -3,8 +3,10 @@ import Foundation
 struct ModeStorage {
 
     let fileURL: URL
+    let userDefaults: UserDefaults
 
-    init(fileURL: URL? = nil) {
+    init(fileURL: URL? = nil, userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
         if let url = fileURL {
             self.fileURL = url
         } else {
@@ -31,6 +33,11 @@ struct ModeStorage {
 
         // Migrate legacy built-in flags for default modes, and drop unknown built-ins.
         var result = saved.compactMap { mode -> ProcessingMode? in
+            // Legacy translation records are user data. Preserve every field,
+            // including old built-in flags, prompts, bindings, and ordering.
+            if ProcessingMode.legacyTranslationModeIDs.contains(mode.id) {
+                return mode
+            }
             if mode.id == ProcessingMode.directId {
                 var d = ProcessingMode.direct
                 d.hotkeyBindings = mode.hotkeyBindings
@@ -45,9 +52,6 @@ struct ModeStorage {
             }
             if mode.id == ProcessingMode.smartDirectId {
                 return migrateDefaultMode(mode, fallback: .smartDirect)
-            }
-            if mode.id == ProcessingMode.translateId {
-                return migrateDefaultMode(mode, fallback: .translate)
             }
             if mode.id == ProcessingMode.formalWritingId {
                 let legacyPrompts: Set<String> = [
@@ -90,12 +94,15 @@ struct ModeStorage {
                 d.hotkeyBindings = mode.hotkeyBindings
                 return d
             }
-            if mode.id == ProcessingMode.translate.id {
-                return migrateSeededDefaultPrompt(
-                    mode,
-                    legacyPrompts: [ProcessingMode.legacyTranslatePromptTemplate],
-                    fallbackPrompt: ProcessingMode.translate.prompt
-                )
+            if mode.id == ProcessingMode.translationModeId {
+                var canonical = ProcessingMode.translation()
+                canonical.hotkeyBindings = mode.hotkeyBindings
+                let storedCode = mode.translationTargetLanguageCode?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                canonical.translationTargetLanguageCode =
+                    storedCode.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? TranslationLanguage.english.rawValue
+                return canonical
             }
             if mode.id == ProcessingMode.promptOptimize.id {
                 // Detect any previous version by unique substrings
@@ -130,6 +137,15 @@ struct ModeStorage {
         ]
         var insertedRequiredBuiltin = false
         for builtin in ProcessingMode.builtins where !resultIds.contains(builtin.id) {
+            var builtin = builtin
+            if builtin.id == ProcessingMode.translationModeId {
+                let selectedID = userDefaults.string(forKey: ModeSelectionPreference.storageKey)
+                    .flatMap(UUID.init(uuidString:))
+                let target: TranslationLanguage = selectedID == ProcessingMode.translateToChineseId
+                    ? .simplifiedChinese
+                    : .english
+                builtin = ProcessingMode.translation(target: target)
+            }
             if originalBuiltinIds.contains(builtin.id),
                let idx = ProcessingMode.builtins.firstIndex(where: { $0.id == builtin.id }) {
                 let insertAt = min(idx, result.count)
@@ -146,16 +162,15 @@ struct ModeStorage {
         // One-time seeds for deletable default modes on existing installs.
         // Once seeded, deleting one is respected and will not re-inject it.
         let seededDefaults: [(mode: ProcessingMode, key: String)] = [
-            (.translateToChinese, "tf_translateToChineseModeSeeded"),
             (.agentMode, "tf_agentModeSeeded"),
         ]
         var seededAnyMode = false
-        for seed in seededDefaults where !UserDefaults.standard.bool(forKey: seed.key) {
+        for seed in seededDefaults where !userDefaults.bool(forKey: seed.key) {
             if !result.contains(where: { $0.id == seed.mode.id }) {
                 result.append(seed.mode)
                 seededAnyMode = true
             }
-            UserDefaults.standard.set(true, forKey: seed.key)
+            userDefaults.set(true, forKey: seed.key)
         }
         if seededAnyMode {
             // Persist immediately so seeded modes survive even if the user
@@ -167,15 +182,15 @@ struct ModeStorage {
         // global UserDefaults value that only applied to 语音润色 (formal writing).
         // Move it onto that mode so the per-mode setting preserves existing behavior.
         let exemptionMigratedKey = "tf_shortTextExemptionMigrated"
-        if !UserDefaults.standard.bool(forKey: exemptionMigratedKey) {
-            let legacyGlobal = Int(UserDefaults.standard.string(forKey: "tf_shortTextExemption") ?? "0") ?? 0
+        if !userDefaults.bool(forKey: exemptionMigratedKey) {
+            let legacyGlobal = Int(userDefaults.string(forKey: "tf_shortTextExemption") ?? "0") ?? 0
             if legacyGlobal > 0,
                let idx = result.firstIndex(where: { $0.id == ProcessingMode.formalWritingId }),
                result[idx].shortTextExemption == 0 {
                 result[idx].shortTextExemption = legacyGlobal
                 try? save(result)
             }
-            UserDefaults.standard.set(true, forKey: exemptionMigratedKey)
+            userDefaults.set(true, forKey: exemptionMigratedKey)
         }
 
         return result
@@ -196,19 +211,6 @@ struct ModeStorage {
         }
         migrated.hotkeyBindings = mode.hotkeyBindings
         migrated.shortTextExemption = mode.shortTextExemption
-        migrated.isBuiltin = false
-        return migrated
-    }
-
-    private func migrateSeededDefaultPrompt(
-        _ mode: ProcessingMode,
-        legacyPrompts: Set<String>,
-        fallbackPrompt: String
-    ) -> ProcessingMode {
-        guard legacyPrompts.contains(mode.prompt) else { return mode }
-
-        var migrated = mode
-        migrated.prompt = fallbackPrompt
         migrated.isBuiltin = false
         return migrated
     }
