@@ -19,6 +19,8 @@ struct Type4MeApp: App {
             SettingsView()
                 .environment(appDelegate.appState)
                 .environment(appDelegate.appUpdater)
+                .environment(appDelegate.navigationModel)
+                .environment(appDelegate.askAnythingCoordinator)
         }
         .defaultSize(width: 1200, height: 800)
         .defaultPosition(.center)
@@ -96,14 +98,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     let appUpdater = AppUpdater()
     let permissionGuideModel = PermissionGuideModel()
+    let navigationModel = AppNavigationModel()
     /// Computed dynamically per recording based on audio device topology.
     private var floatingBarController: FloatingBarController?
-    private lazy var selectionAskController = SelectionAskController { [weak self] conversationContext in
-        self?.startSelectionAskFollowUp(conversationContext: conversationContext) ?? false
+    let askAnythingStore = AskAnythingStore()
+    lazy var askAnythingCoordinator = AskAnythingCoordinator(store: askAnythingStore)
+    private lazy var selectionAskController = SelectionAskController(
+        coordinator: askAnythingCoordinator
+    ) { [weak self] requestContext in
+        self?.startSelectionAskFollowUp(requestContext: requestContext) ?? false
+    } onStartNewQuestion: { [weak self] requestContext in
+        self?.startSelectionAskFollowUp(requestContext: requestContext) ?? false
     } onFinishFollowUp: { [weak self] in
         self?.finishSelectionAskFollowUp()
     } onCancelFollowUp: { [weak self] in
         self?.cancelSelectionAskFollowUp()
+    } onOpenInType4Me: { [weak self] sessionID in
+        self?.presentAskAnything(sessionID: sessionID)
     }
     private lazy var recordingControlCoordinator = RecordingControlCoordinator(
         followUpController: selectionAskController
@@ -113,6 +124,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeyManager = HotkeyManager()
     private let session = RecognitionSession()
     private var selectionAskFollowUpStartGate = SelectionAskFollowUpStartGate()
+    private var recognitionEventTask: Task<Void, Never>?
+    private var recognitionEventContinuation: AsyncStream<RecognitionEvent>.Continuation?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[Type4Me] applicationDidFinishLaunching")
@@ -148,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 历史记录字数迁移（用 session 自带的 historyStore，迁移后 UI 能刷新）
         Task { await session.historyStore.migrateCharacterCounts() }
+        Task { await askAnythingCoordinator.restoreAfterLaunch() }
         let appState = self.appState
 
         SoundFeedback.warmUp()
@@ -165,9 +179,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        let (recognitionEvents, recognitionEventContinuation) = AsyncStream<RecognitionEvent>.makeStream()
+        self.recognitionEventContinuation = recognitionEventContinuation
         Task {
             await session.setOnASREvent { event in
-                Task { @MainActor in
+                recognitionEventContinuation.yield(event)
+            }
+        }
+        recognitionEventTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            for await event in recognitionEvents {
                     switch event {
                     case .ready:
                         NSLog("[Type4Me] ready event received")
@@ -238,14 +259,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         appState.showMacActionResult(message: message, status: status)
                         self.hotkeyManager.isProcessing = false
                         self.safeResetHotkeyState()
-                    case .selectionAskStarted(let question, let selectedText):
+                    case .selectionAskStarted(
+                        let requestID,
+                        let question,
+                        let selectedText,
+                        let contextWasTruncated
+                    ):
                         appState.cancel()
-                        self.selectionAskController.begin(question: question, selectedText: selectedText)
+                        self.selectionAskController.begin(
+                            requestID: requestID,
+                            question: question,
+                            selectedText: selectedText,
+                            contextWasTruncated: contextWasTruncated
+                        )
                         self.hotkeyManager.isProcessing = true
-                    case .selectionAskAnswerDelta(let delta):
-                        self.selectionAskController.appendAnswerDelta(delta)
-                    case .selectionAskAnswerCompleted:
-                        self.selectionAskController.completeAnswer()
+                    case .selectionAskAnswerDelta(let requestID, let delta):
+                        self.selectionAskController.appendAnswerDelta(requestID: requestID, delta: delta)
+                    case .selectionAskAnswerCompleted(let requestID):
+                        self.selectionAskController.completeAnswer(requestID: requestID)
+                        self.hotkeyManager.isProcessing = false
+                        self.safeResetHotkeyState()
+                    case .selectionAskAnswerFailed(let requestID, let message):
+                        self.selectionAskController.showError(requestID: requestID, message: message)
                         self.hotkeyManager.isProcessing = false
                         self.safeResetHotkeyState()
                     case .error(let error):
@@ -254,7 +289,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.hotkeyManager.isProcessing = false
                         self.safeResetHotkeyState()
                     }
-                }
             }
         }
 
@@ -405,6 +439,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
 
+                if capturedMode.executionKind == .selectionAsk,
+                   MainActor.assumeIsolated({
+                       NSApp.isActive && self.navigationModel.selectedTab == .askAnything
+                   }) {
+                    let handled = MainActor.assumeIsolated {
+                        if self.askAnythingCoordinator.hasActiveConversation {
+                            return self.askAnythingCoordinator.performPrimaryFollowUpAction()
+                        }
+                        return self.askAnythingCoordinator.startNewQuestionRecording()
+                    }
+                    if !handled {
+                        MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
+                    }
+                    return
+                }
+
                 let phase = MainActor.assumeIsolated { self.appState.barPhase }
 
                 // Safety: if already recording, the toggle state is out of sync.
@@ -453,6 +503,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let selectedProvider = KeychainService.selectedASRProvider
                 let resolvedMode = ASRProviderRegistry.resolvedMode(for: capturedMode, provider: selectedProvider)
                 let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
+                if effectiveMode.executionKind == .selectionAsk {
+                    MainActor.assumeIsolated {
+                        self.askAnythingCoordinator.prepareForExternalNewQuestion()
+                    }
+                }
                 NSLog("[Type4Me] >>> HOTKEY: Record START (mode: %@)", effectiveMode.name)
                 DebugFileLogger.log("hotkey record start mode=\(effectiveMode.name)")
                 Task { @MainActor in
@@ -473,10 +528,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
 
                 if capturedMode.executionKind == .selectionAsk,
-                   MainActor.assumeIsolated({
-                       self.selectionAskController.isVisible
-                           && self.selectionAskController.isRecordingFollowUp
-                   }) {
+                   MainActor.assumeIsolated({ self.askAnythingCoordinator.isRecordingFollowUp }) {
                     _ = MainActor.assumeIsolated {
                         self.selectionAskController.handleActiveRecordingAction(.finish)
                     }
@@ -569,8 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyManager.onESCAbort = { [weak self] in
             guard let self else { return false }
             if MainActor.assumeIsolated({
-                self.selectionAskController.isVisible
-                    && self.selectionAskController.isRecordingFollowUp
+                self.askAnythingCoordinator.isRecordingFollowUp
             }) {
                 return MainActor.assumeIsolated {
                     self.selectionAskController.handleActiveRecordingAction(.cancel)
@@ -607,7 +658,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startSelectionAskFollowUp(conversationContext: String) -> Bool {
+    private func startSelectionAskFollowUp(requestContext: SelectionAskRequestContext) -> Bool {
         let phase = appState.barPhase
         guard phase != .processing else {
             DebugFileLogger.log("selectionAsk follow-up blocked: still processing")
@@ -643,7 +694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DebugFileLogger.log("selectionAsk follow-up start: cancelled before session start")
                 return
             }
-            await self.session.setSelectionAskConversationContext(conversationContext)
+            await self.session.setSelectionAskRequestContext(requestContext)
             await self.session.startRecording(mode: effectiveMode)
         }
         return true
@@ -939,6 +990,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func presentAskAnything(sessionID: UUID?) {
+        navigationModel.selectedTab = .askAnything
+        navigationModel.pendingAskAnythingSessionID = sessionID
+        askAnythingCoordinator.presentInMainWindow()
+        selectionAskController.hide()
+        presentSettings()
+    }
+
     #if DEBUG
     private func presentSettingsWhenReady(remainingAttempts: Int) {
         let hasVisibleAppWindow = NSApp.windows.contains {
@@ -966,6 +1025,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
 
     func applicationWillTerminate(_ notification: Notification) {
+        recognitionEventContinuation?.finish()
+        recognitionEventTask?.cancel()
         SystemVolumeManager.restore()
         // Synchronous kill: don't rely on async Task, app exits immediately after this returns
         SenseVoiceServerManager.killAllServerProcesses()

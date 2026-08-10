@@ -38,6 +38,7 @@ final class SelectionAskControllerTests: XCTestCase {
             }
         )
         controller.begin(question: "First question", selectedText: "Context")
+        controller.completeAnswer()
         XCTAssertTrue(controller.startFollowUpRecording())
         XCTAssertTrue(controller.isRecordingFollowUp)
 
@@ -56,6 +57,7 @@ final class SelectionAskControllerTests: XCTestCase {
             onCancelFollowUp: { cancelCount += 1 }
         )
         controller.begin(question: "First question", selectedText: "Context")
+        controller.completeAnswer()
         XCTAssertTrue(controller.startFollowUpRecording())
 
         controller.close()
@@ -82,6 +84,7 @@ final class SelectionAskControllerTests: XCTestCase {
         )
         controller.begin(question: "First question", selectedText: "Context")
         controller.appendAnswerDelta("First answer")
+        controller.completeAnswer()
         XCTAssertTrue(controller.startFollowUpRecording())
 
         XCTAssertTrue(controller.finishActiveFollowUp())
@@ -103,6 +106,7 @@ final class SelectionAskControllerTests: XCTestCase {
         )
         controller.begin(question: "First question", selectedText: "Context")
         controller.appendAnswerDelta("First answer")
+        controller.completeAnswer()
         XCTAssertTrue(controller.startFollowUpRecording())
 
         XCTAssertTrue(controller.cancelActiveFollowUp())
@@ -127,6 +131,7 @@ final class SelectionAskControllerTests: XCTestCase {
             onFinishFollowUp: { finishCount += 1 }
         )
         controller.begin(question: "First question", selectedText: "Context")
+        controller.completeAnswer()
 
         XCTAssertTrue(controller.performPrimaryFollowUpAction())
         XCTAssertTrue(controller.isRecordingFollowUp)
@@ -141,6 +146,7 @@ final class SelectionAskControllerTests: XCTestCase {
     func testAutomaticFinishClearsRecordingAndPreservesPendingTurn() {
         let controller = SelectionAskController(onStartFollowUp: { _ in true })
         controller.begin(question: "First question", selectedText: "Context")
+        controller.completeAnswer()
         XCTAssertTrue(controller.startFollowUpRecording())
 
         controller.recordingDidEnd(.finish)
@@ -154,6 +160,7 @@ final class SelectionAskControllerTests: XCTestCase {
     func testRecordingErrorClearsRecordingAndPendingTurn() {
         let controller = SelectionAskController(onStartFollowUp: { _ in true })
         controller.begin(question: "First question", selectedText: "Context")
+        controller.completeAnswer()
         XCTAssertTrue(controller.startFollowUpRecording())
 
         controller.recordingDidEnd(.cancel)
@@ -178,6 +185,7 @@ final class SelectionAskControllerTests: XCTestCase {
             onStandardAction: { standardActions.append($0) }
         )
         controller.begin(question: "First question", selectedText: "Context")
+        controller.completeAnswer()
         XCTAssertTrue(controller.startFollowUpRecording())
 
         coordinator.perform(.finish)
@@ -225,6 +233,7 @@ final class SelectionAskControllerTests: XCTestCase {
             onStandardAction: { _ in standardCount += 1 }
         )
         controller.begin(question: "First question", selectedText: "Context")
+        controller.completeAnswer()
         XCTAssertTrue(controller.startFollowUpRecording())
 
         coordinator.perform(.cancel)
@@ -232,6 +241,15 @@ final class SelectionAskControllerTests: XCTestCase {
         XCTAssertEqual(appState.barPhase, .processing)
         XCTAssertEqual(cancelCount, 1)
         XCTAssertEqual(standardCount, 0)
+        XCTAssertFalse(controller.isRecordingFollowUp)
+        controller.hide()
+    }
+
+    func testCannotStartFollowUpWhileCurrentAnswerIsGenerating() {
+        let controller = SelectionAskController(onStartFollowUp: { _ in true })
+        controller.begin(question: "First question", selectedText: "Context")
+
+        XCTAssertFalse(controller.startFollowUpRecording())
         XCTAssertFalse(controller.isRecordingFollowUp)
         controller.hide()
     }

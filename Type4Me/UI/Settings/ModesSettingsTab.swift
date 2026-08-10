@@ -42,6 +42,7 @@ struct ModesSettingsTab: View {
     var showsHeader = true
 
     @Environment(AppState.self) private var appState
+    @Environment(AskAnythingCoordinator.self) private var askAnythingCoordinator
     @State private var modes: [ProcessingMode] = ModeStorage().load()
     @State private var selectedModeId: UUID?
     @State private var recordingTarget: RecordingTarget?
@@ -54,6 +55,8 @@ struct ModesSettingsTab: View {
     @State private var draftDirty = false
     @State private var pendingSelection: UUID?
     @State private var selectedASRProvider: ASRProvider = KeychainService.selectedASRProvider
+    @State private var showClearAskAnythingConfirmation = false
+    @State private var askAnythingSettingsError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -255,6 +258,31 @@ struct ModesSettingsTab: View {
             let name = draftMode?.name ?? selectedMode?.name ?? ""
             Text(L("「\(name)」有未保存的更改。切换前要保存吗？",
                    "\"\(name)\" has unsaved changes. Save before switching?"))
+        }
+        .alert(
+            L("清空随便问历史", "Clear Ask Anything History"),
+            isPresented: $showClearAskAnythingConfirmation
+        ) {
+            Button(L("取消", "Cancel"), role: .cancel) {}
+            Button(L("全部删除", "Delete All"), role: .destructive) {
+                Task { await clearAskAnythingHistory() }
+            }
+        } message: {
+            Text(L(
+                "所有随便问会话、选中文本、问题和回答都会被永久删除。",
+                "All Ask Anything conversations, selected text, questions, and answers will be permanently deleted."
+            ))
+        }
+        .alert(
+            L("无法更新随便问设置", "Unable to Update Ask Anything Settings"),
+            isPresented: Binding(
+                get: { askAnythingSettingsError != nil },
+                set: { if !$0 { askAnythingSettingsError = nil } }
+            )
+        ) {
+            Button(L("好", "OK"), role: .cancel) { askAnythingSettingsError = nil }
+        } message: {
+            Text(askAnythingSettingsError ?? "")
         }
     }
 
@@ -507,6 +535,85 @@ struct ModesSettingsTab: View {
                     }
                 }
             }
+
+            askAnythingHistorySettings
+        }
+    }
+
+    private var askAnythingHistorySettings: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L("会话历史", "Conversation History"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(TF.settingsText)
+                .padding(.bottom, 10)
+
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L("保存会话历史", "Save conversation history"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(TF.settingsText)
+                    Text(L(
+                        "关闭后，新会话只在当前运行期间保留；已有历史不会被删除。",
+                        "When off, new conversations last only for this run; existing history is kept."
+                    ))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                }
+                Spacer(minLength: 16)
+                Toggle("", isOn: Binding(
+                    get: { askAnythingCoordinator.historyEnabled },
+                    set: { askAnythingCoordinator.historyEnabled = $0 }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(askAnythingCoordinator.activeBinding != nil
+                          || askAnythingCoordinator.isRecordingFollowUp)
+            }
+            .padding(.bottom, 12)
+
+            Rectangle()
+                .fill(TF.settingsBorder)
+                .frame(height: 1)
+
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L("清空全部历史", "Clear all history"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(TF.settingsText)
+                    Text(L(
+                        "永久删除所有会话、选中文本、问题和回答。",
+                        "Permanently delete all conversations, selected text, questions, and answers."
+                    ))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                }
+                Spacer(minLength: 16)
+                Button(L("清空…", "Clear…"), role: .destructive) {
+                    showClearAskAnythingConfirmation = true
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(TF.settingsAccentRed)
+                .disabled(askAnythingCoordinator.activeBinding != nil
+                          || askAnythingCoordinator.isRecordingFollowUp)
+            }
+            .padding(.top, 12)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(TF.settingsCardAlt)
+        )
+    }
+
+    private func clearAskAnythingHistory() async {
+        do {
+            try await askAnythingCoordinator.clearHistory()
+            askAnythingSettingsError = nil
+        } catch {
+            askAnythingSettingsError = error.localizedDescription
         }
     }
 

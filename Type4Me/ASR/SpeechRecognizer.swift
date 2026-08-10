@@ -109,9 +109,15 @@ enum RecognitionEvent: Sendable {
     /// status-specific icon and color, holding for ~3 seconds.
     case macActionResult(message: String, status: MacActionResultStatus)
     /// Selection ask mode: show a separate answer panel and stream Markdown into it.
-    case selectionAskStarted(question: String, selectedText: String)
-    case selectionAskAnswerDelta(String)
-    case selectionAskAnswerCompleted
+    case selectionAskStarted(
+        requestID: UUID,
+        question: String,
+        selectedText: String,
+        contextWasTruncated: Bool
+    )
+    case selectionAskAnswerDelta(requestID: UUID, delta: String)
+    case selectionAskAnswerCompleted(requestID: UUID)
+    case selectionAskAnswerFailed(requestID: UUID, message: String)
 }
 
 struct LLMConfig: Sendable {

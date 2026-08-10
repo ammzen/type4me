@@ -4,6 +4,7 @@ import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general
+    case askAnything
     case models
     case vocabulary
     case modes
@@ -21,9 +22,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     static func tabs(for edition: AppEdition?) -> [SettingsTab] {
         switch edition {
         case .member:
-            return [.general, .modes, .vocabulary, .history, .preferences, .about]
+            return [.general, .askAnything, .modes, .vocabulary, .history, .preferences, .about]
         case .byoKey, .none:
-            return [.general, .models, .vocabulary, .modes, .history, .preferences, .about]
+            return [.general, .askAnything, .models, .vocabulary, .modes, .history, .preferences, .about]
         }
     }
     #endif
@@ -31,6 +32,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .general:     return L("首页", "Home")
+        case .askAnything: return L("随便问", "Ask Anything")
         case .models:      return L("模型", "Models")
         case .vocabulary:  return L("词汇", "Vocabulary")
         case .modes:       return L("模式", "Modes")
@@ -47,6 +49,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .general:    return L("模式与使用概览", "Modes & usage overview")
+        case .askAnything: return L("历史问答与持续追问", "Past questions & follow-ups")
         case .models:      return L("语音识别与 LLM 引擎", "ASR & LLM engines")
         case .vocabulary:  return L("热词与片段替换", "Hotwords & snippets")
         case .modes:       return L("推理与默认行为", "Processing & defaults")
@@ -63,6 +66,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general:     return "house"
+        case .askAnything: return "text.bubble"
         case .models:      return "cpu"
         case .vocabulary:  return "book.closed"
         case .modes:       return "slider.horizontal.3"
@@ -77,12 +81,19 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+@MainActor
+@Observable
+final class AppNavigationModel {
+    var selectedTab: SettingsTab = .general
+    var pendingAskAnythingSessionID: UUID?
+}
+
 // MARK: - Settings View
 
 struct SettingsView: View {
 
     @Environment(AppState.self) private var appState
-    @State private var selectedTab: SettingsTab = .general
+    @Environment(AppNavigationModel.self) private var navigationModel
     @State private var hoveredTab: SettingsTab?
     @State private var hoveredSettingsTab: SettingsTab?
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
@@ -93,6 +104,11 @@ struct SettingsView: View {
     @AppStorage("tf_app_edition") private var editionRaw: String?
     private var edition: AppEdition? { editionRaw.flatMap { AppEdition(rawValue: $0) } }
     #endif
+
+    private var selectedTab: SettingsTab {
+        get { navigationModel.selectedTab }
+        nonmutating set { navigationModel.selectedTab = newValue }
+    }
 
     var body: some View {
         ZStack {
@@ -196,7 +212,7 @@ struct SettingsView: View {
 
             // Nav items
             VStack(spacing: 4) {
-                ForEach([SettingsTab.general, .vocabulary, .history]) { tab in
+                ForEach([SettingsTab.general, .askAnything, .vocabulary, .history]) { tab in
                     navItem(tab)
                 }
             }
@@ -371,6 +387,9 @@ struct SettingsView: View {
                 HomeDashboardView(isActive: selectedTab == .general) {
                     selectedTab = .modes
                 }
+            }
+            fixedPage(.askAnything) {
+                AskAnythingPage(isActive: selectedTab == .askAnything)
             }
             fixedPage(.vocabulary) { VocabularyTab() }
             fixedPage(.history)  { HistoryTab(isActive: selectedTab == .history) }

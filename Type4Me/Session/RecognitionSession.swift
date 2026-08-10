@@ -301,7 +301,7 @@ actor RecognitionSession {
     private var speculativeThrottle = SpeculativeLLMThrottle()
     /// Stores the last LLM error from the early/fresh LLM task, consumed once by stopRecording().
     private var pendingLLMError: Error?
-    private var pendingSelectionAskConversationContext = ""
+    private var pendingSelectionAskRequestContext: SelectionAskRequestContext?
     /// When true, skip text injection (paste) but still save to clipboard & history.
     private var injectionAborted = false
     /// Continuation resumed when a final (isFinal) transcript arrives during stop.
@@ -402,7 +402,17 @@ actor RecognitionSession {
 
         let effectiveMode = ASRProviderRegistry.resolvedMode(for: mode, provider: provider)
         if effectiveMode.executionKind != .selectionAsk {
-            pendingSelectionAskConversationContext = ""
+            pendingSelectionAskRequestContext = nil
+        } else if pendingSelectionAskRequestContext == nil {
+            pendingSelectionAskRequestContext = SelectionAskRequestContext(
+                requestID: UUID(),
+                sessionID: nil,
+                turnID: nil,
+                selectedText: "",
+                overridesSelectedText: false,
+                conversationContext: "",
+                contextWasTruncated: false
+            )
         }
         sessionGeneration &+= 1
         let myGeneration = sessionGeneration
@@ -680,8 +690,8 @@ actor RecognitionSession {
         }
     }
 
-    func setSelectionAskConversationContext(_ context: String) {
-        pendingSelectionAskConversationContext = context
+    func setSelectionAskRequestContext(_ context: SelectionAskRequestContext) {
+        pendingSelectionAskRequestContext = context
     }
 
     /// Auto-stop triggered by max recording duration timer.
@@ -824,74 +834,109 @@ actor RecognitionSession {
         myGeneration: Int
     ) async {
         let question = questionText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let contextSource = SelectionAskPromptBuilder.contextSource(from: promptContext)
-        let contextText = SelectionAskPromptBuilder.contextText(from: promptContext)
-        let conversationContext = pendingSelectionAskConversationContext
-        pendingSelectionAskConversationContext = ""
+        let requestContext = pendingSelectionAskRequestContext ?? SelectionAskRequestContext(
+            requestID: UUID(),
+            sessionID: nil,
+            turnID: nil,
+            selectedText: "",
+            overridesSelectedText: false,
+            conversationContext: "",
+            contextWasTruncated: false
+        )
+        pendingSelectionAskRequestContext = nil
+        let capturedContextText = SelectionAskPromptBuilder.contextText(from: promptContext)
+        let contextText = requestContext.overridesSelectedText
+            ? requestContext.selectedText
+            : capturedContextText
+        let contextSource: SelectionAskPromptBuilder.ContextSource = contextText.isEmpty ? .none : .selection
+        let conversationContext = requestContext.conversationContext
+        let requestID = requestContext.requestID
 
         guard !question.isEmpty else {
-            onASREvent?(.selectionAskStarted(question: "", selectedText: contextText))
-            onASREvent?(.selectionAskAnswerDelta(L("没有识别到问题，请重试。", "No question was recognized. Please try again.")))
-            onASREvent?(.selectionAskAnswerCompleted)
+            onASREvent?(.selectionAskStarted(
+                requestID: requestID,
+                question: "",
+                selectedText: contextText,
+                contextWasTruncated: false
+            ))
+            onASREvent?(.selectionAskAnswerFailed(
+                requestID: requestID,
+                message: L("没有识别到问题，请重试。", "No question was recognized. Please try again.")
+            ))
             onASREvent?(.completed)
             finishSelectionAskSession(myGeneration: myGeneration)
             return
         }
 
         guard let llmConfig = loadEffectiveLLMConfig() else {
-            onASREvent?(.selectionAskStarted(question: question, selectedText: contextText))
-            onASREvent?(.selectionAskAnswerDelta(L("请先在设置中配置 LLM。", "Please configure an LLM provider in Settings first.")))
-            onASREvent?(.selectionAskAnswerCompleted)
+            onASREvent?(.selectionAskStarted(
+                requestID: requestID,
+                question: question,
+                selectedText: contextText,
+                contextWasTruncated: false
+            ))
+            onASREvent?(.selectionAskAnswerFailed(
+                requestID: requestID,
+                message: L("请先在设置中配置 LLM。", "Please configure an LLM provider in Settings first.")
+            ))
             onASREvent?(.completed)
             finishSelectionAskSession(myGeneration: myGeneration)
             return
         }
 
+        let fittedRequest = AskAnythingContextBuilder.fitRequest(
+            selectedText: contextText,
+            conversationText: conversationContext,
+            currentQuestion: question,
+            promptTemplateCharacters: currentMode.prompt.count
+        )
         state = .postProcessing
-        onASREvent?(.selectionAskStarted(question: question, selectedText: contextText))
+        onASREvent?(.selectionAskStarted(
+            requestID: requestID,
+            question: question,
+            selectedText: contextText,
+            contextWasTruncated: requestContext.contextWasTruncated || fittedRequest.wasTruncated
+        ))
 
         let client = currentLLMClient()
-        let effectiveContext = PromptContext(selectedText: contextText, clipboardText: "")
+        let effectiveContext = PromptContext(selectedText: fittedRequest.selectedText, clipboardText: "")
         let prompt = SelectionAskPromptBuilder.requestText(
             mode: currentMode,
             context: effectiveContext,
             question: question,
-            conversationContext: conversationContext
+            conversationContext: fittedRequest.conversationText
         )
-        DebugFileLogger.log("""
-        selectionAsk LLM request
-        provider=\(KeychainService.selectedLLMProvider.rawValue)
-        model=\(llmConfig.model)
-        contextSource=\(contextSource.rawValue)
-        question=\(question)
-        selectedRaw=\(promptContext.selectedText)
-        clipboardChars=\(promptContext.clipboardText.count)
-        contextChars=\(contextText.count)
-        conversationChars=\(conversationContext.count)
-        prompt:
-        \(prompt)
-        """)
+        DebugFileLogger.log(
+            "selectionAsk LLM request requestID=\(requestID.uuidString) "
+                + "provider=\(KeychainService.selectedLLMProvider.rawValue) "
+                + "model=\(llmConfig.model) contextSource=\(contextSource.rawValue) "
+                + "questionChars=\(question.count) contextChars=\(fittedRequest.selectedText.count) "
+                + "conversationChars=\(fittedRequest.conversationText.count) "
+                + "contextTruncated=\(requestContext.contextWasTruncated || fittedRequest.wasTruncated)"
+        )
         do {
             _ = try await client.processStreaming(
                 text: prompt,
                 prompt: "{text}",
                 config: llmConfig
             ) { [weak self] delta in
-                await self?.emitSelectionAskDelta(delta)
+                await self?.emitSelectionAskDelta(delta, requestID: requestID)
             }
-            onASREvent?(.selectionAskAnswerCompleted)
+            onASREvent?(.selectionAskAnswerCompleted(requestID: requestID))
         } catch {
-            onASREvent?(.selectionAskAnswerDelta(userFacingLLMError(error)))
-            onASREvent?(.selectionAskAnswerCompleted)
+            onASREvent?(.selectionAskAnswerFailed(
+                requestID: requestID,
+                message: userFacingLLMError(error)
+            ))
         }
 
         onASREvent?(.completed)
         finishSelectionAskSession(myGeneration: myGeneration)
     }
 
-    private func emitSelectionAskDelta(_ delta: String) {
+    private func emitSelectionAskDelta(_ delta: String, requestID: UUID) {
         guard !delta.isEmpty else { return }
-        onASREvent?(.selectionAskAnswerDelta(delta))
+        onASREvent?(.selectionAskAnswerDelta(requestID: requestID, delta: delta))
     }
 
     private func finishSelectionAskSession(myGeneration: Int) {
@@ -1814,7 +1859,8 @@ actor RecognitionSession {
         case .processingResult, .processingLabelOverride, .recoveryStarted,
              .recoveryPrompt, .recoverySucceeded, .recoveryFailed,
              .recoveryInterrupted, .finalized, .macActionResult,
-             .selectionAskStarted, .selectionAskAnswerDelta, .selectionAskAnswerCompleted:
+             .selectionAskStarted, .selectionAskAnswerDelta,
+             .selectionAskAnswerCompleted, .selectionAskAnswerFailed:
             break
         }
     }
@@ -2471,7 +2517,7 @@ actor RecognitionSession {
         sessionGeneration &+= 1
         state = .idle
         currentTranscript = .empty
-        pendingSelectionAskConversationContext = ""
+        pendingSelectionAskRequestContext = nil
         hasEmittedReadyForCurrentSession = false
         currentConfig = nil
         uploadFailureFlag = nil
