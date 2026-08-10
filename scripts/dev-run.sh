@@ -43,6 +43,19 @@ ARCH="${ARCH:-arm64}"
 VARIANT="${VARIANT:-cloud}"
 REQUIRE_STABLE_SIGNING="${REQUIRE_STABLE_SIGNING:-$REQUIRE_STABLE_SIGNING_VALUE}"
 
+if [ -z "${APP_BUILD:-}" ]; then
+    PREVIOUS_BUILD=""
+    if [ -f "$APP_PATH/Contents/Info.plist" ]; then
+        PREVIOUS_BUILD=$(plutil -extract CFBundleVersion raw "$APP_PATH/Contents/Info.plist" 2>/dev/null || true)
+    fi
+    case "$PREVIOUS_BUILD" in
+        ""|*[!0-9]*) APP_BUILD=1 ;;
+        *) APP_BUILD=$((10#$PREVIOUS_BUILD + 1)) ;;
+    esac
+fi
+
+echo "Dev build number: $APP_BUILD"
+
 echo "Stopping $APP_NAME..."
 osascript -e "quit app \"$APP_NAME\"" 2>/dev/null || true
 sleep 1
@@ -65,6 +78,8 @@ URL_SCHEME="$URL_SCHEME" \
 APP_PATH="$APP_PATH" \
 ARCH="$ARCH" \
 VARIANT="$VARIANT" \
+APP_BUILD="$APP_BUILD" \
+TYPE4ME_DEV_BUILD=1 \
 CODESIGN_IDENTITY="$SIGNING_IDENTITY" \
 bash "$SCRIPT_DIR/package-app.sh"
 
