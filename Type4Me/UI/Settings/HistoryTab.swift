@@ -1,4 +1,5 @@
 import SwiftUI
+import Type4MeIntelliSenseCore
 
 // MARK: - Model
 
@@ -14,6 +15,12 @@ struct HistoryRecord: Identifiable, Hashable {
     let characterCount: Int?
     let asrProvider: String?
     let asrModel: String?
+    let llmProvider: String?
+    let llmModel: String?
+    let asrDurationSeconds: Double?
+    let llmDurationSeconds: Double?
+    /// Versioned, privacy-safe JSON. Decoded only when an Intelli Sense row is expanded.
+    let intelliSenseTraceJSON: String?
 
     init(
         id: String,
@@ -26,7 +33,12 @@ struct HistoryRecord: Identifiable, Hashable {
         status: String,
         characterCount: Int?,
         asrProvider: String?,
-        asrModel: String? = nil
+        asrModel: String? = nil,
+        llmProvider: String? = nil,
+        llmModel: String? = nil,
+        asrDurationSeconds: Double? = nil,
+        llmDurationSeconds: Double? = nil,
+        intelliSenseTraceJSON: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -39,6 +51,11 @@ struct HistoryRecord: Identifiable, Hashable {
         self.characterCount = characterCount
         self.asrProvider = asrProvider
         self.asrModel = asrModel
+        self.llmProvider = llmProvider
+        self.llmModel = llmModel
+        self.asrDurationSeconds = asrDurationSeconds
+        self.llmDurationSeconds = llmDurationSeconds
+        self.intelliSenseTraceJSON = intelliSenseTraceJSON
     }
 }
 
@@ -1120,12 +1137,16 @@ struct HistoryTab: View {
                 }
             }
 
+            if let trace = decodeIntelliSenseTrace(record.intelliSenseTraceJSON) {
+                intelliSenseTraceDetails(trace)
+            }
+
             HStack(spacing: 12) {
-                if let provider = record.asrProvider {
-                    Label(provider, systemImage: "mic")
+                if let asr = historyASRDescription(record) {
+                    Label(asr, systemImage: "mic")
                 }
-                if let model = record.asrModel, !model.isEmpty {
-                    Label(model, systemImage: "cpu")
+                if let llm = historyLLMDescription(record) {
+                    Label(llm, systemImage: "cpu")
                 }
                 if !record.status.isEmpty {
                     Label(record.status, systemImage: "checkmark.circle")
@@ -1133,6 +1154,168 @@ struct HistoryTab: View {
             }
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(TF.settingsTextTertiary)
+        }
+    }
+
+    private func historyASRDescription(_ record: HistoryRecord) -> String? {
+        let model = record.asrModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = record.asrProvider?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = model?.isEmpty == false ? model : (provider?.isEmpty == false ? provider : nil)
+        return historySourceDescription(source, durationSeconds: record.asrDurationSeconds)
+    }
+
+    private func historyLLMDescription(_ record: HistoryRecord) -> String? {
+        let rawProvider = record.llmProvider?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = record.llmModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard rawProvider?.isEmpty == false || model?.isEmpty == false else { return nil }
+
+        let providerName: String? = {
+            guard let rawProvider, !rawProvider.isEmpty else { return nil }
+            if rawProvider == "cloud" { return L("Type4Me 云端", "Type4Me Cloud") }
+            return LLMProvider(rawValue: rawProvider)?.displayName ?? rawProvider
+        }()
+
+        let source: String?
+        if let model, !model.isEmpty, model != "cloud" {
+            source = providerName.map { "\($0) · \(model)" } ?? model
+        } else {
+            source = providerName
+        }
+        return historySourceDescription(source, durationSeconds: record.llmDurationSeconds)
+    }
+
+    private func historySourceDescription(_ source: String?, durationSeconds: Double?) -> String? {
+        guard let source, !source.isEmpty else { return nil }
+        guard let durationSeconds, durationSeconds >= 0, durationSeconds.isFinite else { return source }
+        return "\(source) · \(String(format: "%.1fs", durationSeconds))"
+    }
+
+    @ViewBuilder
+    private func intelliSenseTraceDetails(_ trace: IntelliSenseHistoryTrace) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L("智能感知说明", "Intelli Sense Details"))
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(TF.settingsTextTertiary)
+
+            intelliSenseTraceRow(
+                label: L("感知环境", "Environment"),
+                value: intelliSenseEnvironmentDescription(trace)
+            )
+            intelliSenseTraceRow(
+                label: L("处理依据", "Signals used"),
+                value: intelliSenseBasisDescription(trace)
+            )
+            intelliSenseTraceRow(
+                label: L("处理结果", "Adjustments"),
+                value: trace.effects.prefix(3).map(intelliSenseEffectDescription).joined(separator: " · ")
+            )
+        }
+        .padding(9)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(TF.settingsControl.opacity(0.72))
+        )
+    }
+
+    private func intelliSenseTraceRow(label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(TF.settingsTextTertiary)
+                .frame(width: 52, alignment: .leading)
+            Text(value)
+                .font(.system(size: 10))
+                .foregroundStyle(TF.settingsTextSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func decodeIntelliSenseTrace(_ json: String?) -> IntelliSenseHistoryTrace? {
+        guard let json, let data = json.data(using: .utf8),
+              let trace = try? JSONDecoder().decode(IntelliSenseHistoryTrace.self, from: data),
+              trace.version <= IntelliSenseHistoryTrace.currentVersion else { return nil }
+        return trace
+    }
+
+    private func intelliSenseEnvironmentDescription(_ trace: IntelliSenseHistoryTrace) -> String {
+        let app = trace.appName ?? intelliSenseAppCategoryDescription(trace.appCategory)
+        let control = intelliSenseControlDescription(trace.controlCategory)
+        return control.isEmpty ? app : "\(app) · \(control)"
+    }
+
+    private func intelliSenseBasisDescription(_ trace: IntelliSenseHistoryTrace) -> String {
+        if trace.effects.contains(.processingFallback) {
+            return L("处理未完成，未应用增强感知", "Processing did not complete; enhanced awareness was not applied")
+        }
+        switch trace.contextAvailability {
+        case .blacklisted:
+            return L("该应用已禁用感知，仅执行基础润色", "Awareness is disabled for this app; only basic polish was used")
+        case .sensitive:
+            return L("检测到敏感输入区域，仅执行基础润色", "A sensitive input area was detected; only basic polish was used")
+        default:
+            break
+        }
+
+        var values: [String] = []
+        if trace.appliedLayers.contains(.application) {
+            values.append(L("当前应用和输入框", "current app and input field"))
+        }
+        if trace.enabledLayers.contains(.context) {
+            values.append(trace.appliedLayers.contains(.context)
+                ? L("光标附近文字", "nearby text")
+                : L("没有可用的上下文", "no usable context"))
+        }
+        if trace.enabledLayers.contains(.expression) {
+            values.append(trace.appliedLayers.contains(.expression)
+                ? L("稳定表达习惯", "stable expression habits")
+                : L("没有已生效的表达习惯", "no active expression habits"))
+        }
+        return values.isEmpty
+            ? L("仅执行基础润色", "basic polish only")
+            : values.joined(separator: " · ")
+    }
+
+    private func intelliSenseAppCategoryDescription(_ category: ApplicationCategory) -> String {
+        switch category {
+        case .messaging: return L("聊天应用", "Messaging app")
+        case .email: return L("邮件应用", "Email app")
+        case .document: return L("文档应用", "Document app")
+        case .browser: return L("浏览器", "Browser")
+        case .development: return L("开发工具", "Development tool")
+        case .terminal: return L("终端", "Terminal")
+        case .other: return L("未知应用", "Unknown app")
+        }
+    }
+
+    private func intelliSenseControlDescription(_ control: InputControlCategory) -> String {
+        switch control {
+        case .singleLine: return L("单行输入框", "Single-line field")
+        case .multiLine: return L("正文输入框", "Body field")
+        case .search: return L("搜索框", "Search field")
+        case .title: return L("标题输入框", "Title field")
+        case .code: return L("代码输入区", "Code field")
+        case .terminal: return L("终端输入区", "Terminal field")
+        case .unknown: return ""
+        }
+    }
+
+    private func intelliSenseEffectDescription(_ effect: IntelliSenseHistoryEffect) -> String {
+        switch effect {
+        case .searchQueryCompressed: return L("转为搜索关键词", "Converted to search terms")
+        case .titleCompacted: return L("整理为简洁标题", "Compacted into a title")
+        case .chatToneAdapted: return L("调整为自然短句", "Adapted to a natural short message")
+        case .emailToneAdapted: return L("调整为完整礼貌表达", "Adapted to complete, polite wording")
+        case .documentStructured: return L("整理段落或结构", "Organized paragraph structure")
+        case .technicalSyntaxPreserved: return L("保留技术语法和标识符", "Preserved technical syntax and identifiers")
+        case .explicitCorrectionApplied: return L("采用最终改口内容", "Applied the final self-correction")
+        case .contextTermAdopted: return L("沿用上下文中的术语写法", "Adopted terminology from nearby text")
+        case .fillerRemoved: return L("删除口语填充词", "Removed speech fillers")
+        case .formattingAdjusted: return L("规范标点和格式", "Normalized punctuation and formatting")
+        case .generalPolish: return L("进行自适应轻度润色", "Applied adaptive light polish")
+        case .noSignificantRewrite: return L("原文已适合当前场景，未明显改写", "The original already fit the scene; no significant rewrite")
+        case .protectedResultFallback: return L("候选结果触发保护，已保留更忠实的原文", "The candidate triggered protection; the more faithful original was kept")
+        case .processingFallback: return L("智能处理不可用，已使用回退结果", "Intelligent processing was unavailable; a fallback result was used")
         }
     }
 

@@ -70,6 +70,43 @@ final class ModeStorageTests: XCTestCase {
         XCTAssertEqual(loaded, ProcessingMode.defaults)
     }
 
+    func testFreshDefaultsPlaceIntelliSenseBetweenQuickAndVoicePolish() {
+        let ids = ProcessingMode.defaults.map(\.id)
+
+        XCTAssertEqual(ids.prefix(3), [
+            ProcessingMode.directId,
+            ProcessingMode.intelliSenseId,
+            ProcessingMode.formalWritingId,
+        ])
+        XCTAssertTrue(ProcessingMode.intelliSense.isBuiltin)
+        XCTAssertTrue(ProcessingMode.intelliSense.hotkeyBindings.isEmpty)
+    }
+
+    func testExistingInstallAppendsIntelliSenseWithoutReorderingModes() throws {
+        let storage = ModeStorage(fileURL: testURL)
+        let custom = ProcessingMode(
+            id: UUID(),
+            name: "Custom",
+            prompt: "{text}",
+            isBuiltin: false
+        )
+        let existing = ProcessingMode.builtins.filter {
+            $0.id != ProcessingMode.intelliSenseId
+        } + [custom]
+        try storage.save(existing)
+
+        let loaded = storage.load()
+        let originalIDs = existing.map(\.id)
+
+        XCTAssertEqual(Array(loaded.prefix(originalIDs.count)).map(\.id), originalIDs)
+        XCTAssertEqual(loaded[originalIDs.count].id, ProcessingMode.intelliSenseId)
+        let persisted = try JSONDecoder().decode(
+            [ProcessingMode].self,
+            from: Data(contentsOf: storage.fileURL)
+        )
+        XCTAssertEqual(persisted.filter { $0.id == ProcessingMode.intelliSenseId }.count, 1)
+    }
+
     func testLoadMigratesLegacyBuiltinModesToDeletableModes() throws {
         let storage = ModeStorage(fileURL: testURL)
         let legacyModes = [

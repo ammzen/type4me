@@ -21,13 +21,18 @@ if !hasCloudSubscription { excludes.append("CloudSubscription") }
 
 var targets: [Target] = [
     .target(
+        name: "Type4MeIntelliSenseCore",
+        path: "Type4MeIntelliSenseCore",
+        swiftSettings: swiftDefines
+    ),
+    .target(
         name: "Type4MeUI",
         path: "Type4MeUI",
         swiftSettings: swiftDefines
     ),
     .executableTarget(
         name: "Type4Me",
-        dependencies: hasSherpaFramework ? ["SherpaOnnxLib"] : [],
+        dependencies: ["Type4MeIntelliSenseCore"] + (hasSherpaFramework ? ["SherpaOnnxLib"] : []),
         path: "Type4Me",
         exclude: excludes,
         cSettings: hasSherpaFramework ? [.headerSearchPath("Bridge")] : [],
@@ -42,7 +47,7 @@ var targets: [Target] = [
     ),
     .testTarget(
         name: "Type4MeTests",
-        dependencies: ["Type4Me"],
+        dependencies: ["Type4Me", "Type4MeIntelliSenseCore"],
         path: "Type4MeTests"
     ),
 ]
@@ -60,6 +65,7 @@ let package = Package(
     products: [
         .executable(name: "Type4Me", targets: ["Type4Me"]),
         .library(name: "Type4MeUI", targets: ["Type4MeUI"]),
+        .library(name: "Type4MeIntelliSenseCore", targets: ["Type4MeIntelliSenseCore"]),
     ],
     dependencies: [],
     targets: targets

@@ -1,5 +1,6 @@
 import AppKit
 import os
+import Type4MeIntelliSenseCore
 
 /// Thread-safe flag for the detached sender to signal upload failure.
 private final class UploadFailureFlag: Sendable {
@@ -260,13 +261,41 @@ actor RecognitionSession {
 
     private var promptContext: PromptContext = PromptContext(selectedText: "", clipboardText: "")
 
+    private struct IntelliSenseRequestContext: Sendable {
+        let settings: IntelliSenseSettings
+        let snapshot: IntelliSenseContextSnapshot
+        let expressionProfile: EffectiveExpressionProfile?
+        let startingModeID: UUID
+        let generation: Int
+        let frozenPrompt: String
+    }
+
+    private var intelliSenseContextTask: Task<IntelliSenseContextSnapshot, Never>?
+    private var intelliSenseRequestContext: IntelliSenseRequestContext?
+    private var intelliSenseSettings: IntelliSenseSettings?
+    private var intelliSenseTarget: TargetApplicationContext?
+    private var intelliSenseStartedModeID: UUID?
+    private var intelliSenseCrossModeFallback = false
+    private var intelliSenseGuardRejected = false
+    private var intelliSenseLastProcessingResult: IntelliSenseProcessingResult?
+    /// Provider/model paired with the LLM request whose result this history row uses.
+    private var historyLLMProvider: String?
+    private var historyLLMModel: String?
+    private var historyASRDurationSeconds: Double?
+    private var historyLLMDurationSeconds: Double?
+
     /// Bundle identifier of the frontmost app when recording started.
     /// Used to select app-specific snippet rules.
     private var targetBundleId: String?
 
     // MARK: - Speculative LLM (fire during recording pauses)
 
-    private var speculativeLLMTask: Task<String?, Never>?
+    private struct TimedLLMResult: Sendable {
+        let text: String?
+        let durationSeconds: Double
+    }
+
+    private var speculativeLLMTask: Task<TimedLLMResult, Never>?
     private var speculativeLLMText: String = ""
     private var speculativeDebounceTask: Task<Void, Never>?
     private var speculativeThrottle = SpeculativeLLMThrottle()
@@ -350,7 +379,8 @@ actor RecognitionSession {
         }
 
         stoppedByMaxDuration = false
-        targetBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let frontmostApplication = NSWorkspace.shared.frontmostApplication
+        targetBundleId = frontmostApplication?.bundleIdentifier
         let provider = KeychainService.selectedASRProvider
         activeProvider = provider
 
@@ -378,6 +408,26 @@ actor RecognitionSession {
         let myGeneration = sessionGeneration
 
         self.currentMode = effectiveMode
+        historyLLMProvider = nil
+        historyLLMModel = nil
+        historyASRDurationSeconds = nil
+        historyLLMDurationSeconds = nil
+        clearIntelliSenseSessionContext()
+        intelliSenseGuardRejected = false
+        if effectiveMode.id == ProcessingMode.intelliSenseId {
+            let settings = await IntelliSenseSettingsStore.shared.load()
+            let target = TargetApplicationContext(
+                processIdentifier: frontmostApplication?.processIdentifier,
+                bundleIdentifier: frontmostApplication?.bundleIdentifier,
+                displayName: frontmostApplication?.localizedName
+            )
+            intelliSenseSettings = settings
+            intelliSenseTarget = target
+            intelliSenseStartedModeID = effectiveMode.id
+            intelliSenseContextTask = Task {
+                await IntelliSenseContextCapturer.capture(target: target, settings: settings)
+            }
+        }
         self.recordingStartTime = nil
         hasEmittedReadyForCurrentSession = false
         injectionAborted = false
@@ -403,6 +453,7 @@ actor RecognitionSession {
                 state = .idle
                 onASREvent?(.error(NSError(domain: "Type4Me", code: -1, userInfo: [NSLocalizedDescriptionKey: L("本地模型未配置", "Local model not configured")])))
                 onASREvent?(.completed)
+                clearIntelliSenseSessionContext()
                 return
             }
             // Verify required models are downloaded
@@ -412,6 +463,7 @@ actor RecognitionSession {
                 state = .idle
                 onASREvent?(.error(NSError(domain: "Type4Me", code: -3, userInfo: [NSLocalizedDescriptionKey: L("请先下载识别模型", "Please download ASR models first")])))
                 onASREvent?(.completed)
+                clearIntelliSenseSessionContext()
                 return
             }
         } else if let savedConfig = KeychainService.loadASRConfig(for: provider) {
@@ -435,6 +487,7 @@ actor RecognitionSession {
             state = .idle
             onASREvent?(.error(NSError(domain: "Type4Me", code: -1, userInfo: [NSLocalizedDescriptionKey: L("未配置 API 凭证", "API credentials not configured")])))
             onASREvent?(.completed)
+            clearIntelliSenseSessionContext()
             return
         }
 
@@ -446,6 +499,7 @@ actor RecognitionSession {
             state = .idle
             onASREvent?(.error(NSError(domain: "Type4Me", code: -2, userInfo: [NSLocalizedDescriptionKey: L("\(provider.displayName) 暂不支持", "\(provider.displayName) not yet supported")])))
             onASREvent?(.completed)
+            clearIntelliSenseSessionContext()
             return
         }
         self.asrClient = client
@@ -460,8 +514,13 @@ actor RecognitionSession {
             bypassProxy: ProxyBypassMode.current.bypassASR
         )
 
-        // Capture prompt context while the user's selection is still active.
-        promptContext = await PromptContext.capture()
+        // Intelli Sense never reads selection or clipboard context. Other modes
+        // preserve the existing prompt-variable behavior.
+        if effectiveMode.id == ProcessingMode.intelliSenseId {
+            promptContext = PromptContext(selectedText: "", clipboardText: "")
+        } else {
+            promptContext = await PromptContext.capture()
+        }
         guard sessionGeneration == myGeneration else {
             DebugFileLogger.log("startRecording: zombie detected after capture, bailing")
             return
@@ -519,6 +578,7 @@ actor RecognitionSession {
             state = .idle
             onASREvent?(.error(error))
             onASREvent?(.completed)
+            clearIntelliSenseSessionContext()
             return
         }
 
@@ -553,6 +613,7 @@ actor RecognitionSession {
             onASREvent?(.error(error))
             onASREvent?(.completed)
             SystemVolumeManager.restore()
+            clearIntelliSenseSessionContext()
             return
         }
 
@@ -642,8 +703,19 @@ actor RecognitionSession {
     private(set) var stoppedByMaxDuration = false
 
     /// Switch the processing mode before stopping. Used for cross-mode hotkey stops.
-    func switchMode(to mode: ProcessingMode) {
-        currentMode = ASRProviderRegistry.resolvedMode(for: mode, provider: activeProvider)
+    func switchMode(to mode: ProcessingMode) async {
+        let resolved = ASRProviderRegistry.resolvedMode(for: mode, provider: activeProvider)
+        if currentMode.id == ProcessingMode.intelliSenseId,
+           resolved.id != ProcessingMode.intelliSenseId {
+            clearIntelliSenseSessionContext()
+        } else if currentMode.id != ProcessingMode.intelliSenseId,
+                  resolved.id == ProcessingMode.intelliSenseId {
+            clearIntelliSenseSessionContext()
+            intelliSenseSettings = await IntelliSenseSettingsStore.shared.load()
+            intelliSenseStartedModeID = currentMode.id
+            intelliSenseCrossModeFallback = true
+        }
+        currentMode = resolved
     }
 
     // MARK: - Stop
@@ -725,7 +797,11 @@ actor RecognitionSession {
             status: historyStatus,
             characterCount: message.count,
             asrProvider: activeProvider.displayName,
-            asrModel: currentASRModelLabel(for: activeProvider)
+            asrModel: currentASRModelLabel(for: activeProvider),
+            llmProvider: historyLLMProvider,
+            llmModel: historyLLMModel,
+            asrDurationSeconds: historyASRDurationSeconds,
+            llmDurationSeconds: historyLLMDurationSeconds
         ))
 
         onASREvent?(.macActionResult(message: message, status: status))
@@ -850,6 +926,7 @@ actor RecognitionSession {
         maxDurationTask = nil
 
         let stopT0 = ContinuousClock.now
+        let asrFinishingStartedAt = Date()
         SystemVolumeManager.restore()
         SoundFeedback.playStop()
 
@@ -1021,11 +1098,12 @@ actor RecognitionSession {
                 DebugFileLogger.log("stop: ASR teardown complete (clean=\(asrTeardownClean)) +\(ContinuousClock.now - stopT0)")
             }
         }
+        historyASRDurationSeconds = max(0, Date().timeIntervalSince(asrFinishingStartedAt))
 
         // Now that we have the final transcript, decide whether to reuse
         // the speculative LLM result or fire a fresh request.
         let canEarlyLLM = providerIsStreaming
-        var earlyLLMTask: Task<String?, Never>?
+        var earlyLLMTask: Task<TimedLLMResult, Never>?
         if needsLLM && canEarlyLLM {
             var finalASRText = currentTranscript.displayText
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1036,6 +1114,9 @@ actor RecognitionSession {
             if exemptionThreshold > 0 && finalASRText.count < exemptionThreshold {
                 DebugFileLogger.log("stop: short text exemption (\(finalASRText.count) < \(exemptionThreshold) chars), skipping LLM")
                 needsLLM = false
+                historyLLMProvider = nil
+                historyLLMModel = nil
+                historyLLMDurationSeconds = nil
                 onASREvent?(.processingLabelOverride(L("校准中", "Calibrating")))
             }
 
@@ -1049,28 +1130,42 @@ actor RecognitionSession {
                     earlyLLMTask = specTask
                     state = .postProcessing
                     DebugFileLogger.log("stop: reusing speculative LLM +\(ContinuousClock.now - stopT0)")
-                } else if let llmConfig = loadEffectiveLLMConfig() {
+                } else {
                     // Final transcript differs from speculative input (tail words arrived),
                     // discard stale result and fire fresh LLM with complete text.
                     speculativeLLMTask?.cancel()
-                    let prompt = promptContext.expandContextVariables(currentMode.prompt)
-                    let client = currentLLMClient()
-                    state = .postProcessing
-                    if finalASRText != speculativeLLMText {
-                        DebugFileLogger.log("stop: final transcript changed (spec=\(speculativeLLMText.count)chars final=\(finalASRText.count)chars), firing fresh LLM")
-                    }
-                    DebugFileLogger.log("stop: fresh LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(finalASRText.count) chars +\(ContinuousClock.now - stopT0)")
-                    earlyLLMTask = Task {
-                        do {
-                            let result = try await client.process(
-                                text: finalASRText, prompt: prompt, config: llmConfig
-                            )
-                            DebugFileLogger.log("stop: fresh LLM done \(result.count) chars +\(ContinuousClock.now - stopT0)")
-                            return result
-                        } catch {
-                            DebugFileLogger.log("stop: fresh LLM FAILED +\(ContinuousClock.now - stopT0) error=\(error)")
-                            self.setPendingLLMError(error)
-                            return nil
+                    historyLLMProvider = nil
+                    historyLLMModel = nil
+                    historyLLMDurationSeconds = nil
+                    if let runtime = LLMRuntime.resolve(isCloudMode: isCloudModeForLLM) {
+                        rememberHistoryLLM(runtime)
+                        let llmConfig = runtime.config
+                        let prompt = await promptForCurrentMode()
+                        let client = runtime.client
+                        state = .postProcessing
+                        if finalASRText != speculativeLLMText {
+                            DebugFileLogger.log("stop: final transcript changed (spec=\(speculativeLLMText.count)chars final=\(finalASRText.count)chars), firing fresh LLM")
+                        }
+                        DebugFileLogger.log("stop: fresh LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(finalASRText.count) chars +\(ContinuousClock.now - stopT0)")
+                        let requestStartedAt = Date()
+                        earlyLLMTask = Task {
+                            do {
+                                let result = try await client.process(
+                                    text: finalASRText, prompt: prompt, config: llmConfig
+                                )
+                                DebugFileLogger.log("stop: fresh LLM done \(result.count) chars +\(ContinuousClock.now - stopT0)")
+                                return TimedLLMResult(
+                                    text: result,
+                                    durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                                )
+                            } catch {
+                                DebugFileLogger.log("stop: fresh LLM FAILED +\(ContinuousClock.now - stopT0) error=\(error)")
+                                self.setPendingLLMError(error)
+                                return TimedLLMResult(
+                                    text: nil,
+                                    durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                                )
+                            }
                         }
                     }
                 }
@@ -1119,6 +1214,7 @@ actor RecognitionSession {
                     DebugFileLogger.log("stop: batch fallback failed, using partial text")
                 }
             }
+            historyASRDurationSeconds = max(0, Date().timeIntervalSince(asrFinishingStartedAt))
         }
         uploadFailureFlag = nil
         lastStreamingError = nil
@@ -1145,6 +1241,7 @@ actor RecognitionSession {
 
             // Apply snippet replacements before LLM (e.g. "我的邮箱" → actual email)
             finalText = SnippetStorage.applyEffective(to: finalText, bundleId: targetBundleId)
+            let intelliSenseGuardInput = finalText
 
             // Short text exemption (for non-streaming providers, per-mode threshold)
             if needsLLM && earlyLLMTask == nil && currentMode.shortTextExemption > 0 {
@@ -1152,6 +1249,9 @@ actor RecognitionSession {
                 if exemptionThreshold > 0 && finalText.count < exemptionThreshold {
                     DebugFileLogger.log("stop: short text exemption (\(finalText.count) < \(exemptionThreshold) chars), skipping LLM (sync path)")
                     needsLLM = false
+                    historyLLMProvider = nil
+                    historyLLMModel = nil
+                    historyLLMDurationSeconds = nil
                     onASREvent?(.processingLabelOverride(L("校准中", "Calibrating")))
                 }
             }
@@ -1164,7 +1264,7 @@ actor RecognitionSession {
                 DebugFileLogger.log("stop: awaiting early LLM result +\(ContinuousClock.now - stopT0)")
 
                 // Timeout: don't wait more than 15s for LLM
-                let earlyResult: String? = await withCheckedContinuation { continuation in
+                let earlyOutcome: TimedLLMResult = await withCheckedContinuation { continuation in
                     let finished = OSAllocatedUnfairLock(initialState: false)
                     Task {
                         let result = await earlyTask.value
@@ -1177,10 +1277,12 @@ actor RecognitionSession {
                         if finished.withLock({ let old = $0; $0 = true; return !old }) {
                             earlyTask.cancel()
                             DebugFileLogger.log("stop: early LLM timeout after 15s, falling back to raw text")
-                            continuation.resume(returning: nil)
+                            continuation.resume(returning: TimedLLMResult(text: nil, durationSeconds: 15))
                         }
                     }
                 }
+                historyLLMDurationSeconds = earlyOutcome.durationSeconds
+                let earlyResult = earlyOutcome.text
 
                 if let result = earlyResult, !result.isEmpty {
                     DebugFileLogger.log("stop: early LLM result received \(result.count) chars +\(ContinuousClock.now - stopT0)")
@@ -1197,9 +1299,13 @@ actor RecognitionSession {
                         )
                         return
                     }
-                    processedText = cleaned
-                    finalText = cleaned
-                    onASREvent?(.processingResult(text: cleaned))
+                    let guarded = applyIntelliSenseGuard(
+                        output: cleaned,
+                        input: intelliSenseGuardInput
+                    )
+                    processedText = guarded.rejected ? nil : guarded.text
+                    finalText = guarded.text
+                    onASREvent?(.processingResult(text: guarded.text))
                 } else {
                     let err = pendingLLMError ?? LLMError.emptyResponse(nil)
                     DebugFileLogger.log("stop: early LLM failed, falling back to raw text: \(err)")
@@ -1209,23 +1315,32 @@ actor RecognitionSession {
                 }
             } else if needsLLM {
                 state = .postProcessing
-                if let llmConfig = loadEffectiveLLMConfig() {
+                if let runtime = LLMRuntime.resolve(isCloudMode: isCloudModeForLLM) {
+                    rememberHistoryLLM(runtime)
+                    let llmConfig = runtime.config
                     DebugFileLogger.log("stop: sync LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(finalText.count) chars")
-                    let client = currentLLMClient()
-                    let prompt = promptContext.expandContextVariables(currentMode.prompt)
+                    let client = runtime.client
+                    let prompt = await promptForCurrentMode()
                     let textForLLM = finalText
 
-                    let llmResult: String? = await withCheckedContinuation { continuation in
+                    let requestStartedAt = Date()
+                    let llmOutcome: TimedLLMResult = await withCheckedContinuation { continuation in
                         let finished = OSAllocatedUnfairLock(initialState: false)
                         let llmTask = Task {
                             do {
                                 let result = try await client.process(
                                     text: textForLLM, prompt: prompt, config: llmConfig
                                 )
-                                return result.isEmpty ? nil : result
+                                return TimedLLMResult(
+                                    text: result.isEmpty ? nil : result,
+                                    durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                                )
                             } catch {
                                 DebugFileLogger.log("stop: sync LLM FAILED: \(error)")
-                                return nil as String?
+                                return TimedLLMResult(
+                                    text: nil,
+                                    durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                                )
                             }
                         }
                         Task {
@@ -1239,10 +1354,12 @@ actor RecognitionSession {
                             if finished.withLock({ let old = $0; $0 = true; return !old }) {
                                 llmTask.cancel()
                                 DebugFileLogger.log("stop: sync LLM timeout after 15s, falling back to raw text")
-                                continuation.resume(returning: nil)
+                                continuation.resume(returning: TimedLLMResult(text: nil, durationSeconds: 15))
                             }
                         }
                     }
+                    historyLLMDurationSeconds = llmOutcome.durationSeconds
+                    let llmResult = llmOutcome.text
 
                     if let result = llmResult {
                         let cleaned = result.collapsingExtraSpaces
@@ -1258,9 +1375,13 @@ actor RecognitionSession {
                             )
                             return
                         }
-                        processedText = cleaned
-                        finalText = cleaned
-                        onASREvent?(.processingResult(text: cleaned))
+                        let guarded = applyIntelliSenseGuard(
+                            output: cleaned,
+                            input: intelliSenseGuardInput
+                        )
+                        processedText = guarded.rejected ? nil : guarded.text
+                        finalText = guarded.text
+                        onASREvent?(.processingResult(text: guarded.text))
                     } else {
                         llmFailed = true
                         onASREvent?(.processingResult(text: rawText))
@@ -1289,12 +1410,26 @@ actor RecognitionSession {
             let onEvent = self.onASREvent
             let recordId = UUID().uuidString
             let modeID = currentMode.id
-            let correctionLearningEnabled = defaults.bool(
-                forKey: CorrectionLearningCoordinator.enabledDefaultsKey
+            let sessionSettings = intelliSenseRequestContext?.settings ?? intelliSenseSettings
+            let contextAvailability = intelliSenseRequestContext?.snapshot.availability
+            let learningPlan = PostInjectionLearningPlan.resolve(
+                settings: sessionSettings,
+                modeID: modeID,
+                startedModeID: intelliSenseStartedModeID,
+                isCrossModeFallback: intelliSenseCrossModeFallback,
+                aborted: aborted,
+                guardRejected: intelliSenseGuardRejected,
+                contextAvailability: contextAvailability,
+                targetBundleIdentifier: targetBundleId
             )
-            let shouldTrackCorrection = !aborted
-                && correctionLearningEnabled
-                && (modeID == ProcessingMode.directId || modeID == ProcessingMode.formalWritingId)
+            let correctionLearningEnabled = learningPlan.correctionEnabled
+            let expressionLearningEnabled = learningPlan.expressionLearningEnabled
+            let shouldTrackLearning = learningPlan.shouldTrackInjection
+            let observationAppCategory = intelliSenseRequestContext?.snapshot.appCategory
+                ?? AppContextClassifier.classify(
+                    bundleIdentifier: targetBundleId,
+                    appName: nil
+                )
             let injectLog = "stop: injecting method=clipboard len=\(finalText.count) +\(ContinuousClock.now - stopT0)"
             let injectionResult: TrackedInjectionResult = await withCheckedContinuation { continuation in
                 Task.detached {
@@ -1308,7 +1443,7 @@ actor RecognitionSession {
                         )
                     } else {
                         DebugFileLogger.log(injectLog)
-                        if shouldTrackCorrection {
+                        if shouldTrackLearning {
                             result = engine.injectTracked(
                                 finalText,
                                 sourceRecordID: recordId,
@@ -1347,6 +1482,11 @@ actor RecognitionSession {
             else if llmFailed { status = "llm_error" }
             else if needsBatchFallback { status = "stream_recovered" }
             else { status = "completed" }
+            let intelliSenseTraceJSON = await makeIntelliSenseHistoryTraceJSON(
+                input: rawText,
+                finalText: finalText,
+                processingFailed: llmFailed
+            )
             await historyStore.insert(HistoryRecord(
                 id: recordId,
                 createdAt: Date(),
@@ -1358,11 +1498,25 @@ actor RecognitionSession {
                 status: status,
                 characterCount: finalText.count,
                 asrProvider: activeProvider.displayName,
-                asrModel: currentASRModelLabel(for: activeProvider)
+                asrModel: currentASRModelLabel(for: activeProvider),
+                llmProvider: historyLLMProvider,
+                llmModel: historyLLMModel,
+                asrDurationSeconds: historyASRDurationSeconds,
+                llmDurationSeconds: historyLLMDurationSeconds,
+                intelliSenseTraceJSON: intelliSenseTraceJSON
             ))
-            if let context = injectionResult.observationContext {
+            if injectionResult.outcome == .inserted,
+               let context = injectionResult.observationContext,
+               shouldTrackLearning {
                 await MainActor.run {
-                    CorrectionLearningCoordinator.shared.begin(context)
+                    PostInjectionLearningCoordinator.shared.begin(
+                        context,
+                        options: PostInjectionLearningOptions(
+                            correctionEnabled: correctionLearningEnabled,
+                            expressionLearningEnabled: expressionLearningEnabled,
+                            appCategory: observationAppCategory
+                        )
+                    )
                 }
             }
             KeychainService.addASRUsage(seconds: duration)
@@ -1843,16 +1997,19 @@ actor RecognitionSession {
 
     private func fireSpeculativeLLM(text: String) async {
         guard speculativeThrottle.beginDebouncedRequest(for: text) else { return }
-        guard let llmConfig = loadEffectiveLLMConfig() else {
+        guard let runtime = LLMRuntime.resolve(isCloudMode: isCloudModeForLLM) else {
             _ = speculativeThrottle.requestCompleted(input: text)
             return
         }
+        rememberHistoryLLM(runtime)
+        let llmConfig = runtime.config
 
         speculativeLLMText = text
-        let prompt = promptContext.expandContextVariables(currentMode.prompt)
+        let prompt = await promptForCurrentMode()
 
-        let client = currentLLMClient()
+        let client = runtime.client
         DebugFileLogger.log("speculative LLM: firing mode=\(currentMode.name) model=\(llmConfig.model) with \(text.count) chars")
+        let requestStartedAt = Date()
         speculativeLLMTask = Task {
             do {
                 let result = try await client.process(
@@ -1860,22 +2017,43 @@ actor RecognitionSession {
                 )
                 guard !Task.isCancelled else {
                     _ = self.speculativeThrottle.requestCompleted(input: text)
-                    return nil
+                    return TimedLLMResult(
+                        text: nil,
+                        durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                    )
                 }
                 DebugFileLogger.log("speculative LLM: done \(result.count) chars")
                 if let pending = self.speculativeThrottle.requestCompleted(input: text),
                    self.state == .recording {
                     self.scheduleSpeculativeLLM(text: pending)
                 }
-                return result
+                return TimedLLMResult(
+                    text: result,
+                    durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                )
             } catch {
                 _ = self.speculativeThrottle.requestCompleted(input: text)
-                guard !Task.isCancelled else { return nil }
+                guard !Task.isCancelled else {
+                    return TimedLLMResult(
+                        text: nil,
+                        durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                    )
+                }
                 DebugFileLogger.log("speculative LLM: failed \(error)")
                 self.setPendingLLMError(error)
-                return nil
+                return TimedLLMResult(
+                    text: nil,
+                    durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                )
             }
         }
+    }
+
+    private func rememberHistoryLLM(_ runtime: ResolvedLLMRuntime) {
+        let provider = runtime.providerID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = runtime.config.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        historyLLMProvider = provider.isEmpty ? nil : String(provider.prefix(80))
+        historyLLMModel = model.isEmpty ? nil : String(model.prefix(160))
     }
 
     private func cancelSpeculativeLLM() {
@@ -1888,6 +2066,155 @@ actor RecognitionSession {
         pendingLLMError = error
     }
 
+    private func applyIntelliSenseGuard(
+        output: String,
+        input: String
+    ) -> (text: String, rejected: Bool) {
+        guard currentMode.id == ProcessingMode.intelliSenseId else {
+            return (output, false)
+        }
+        let result = IntelliSenseOutputValidator.process(
+            input: input,
+            candidate: output,
+            context: intelliSenseRequestContext?.snapshot
+        )
+        intelliSenseLastProcessingResult = result
+        DebugFileLogger.log(
+            "intelli sense validation candidateLength=\(output.count) finalLength=\(result.finalText.count) correction=\(result.correctionAnalysis.containsExplicitCorrection)"
+        )
+        switch result.decision {
+        case .accept:
+            return (result.finalText, false)
+        case .acceptWithWarnings(let warnings):
+            DebugFileLogger.log(
+                "intelli sense guard warnings=\(warnings.map(\.rawValue).joined(separator: ","))"
+            )
+            return (result.finalText, false)
+        case .reject(let reason):
+            intelliSenseGuardRejected = true
+            DebugFileLogger.log("intelli sense guard rejected reason=\(reason.rawValue)")
+            return (result.finalText, true)
+        }
+    }
+
+    private func promptForCurrentMode() async -> String {
+        guard currentMode.id == ProcessingMode.intelliSenseId else {
+            return promptContext.expandContextVariables(currentMode.prompt)
+        }
+        if intelliSenseCrossModeFallback {
+            return IntelliSensePromptBuilder.baseTemplate
+        }
+        if let context = intelliSenseRequestContext,
+           context.generation == sessionGeneration {
+            return context.frozenPrompt
+        }
+
+        let settings: IntelliSenseSettings
+        if let intelliSenseSettings {
+            settings = intelliSenseSettings
+        } else {
+            settings = await IntelliSenseSettingsStore.shared.load()
+        }
+        let snapshot: IntelliSenseContextSnapshot
+        if let task = intelliSenseContextTask {
+            snapshot = await task.value
+        } else if let target = intelliSenseTarget {
+            snapshot = .appOnly(target)
+        } else {
+            snapshot = .appOnly(TargetApplicationContext(
+                processIdentifier: nil,
+                bundleIdentifier: targetBundleId,
+                displayName: nil
+            ))
+        }
+        guard intelliSenseStartedModeID == ProcessingMode.intelliSenseId else {
+            return IntelliSensePromptBuilder.baseTemplate
+        }
+        let expressionProfile: EffectiveExpressionProfile?
+        if settings.expressionLearningEnabled,
+           snapshot.availability != .blacklisted,
+           snapshot.availability != .sensitive {
+            expressionProfile = await ExpressionProfileStore.shared.effectiveProfile(
+                bundleIdentifier: snapshot.bundleIdentifier,
+                category: snapshot.appCategory
+            )
+        } else {
+            expressionProfile = nil
+        }
+        let frozenPrompt = IntelliSensePromptBuilder.build(input: IntelliSensePromptInput(
+            context: snapshot,
+            settings: settings,
+            expressionProfile: expressionProfile
+        ))
+        DebugFileLogger.log(
+            "intelli sense context app=\(snapshot.appCategory.rawValue) control=\(snapshot.controlCategory.rawValue) availability=\(snapshot.availability.rawValue) beforeLength=\(snapshot.contextBeforeCursor.count) afterLength=\(snapshot.contextAfterCursor.count) truncated=\(snapshot.wasTruncated) layers=app:\(settings.applicationAwarenessEnabled),context:\(settings.contextAwarenessEnabled),expression:\(settings.expressionLearningEnabled),correction:\(settings.correctionDetectionEnabled) profileScope=\(expressionProfile?.sourceScope ?? "none") profileDirectives=\(expressionProfile?.directives.count ?? 0)"
+        )
+        intelliSenseRequestContext = IntelliSenseRequestContext(
+            settings: settings,
+            snapshot: snapshot,
+            expressionProfile: expressionProfile,
+            startingModeID: ProcessingMode.intelliSenseId,
+            generation: sessionGeneration,
+            frozenPrompt: frozenPrompt
+        )
+        return frozenPrompt
+    }
+
+    private func clearIntelliSenseSessionContext() {
+        intelliSenseContextTask?.cancel()
+        intelliSenseContextTask = nil
+        intelliSenseRequestContext = nil
+        intelliSenseSettings = nil
+        intelliSenseTarget = nil
+        intelliSenseStartedModeID = nil
+        intelliSenseCrossModeFallback = false
+        intelliSenseGuardRejected = false
+        intelliSenseLastProcessingResult = nil
+    }
+
+    private func makeIntelliSenseHistoryTraceJSON(
+        input: String,
+        finalText: String,
+        processingFailed: Bool
+    ) async -> String? {
+        guard currentMode.id == ProcessingMode.intelliSenseId,
+              intelliSenseStartedModeID == ProcessingMode.intelliSenseId,
+              !intelliSenseCrossModeFallback else { return nil }
+
+        let settings: IntelliSenseSettings
+        if let frozenSettings = intelliSenseRequestContext?.settings ?? intelliSenseSettings {
+            settings = frozenSettings
+        } else {
+            settings = await IntelliSenseSettingsStore.shared.load()
+        }
+        let snapshot: IntelliSenseContextSnapshot
+        if let frozen = intelliSenseRequestContext?.snapshot {
+            snapshot = frozen
+        } else if let task = intelliSenseContextTask {
+            snapshot = await task.value
+        } else if let target = intelliSenseTarget {
+            snapshot = .appOnly(target)
+        } else {
+            snapshot = .unavailable
+        }
+        let promptInput = IntelliSensePromptInput(
+            context: snapshot,
+            settings: settings,
+            expressionProfile: intelliSenseRequestContext?.expressionProfile
+        )
+        let trace = IntelliSenseHistoryTraceBuilder.build(
+            input: input,
+            finalText: finalText,
+            promptInput: promptInput,
+            processingResult: intelliSenseLastProcessingResult,
+            processingFailed: processingFailed
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(trace) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     private func resetSpeculativeLLM() {
         speculativeDebounceTask?.cancel()
         speculativeDebounceTask = nil
@@ -1895,6 +2222,7 @@ actor RecognitionSession {
         speculativeLLMTask = nil
         speculativeLLMText = ""
         speculativeThrottle.reset()
+        clearIntelliSenseSessionContext()
     }
 
     // MARK: - Timeout Helper

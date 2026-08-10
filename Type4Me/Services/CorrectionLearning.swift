@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import Type4MeIntelliSenseCore
 
 struct CorrectionObservationContext: @unchecked Sendable {
     let element: AXUIElement
@@ -414,9 +415,50 @@ struct CorrectionLearningStore {
     }
 }
 
+struct PostInjectionLearningOptions: Equatable, Sendable {
+    var correctionEnabled: Bool
+    var expressionLearningEnabled: Bool
+    var appCategory: ApplicationCategory
+}
+
+struct PostInjectionLearningPlan: Equatable, Sendable {
+    let correctionEnabled: Bool
+    let expressionLearningEnabled: Bool
+
+    var shouldTrackInjection: Bool {
+        correctionEnabled || expressionLearningEnabled
+    }
+
+    static func resolve(
+        settings: IntelliSenseSettings?,
+        modeID: UUID,
+        startedModeID: UUID?,
+        isCrossModeFallback: Bool,
+        aborted: Bool,
+        guardRejected: Bool,
+        contextAvailability: ContextAvailability?,
+        targetBundleIdentifier: String?
+    ) -> Self {
+        let blocked = contextAvailability == .blacklisted
+            || contextAvailability == .sensitive
+            || settings?.isBlacklisted(bundleIdentifier: targetBundleIdentifier) == true
+        let common = !aborted
+            && !guardRejected
+            && !blocked
+            && modeID == ProcessingMode.intelliSenseId
+        return Self(
+            correctionEnabled: common && settings?.correctionDetectionEnabled == true,
+            expressionLearningEnabled: common
+                && settings?.expressionLearningEnabled == true
+                && !isCrossModeFallback
+                && startedModeID == ProcessingMode.intelliSenseId
+        )
+    }
+}
+
 @MainActor
-final class CorrectionLearningCoordinator {
-    static let shared = CorrectionLearningCoordinator()
+final class PostInjectionLearningCoordinator: NSObject {
+    static let shared = PostInjectionLearningCoordinator()
 
     nonisolated static let enabledDefaultsKey = "tf_autoCorrectionLearningEnabled"
     nonisolated static let observationDuration: Duration = .seconds(60)
@@ -426,16 +468,33 @@ final class CorrectionLearningCoordinator {
         let context: CorrectionObservationContext
         let observer: AXObserver
         let observesElementDestruction: Bool
+        var options: PostInjectionLearningOptions
     }
 
     private var active: ActiveObservation?
     private var timeoutTask: Task<Void, Never>?
     private var debounceTask: Task<Void, Never>?
+    private var latestObservedValue: String?
+    private var handledCorrectionCandidate: CorrectionCandidate?
     /// Keep the panel truly lazy. `cancelObservation()` runs at the start of
     /// every recording, including when correction learning is disabled; using
     /// a Swift `lazy` property there would still instantiate its NSHostingView.
     private var panelController: CorrectionLearningPanelController?
     private let learningStore = CorrectionLearningStore()
+
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(settingsDidChange),
+            name: .intelliSenseSettingsDidChange,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
     var isPanelControllerLoaded: Bool { panelController != nil }
 
@@ -444,12 +503,17 @@ final class CorrectionLearningCoordinator {
     }
 
     static func supports(modeID: UUID) -> Bool {
-        modeID == ProcessingMode.directId || modeID == ProcessingMode.formalWritingId
+        modeID == ProcessingMode.intelliSenseId
     }
 
-    func begin(_ context: CorrectionObservationContext) {
+    func begin(
+        _ context: CorrectionObservationContext,
+        options: PostInjectionLearningOptions
+    ) {
         cancelObservation()
-        guard Self.isEnabled, Self.supports(modeID: context.modeID) else { return }
+        guard Self.supports(modeID: context.modeID),
+              options.correctionEnabled || options.expressionLearningEnabled
+        else { return }
 
         var observer: AXObserver?
         let createStatus = AXObserverCreate(context.processIdentifier, correctionAXObserverCallback, &observer)
@@ -485,18 +549,37 @@ final class CorrectionLearningCoordinator {
         active = ActiveObservation(
             context: context,
             observer: observer,
-            observesElementDestruction: destructionStatus == .success
+            observesElementDestruction: destructionStatus == .success,
+            options: options
         )
+        latestObservedValue = context.baselineValue
+        handledCorrectionCandidate = nil
         DebugFileLogger.log("correction observer started: bundle=\(context.bundleIdentifier) injectedLength=\(context.injectedText.count)")
 
         timeoutTask = Task { [weak self] in
             try? await Task.sleep(for: Self.observationDuration)
             guard !Task.isCancelled else { return }
-            self?.cancelObservation()
+            self?.finishObservation(hidePanel: self?.handledCorrectionCandidate == nil)
         }
     }
 
+    /// Compatibility entry point for the existing correction-card tests and call sites.
+    func begin(_ context: CorrectionObservationContext) {
+        begin(context, options: PostInjectionLearningOptions(
+            correctionEnabled: true,
+            expressionLearningEnabled: false,
+            appCategory: AppContextClassifier.classify(
+                bundleIdentifier: context.bundleIdentifier,
+                appName: nil
+            )
+        ))
+    }
+
     func cancelObservation() {
+        finishObservation(hidePanel: true)
+    }
+
+    private func finishObservation(hidePanel: Bool) {
         timeoutTask?.cancel()
         debounceTask?.cancel()
         timeoutTask = nil
@@ -520,8 +603,15 @@ final class CorrectionLearningCoordinator {
                 CFRunLoopMode.commonModes
             )
         }
+        if let active,
+           active.options.expressionLearningEnabled,
+           let latestObservedValue {
+            recordExpressionSample(active: active, finalValue: latestObservedValue)
+        }
         active = nil
-        panelController?.hide()
+        latestObservedValue = nil
+        handledCorrectionCandidate = nil
+        if hidePanel { panelController?.hide() }
     }
 
     fileprivate func accessibilityValueDidChange(element: AXUIElement) {
@@ -536,7 +626,28 @@ final class CorrectionLearningCoordinator {
 
     fileprivate func accessibilityElementWasDestroyed(element: AXUIElement) {
         guard let active, CFEqual(active.context.element, element) else { return }
-        cancelObservation()
+        finishObservation(hidePanel: true)
+    }
+
+    @objc private func settingsDidChange() {
+        Task { [weak self] in
+            guard let self else { return }
+            let settings = await IntelliSenseSettingsStore.shared.load()
+            guard var active = self.active else { return }
+            if settings.isBlacklisted(bundleIdentifier: active.context.bundleIdentifier) {
+                self.finishObservation(hidePanel: true)
+                return
+            }
+            active.options.correctionEnabled = active.options.correctionEnabled
+                && settings.correctionDetectionEnabled
+            active.options.expressionLearningEnabled = active.options.expressionLearningEnabled
+                && settings.expressionLearningEnabled
+            guard active.options.correctionEnabled || active.options.expressionLearningEnabled else {
+                self.finishObservation(hidePanel: true)
+                return
+            }
+            self.active = active
+        }
     }
 
     private func analyzeCurrentValue() {
@@ -550,6 +661,9 @@ final class CorrectionLearningCoordinator {
             cancelObservation()
             return
         }
+        latestObservedValue = currentValue
+
+        guard active.options.correctionEnabled, handledCorrectionCandidate == nil else { return }
 
         switch CorrectionDiffAnalyzer.analyze(
             baseline: active.context.baselineValue,
@@ -563,13 +677,13 @@ final class CorrectionLearningCoordinator {
                 sourceRecordID: active.context.sourceRecordID,
                 bundleIdentifier: active.context.bundleIdentifier
             )
-            stopObservingWithoutHidingPanel()
+            handledCorrectionCandidate = candidate
             let panelController = panelController ?? CorrectionLearningPanelController()
             self.panelController = panelController
             panelController.show(
                 candidate: candidate,
                 onLearn: { [weak self] in self?.learn(candidate) },
-                onIgnore: { [weak self] in self?.cancelObservation() }
+                onIgnore: { [weak self] in self?.panelController?.hide() }
             )
         case .rejected(let reason):
             DebugFileLogger.log("correction candidate rejected: reason=\(reason.rawValue) bundle=\(active.context.bundleIdentifier)")
@@ -584,6 +698,59 @@ final class CorrectionLearningCoordinator {
             DebugFileLogger.log("correction learning save failed: bundle=\(candidate.bundleIdentifier) error=\(error.localizedDescription)")
             panelController?.showSaveFailure()
         }
+    }
+
+    private func recordExpressionSample(active: ActiveObservation, finalValue: String) {
+        guard var styleValue = observedInjectedText(
+            context: active.context,
+            currentValue: finalValue
+        ) else { return }
+        if let candidate = handledCorrectionCandidate,
+           let range = styleValue.range(of: candidate.correctedText) {
+            styleValue.replaceSubrange(range, with: candidate.wrongText)
+        }
+        let observation = ExpressionObservation(
+            sessionID: active.context.sourceRecordID,
+            createdAt: Date(),
+            appBundleIdentifier: active.context.bundleIdentifier,
+            appCategory: active.options.appCategory,
+            injectedText: active.context.injectedText,
+            finalObservedText: styleValue,
+            correctionCandidateRange: nil
+        )
+        Task {
+            do {
+                let settings = await IntelliSenseSettingsStore.shared.load()
+                guard settings.expressionLearningEnabled,
+                      !settings.isBlacklisted(bundleIdentifier: active.context.bundleIdentifier)
+                else { return }
+                try await ExpressionProfileStore.shared.record(observation)
+            } catch {
+                DebugFileLogger.log(
+                    "expression profile save failed bundle=\(active.context.bundleIdentifier) "
+                        + "error=\(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
+    private func observedInjectedText(
+        context: CorrectionObservationContext,
+        currentValue: String
+    ) -> String? {
+        let baseline = context.baselineValue as NSString
+        guard context.injectedRange.location >= 0,
+              NSMaxRange(context.injectedRange) <= baseline.length
+        else { return nil }
+        let prefix = baseline.substring(to: context.injectedRange.location)
+        let suffix = baseline.substring(from: NSMaxRange(context.injectedRange))
+        guard currentValue.hasPrefix(prefix), currentValue.hasSuffix(suffix) else {
+            return currentValue == context.baselineValue ? context.injectedText : nil
+        }
+        let start = currentValue.index(currentValue.startIndex, offsetBy: prefix.count)
+        let end = currentValue.index(currentValue.endIndex, offsetBy: -suffix.count)
+        guard start <= end else { return nil }
+        return String(currentValue[start..<end])
     }
 
     private func stopObservingWithoutHidingPanel() {
@@ -620,9 +787,11 @@ final class CorrectionLearningCoordinator {
     }
 }
 
+typealias CorrectionLearningCoordinator = PostInjectionLearningCoordinator
+
 private let correctionAXObserverCallback: AXObserverCallback = { _, element, notification, refcon in
     guard let refcon else { return }
-    let coordinator = Unmanaged<CorrectionLearningCoordinator>
+    let coordinator = Unmanaged<PostInjectionLearningCoordinator>
         .fromOpaque(refcon)
         .takeUnretainedValue()
     Task { @MainActor in

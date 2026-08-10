@@ -1,4 +1,5 @@
 import SwiftUI
+import Type4MeIntelliSenseCore
 
 // MARK: - Floating Bar Phase
 
@@ -84,6 +85,34 @@ enum ClipboardInjectionPreference {
 
     static func preserveClipboardValue(isEnabled: Bool) -> Bool {
         !isEnabled
+    }
+}
+
+enum ModeSelectionPreference {
+    static let storageKey = "tf_lastSelectedModeID"
+
+    static func resolveInitialMode(
+        from modes: [ProcessingMode],
+        userDefaults: UserDefaults,
+        isFreshInstall: Bool
+    ) -> ProcessingMode {
+        if let raw = userDefaults.string(forKey: storageKey),
+           let id = UUID(uuidString: raw),
+           let saved = modes.first(where: { $0.id == id }) {
+            return saved
+        }
+        if isFreshInstall {
+            return modes.first(where: { $0.id == ProcessingMode.directId })
+                ?? modes.first
+                ?? .direct
+        }
+        return modes.first(where: { $0.id == ProcessingMode.smartDirectId })
+            ?? modes.first
+            ?? .direct
+    }
+
+    static func persist(_ mode: ProcessingMode, userDefaults: UserDefaults) {
+        userDefaults.set(mode.id.uuidString, forKey: storageKey)
     }
 }
 
@@ -248,6 +277,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     static let smartDirectId = UUID(uuidString: "00000000-0000-0000-0000-000000000006")!
     static let translateId = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
     static let macActionId = UUID(uuidString: "00000000-0000-0000-0000-000000000008")!
+    static let intelliSenseId = UUID(uuidString: "00000000-0000-0000-0000-00000000000A")!
 
     // MARK: - Built-in default hotkey binding IDs (stable seeds)
     // Deterministic so the computed `builtins`/`defaults` seeds don't churn on
@@ -266,6 +296,11 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         switch id {
         case directId:
             return L("快速转写，不进行后处理", "Fast transcription without post-processing")
+        case intelliSenseId:
+            return L(
+                "结合当前输入场景和你的表达习惯，智能整理口述内容",
+                "Polish dictation using context and your writing habits"
+            )
         case smartDirectId:
             return L("自动修正错别字和标点，保留原意", "Correct typos and punctuation while preserving meaning")
         case formalWritingId:
@@ -293,6 +328,17 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             description: defaultDescription(for: directId),
             prompt: "", isBuiltin: true,
             hotkeyBindings: [HotkeyBinding(id: directBindingId, keyCode: 62, modifiers: 0, style: .toggle)]
+        )
+    }
+
+    static var intelliSense: ProcessingMode {
+        ProcessingMode(
+            id: intelliSenseId,
+            name: L("智能感知", "Intelli Sense"),
+            description: defaultDescription(for: intelliSenseId),
+            prompt: IntelliSensePromptBuilder.baseTemplate,
+            isBuiltin: true,
+            processingLabel: L("整理中", "Polishing")
         )
     }
 
@@ -981,9 +1027,9 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         )
     }
 
-    static var builtins: [ProcessingMode] { [.direct, .formalWriting, .macAction, .selectionAsk] }
+    static var builtins: [ProcessingMode] { [.direct, .intelliSense, .formalWriting, .macAction, .selectionAsk] }
     static var defaults: [ProcessingMode] {
-        [.direct, .formalWriting, .promptOptimize, .translate, .translateToChinese, .agentMode, .commandMode, .macAction, .selectionAsk]
+        [.direct, .intelliSense, .formalWriting, .promptOptimize, .translate, .translateToChinese, .agentMode, .commandMode, .macAction, .selectionAsk]
     }
 }
 
@@ -1007,6 +1053,7 @@ final class AppState {
     var barPhase: FloatingBarPhase = .hidden
     var segments: [TranscriptionSegment] = []
     var currentMode: ProcessingMode
+    @ObservationIgnored private let modeSelectionDefaults: UserDefaults
     @ObservationIgnored let audioLevel = AudioLevelMeter()
     var recordingStartDate: Date?
     var availableModes: [ProcessingMode]
@@ -1048,12 +1095,19 @@ final class AppState {
     var appEdition: AppEdition? { AppEditionMigration.current }
     #endif
 
-    init() {
-        let modes = ModeStorage().load()
+    init(
+        modeStorage: ModeStorage = ModeStorage(),
+        userDefaults: UserDefaults = .standard
+    ) {
+        let isFreshInstall = !FileManager.default.fileExists(atPath: modeStorage.fileURL.path)
+        let modes = modeStorage.load()
         availableModes = modes
-        currentMode = modes.first(where: { $0.id == ProcessingMode.smartDirectId })
-            ?? modes.first
-            ?? .direct
+        modeSelectionDefaults = userDefaults
+        currentMode = ModeSelectionPreference.resolveInitialMode(
+            from: modes,
+            userDefaults: userDefaults,
+            isFreshInstall: isFreshInstall
+        )
     }
 
     // MARK: Actions
@@ -1071,6 +1125,11 @@ final class AppState {
         // change from `.hidden` can reveal the indicator immediately. The view
         // itself is responsible for rendering nothing for `.hidden`.
         onShowPanel?()
+    }
+
+    func selectModeForRecording(_ mode: ProcessingMode) {
+        currentMode = availableModes.first(where: { $0.id == mode.id }) ?? mode
+        ModeSelectionPreference.persist(currentMode, userDefaults: modeSelectionDefaults)
     }
 
     func markRecordingReady() {

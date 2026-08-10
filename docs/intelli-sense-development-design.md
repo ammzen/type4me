@@ -1,11 +1,11 @@
 # Type4Me 智能感知（Intelli Sense）开发设计文档
 
-> 文档状态：开发设计草案
+> 文档状态：首版实现中（生产 Core 与独立语义评测包已落地）
 > 上游文档：`docs/smart-perception-mode-personalization-prd.md`
 > 适用平台：macOS 14+
 > 技术栈：Swift 6.2 工具链、SwiftUI、AppKit、Accessibility API、SQLite、JSON 文件存储
-> 最后更新：2026-08-09
-> 当前阶段：仅完成设计，不实施代码
+> 最后更新：2026-08-10
+> 当前阶段：按本文进行开发与效果校准
 
 产品界面和对外文案统一写作“Intelli Sense”；Swift 类型与文件名遵循标识符规范，使用不含空格的 `IntelliSense`。
 
@@ -34,7 +34,7 @@
 - 选中文本、剪贴板处理；
 - 翻译；
 - Mac 操作或工具调用；
-- 处理完成后的场景标签；
+- 处理完成后的实时场景标签；
 - “更忠实”“更自然”等快速纠偏；
 - 独立一级个性化设置页；
 - 用户可见的表达习惯列表、置信度或确认卡片；
@@ -172,19 +172,24 @@ Intelli Sense 的核心 Prompt 不允许用户直接编辑，避免破坏模式�
 
 ### 5.3 官方模式列表
 
-- `ProcessingMode.builtins` 加入 `.intelliSense`；
-- `ProcessingMode.defaults` 在 `.direct` 之后加入 `.intelliSense`；
+- `ProcessingMode.builtins` 加入 `.intelliSense`；它在数组中的位置固定为 `.direct` 之后、`.formalWriting` 之前；
+- `ProcessingMode.defaults` 同样在 `.direct` 之后、`.formalWriting` 之前加入 `.intelliSense`；
 - 新安装显示在快速模式与语音润色之间；
 - 现有安装由 `ModeStorage` 的官方模式补入逻辑添加；
 - 对现有用户，新模式追加到当前列表末尾，避免改变用户已定制的顺序；
 - 不自动为新模式绑定快捷键，避免与现有快捷键冲突。
 
+`ModeStorage` 必须分别覆盖两条路径：无 `modes.json` 时使用 `defaults` 的规范顺序；已有数据时将新 builtin 追加到末尾。不能仅依赖 `builtins` 的数组索引推断老用户的插入位置。
+
 ### 5.4 默认模式
 
 Beta 阶段不改变用户默认模式：
 
-- 移除 `AppState.init()` 中优先选择 `smartDirectId` 的特殊逻辑；
-- 启动时使用持久化的当前模式；如果当前机制没有保存该状态，则回退列表第一项；
+- 新增 `tf_lastSelectedModeID`，只保存用户主动选择或用于开始录音的有效模式 ID；临时的跨模式结束路由不覆盖该值；
+- `AppState.init()` 优先恢复该 ID 对应的现存模式；ID 已失效时才进入兼容回退；
+- 首次升级没有持久化 ID 时，继续沿用旧版本启动行为：优先选择现有 `smartDirectId`，不存在时选择列表第一项；完成首次选择后再持久化；
+- 新安装没有持久化 ID 时选择 `.direct`；
+- 移除无条件优先选择 `smartDirectId` 的长期特殊逻辑，但保留上述一次性升级兼容；
 - 不因为补入 Intelli Sense 自动切换当前模式。
 
 ### 5.5 模式配置不写入 `ProcessingMode`
@@ -361,10 +366,10 @@ protocol AppContextClassifying: Sendable {
 
 | 类别 | 示例 | 策略重点 |
 |---|---|---|
-| messaging | Slack、微信、飞书、Discord | 简短自然、少结构化 |
+| messaging | Slack、微信、飞书、Discord | 简短自然；明确多要点时使用紧凑列表 |
 | email | Mail、邮件客户端 | 完整句、礼貌但不补称呼落款 |
-| document | Notion、Word、Pages、Obsidian | 自然分段、多要点才结构化 |
-| browser | Safari、Chrome、Arc | 结合控件判断搜索或正文 |
+| document | Notion、Word、Pages、Obsidian | 自然分段、明确多要点时优先列表化 |
+| browser | Safari、Chrome、Arc、Dia、Edge | 结合控件判断搜索或正文 |
 | development | Xcode、VS Code、JetBrains | 保留标识符、技术术语和格式 |
 | terminal | Terminal、iTerm2、Ghostty | 最大程度忠实，不解释命令 |
 | other | 未知 App | 基础润色策略 |
@@ -379,7 +384,7 @@ protocol AppContextClassifying: Sendable {
 - `kAXSubroleAttribute`；
 - 可编辑性；
 - 单行或多行特征；
-- 搜索框、标题输入框等已知角色。
+- 搜索框、标题输入框等已知角色；Chromium 系应用需结合 AX title、description、identifier、placeholder 和 help 识别，不能只依据 role/subrole。
 
 所有同步 AX IPC 设置短超时，沿用 `PromptContext` 和 `TextInjectionEngine` 已有的超时、防挂死模式。
 
@@ -395,7 +400,9 @@ protocol AppContextClassifying: Sendable {
 - 不使用 Command+C 或剪贴板回退；
 - 不读取选中文本作为待处理对象；
 - 不将上下文写入历史、日志或表达习惯存储；
-- 密码框、安全文本框和黑名单 App 返回 `.sensitive` 或 `.blacklisted`。
+- 密码框、安全文本框和黑名单 App 返回 `.sensitive` 或 `.blacklisted`；
+- Beta 阶段 `terminal` 和 `development` 类别一律不读取上下文正文，只保留 L1/L2 分类结果；
+- 后续如开放 terminal/development 正文读取，必须独立评审，不得只依赖正则过滤。
 
 ### 7.6 敏感控件判断
 
@@ -408,7 +415,9 @@ protocol AppContextClassifying: Sendable {
 - 上下文命中密码、验证码或密钥模式；
 - 读取超时或目标进程退出。
 
-敏感判断失败时采用保守策略：不携带上下文，不启动注入后观察。
+对允许读取上下文的场景，在正文进入 Prompt 前执行二次敏感扫描。V1 至少覆盖：`api[_-]?key`、`secret`、`token`、`Bearer`、JWT 形态、`-----BEGIN ... PRIVATE KEY-----`、证书头、常见云厂商凭据前缀，以及超过阈值的 Base64/Hex 串。命中后立即丢弃正文，将可用性标记为 `.sensitive`；日志只记录拒绝枚举，不记录匹配内容。
+
+敏感判断失败、规则异常或无法确定时采用保守策略：不携带上下文，不启动注入后观察。
 
 ---
 
@@ -416,7 +425,7 @@ protocol AppContextClassifying: Sendable {
 
 ### 8.1 基础润色策略
 
-基础策略是所有配置关闭、上下文不可用或黑名单命中时的唯一回退策略：
+基础策略采用“自适应轻编辑”，也是所有配置关闭、上下文不可用或黑名单命中时的唯一回退策略。它完整继承语音润色的去噪、改口、数字格式化和结构整理能力，不使用削弱版 Prompt：
 
 1. 删除无意义语气词和停顿词；
 2. 删除无意义重复；
@@ -424,8 +433,10 @@ protocol AppContextClassifying: Sendable {
 4. 修正高置信度错字、断句和标点；
 5. 在不改变内容顺序和表达强度的前提下使句子通顺；
 6. 保留用户词汇、语气、中英文混合方式和关键信息；
-7. 不确定时保留原文；
-8. 默认不新增标题、编号、列表、称呼、落款或未口述内容。
+7. 根据语义决定必要的改写强度：无需修改时忠实保留，存在口语噪声、废弃半句或明显改口时必须产生实际整理价值；
+8. 明确包含两个及以上具有独立信息的实质要点时优先列表化；有顺序或步骤信号时使用编号列表，否则使用项目符号；
+9. 单一事项不列点；恰好两个非常简短、对称且合成一句仍清楚的项目不强制列表化；
+10. 不新增标题、称呼、落款或未口述内容；列表化可保留有意义的引导句，但不得凭空添加标题。
 
 ### 8.2 动态 Prompt 输入
 
@@ -449,14 +460,15 @@ protocol IntelliSensePromptBuilding: Sendable {
 
 最终 Prompt 按固定顺序拼装：
 
-1. 模式身份与单一任务；
-2. 不回答、不生成、不执行的硬边界；
-3. 基础润色策略；
-4. App/控件场景策略；
-5. 上下文数据；
-6. 已稳定的表达习惯参数；
-7. 原意与事实保真要求；
-8. 用户口述 `{text}`。
+1. 只润色、不回答、不执行的处理契约；
+2. 自我修正（最高优先级）；
+3. 填充词、无意义重复和废弃半句清理；
+4. ASR 错字、数字、时间、标点和断句处理；
+5. 最终事实与语义保护；
+6. App/控件场景策略；
+7. 有限上下文数据；
+8. 已达到稳定状态的表达习惯；
+9. 只输出结果文本的格式要求与用户口述 `{text}`。
 
 优先级固定为：
 
@@ -504,6 +516,22 @@ struct ScenePolicy: Sendable, Equatable {
 }
 ```
 
+`PolicyLevel` 首版使用固定的 `low / medium / high` 三档。初始 golden 映射如下：
+
+| 类别 | compactness | formality | structure | preserveTechnicalTokens | preserveCommandSyntax |
+|---|---|---|---|---:|---:|
+| messaging | high | low | low | false | false |
+| email | medium | high | low | false | false |
+| document | low | medium | medium | false | false |
+| browser | medium | medium | low | false | false |
+| development | medium | low | low | true | false |
+| terminal | high | low | low | true | true |
+| other | medium | medium | low | false | false |
+
+L2 控件只做确定性覆盖：搜索框强制 `compactness = high`、`structure = low`；标题输入框强制 `structure = low`；其余控件沿用 App 类别策略。映射和覆盖值均作为单元测试 golden，不由 LLM 推断，也不开放给用户编辑。
+
+`structure` 表示场景在内容意图不明确时的默认结构倾向，不得压过明确的多要点意图。除搜索框、标题栏和需要保留命令语法的终端外，只要口述明确包含两个及以上具有独立信息的实质要点，就按基础规则优先列表化。聊天、邮件和开发场景可以影响列表的紧凑度与正式程度，但不能把明确多要点强行压回连续长段。普通 `singleLine` 分类不单独禁止列表，避免因控件识别误差削弱内容意图。
+
 场景分类器只选择策略，不决定任务类型，也不能改变输出语言。
 
 ### 8.6 与 speculative LLM 的集成
@@ -511,8 +539,9 @@ struct ScenePolicy: Sendable, Equatable {
 现有 speculative LLM 路径继续保留：
 
 - 录音开始时创建一次 `IntelliSenseRequestContext`；
-- 上下文快照和表达档案在当前 session 内冻结；
-- speculative 请求和最终请求必须使用同一个动态 Prompt；
+- 上下文快照和表达档案在当前 session 内冻结，并由 `IntelliSensePromptBuilder` 只构建一次 `frozenPrompt`；
+- `frozenPrompt` 已包含唯一的 `{text}` 占位符，不包含 `{selected}`、`{clipboard}` 或 `{tools_json}`；
+- Intelli Sense 的 speculative、TranscriptDiff 触发的 fresh final 和同步 final 三个调用点统一直接使用 `frozenPrompt`，不得再经过 `PromptContext.expandContextVariables(_:)`；
 - App 切换或学习模型更新不改变进行中的请求；
 - 最终 ASR 文本与 speculative 文本不兼容时，沿用 `TranscriptDiff` 发起新请求；
 - 不新增场景分类网络请求。
@@ -523,27 +552,25 @@ struct ScenePolicy: Sendable, Equatable {
 
 ### 9.1 输出保护器
 
-新增纯函数 `IntelliSenseOutputGuard`：
+共享 Core 先通过 `CorrectionIntentAnalysis` 标记被推翻内容、最终确认内容和真实否定，再由纯函数 `IntelliSenseOutputValidator` 检查候选：
 
 ```swift
 enum IntelliSenseGuardDecision: Equatable, Sendable {
     case accept
-    case reject(reason: GuardRejection)
+    case acceptWithWarnings([ValidationWarning])
+    case reject(GuardRejection)
 }
 ```
 
 检查输入为全局片段替换后的 ASR 文本与 LLM 输出。
 
-### 9.2 V1 必检项目
+### 9.2 硬拒绝与诊断警告
 
-- 数字、金额、百分比和日期不得无依据变化；
-- URL、邮箱、文件路径、命令参数和代码标识符不得丢失；
-- 否定词不得丢失或反转；
-- 专有名词和中英文 token 不得无依据替换；
-- 输出不得包含回答前缀、解释、工具调用或 Markdown 代码围栏；
-- 输出长度不得出现无法解释的极端扩张；
-- 用户明确列出的要点不得减少；
-- 输出语言不得整体改变。
+硬拒绝只覆盖明确越界：空输出；回答、解释或声称已经执行动作；新增明显不存在的事实；改变最终确认的数字、日期、金额、URL 或否定关系；整段语言替换；极端扩写；代码围栏或工具调用；泄露上下文敏感内容。
+
+一般词语变化、格式变化、术语规范化、结构变化、较大但仍受约束的改写，以及未清理干净的被推翻内容，只记录 warning，不触发原文回退。`不对`、`哦不`、`I mean` 等改口元语言不作为必须保留的否定；“不要改成 1500”仍属于真实否定，两个数字和否定关系均需保护。单独的“不是 A，是 B”属于完整对比或澄清，不足以证明用户发生口误，必须保留两端与否定关系；只有存在明确改口标记或句子废弃重启证据时才删除 A。
+
+语言保护以说话人的句架语言为准，而不是简单比较中英文字符数量。中文句子中包含大量英文技术词、路径和标识符时，仍必须保留中文叙述；例如口述路径可规范为反引号路径，但不得把整句翻译成英文。
 
 ### 9.3 失败策略
 
@@ -578,10 +605,13 @@ modeID == intelliSenseId
 
 - `correctionDetectionEnabled == true`；
 - App 不在黑名单；
-- 注入结果为 `.inserted`；
+- `TrackedInjectionResult.outcome == .inserted`；
+- `TrackedInjectionResult.observationContext != nil`；
 - 非敏感控件；
 - 非取消或 ESC 中止；
 - 能准确获得注入范围。
+
+`InjectionOutcome` 当前只有 `.inserted` 和 `.copiedToClipboard`，不存在 `.failed` 或 `.cancelled` case。所有“注入失败、取消或无法跟踪”的文档表述在实现中统一落到上述双重门控；不得根据不存在的枚举分支实现。
 
 ### 10.2 分析与卡片
 
@@ -726,14 +756,14 @@ enum ExpressionFeature: String, Codable, CaseIterable {
 - 相反方向修改：负证据；
 - 同一 session 的连续键盘事件：只计一个样本。
 
-V1 阈值确定为：
+V1 暂定阈值为：
 
 - 至少 5 个有效 session 才能从 `insufficient` 进入 `learning`；
 - 至少 10 个有效 session、跨 3 个自然日且方向一致才进入 `stable`；
 - 使用指数衰减降低旧习惯权重；
 - 设置迟滞区间，避免特征在生效与失效之间频繁抖动。
 
-阈值定义为配置常量并通过离线样本调优，不展示给用户。
+这些数值是首版工程初值，不是已经验证的产品常量。阈值定义为内部配置常量并支持测试注入，通过离线样本和 Beta 灰度校准；不进入用户设置，不展示学习状态，也不形成新的产品开放项。
 
 ### 12.6 作用域
 
@@ -798,7 +828,7 @@ struct FeatureAccumulator: Codable, Sendable {
 - 保留句末标点；
 - 不在中文与英文之间自动加空格。
 
-每次最多注入 3–5 条最稳定、与当前场景不冲突的特征，避免 Prompt 过长或规则互相打架。
+每次最多注入 3–5 条最稳定、与当前场景不冲突的特征，避免 Prompt 过长或规则互相打架。“降低列表使用”只影响模糊或可选的结构化，不得取消明确多要点的列表化规则。
 
 ---
 
@@ -813,7 +843,7 @@ private var intelliSenseContextTask: Task<IntelliSenseContextSnapshot, Never>?
 private var intelliSenseRequestContext: IntelliSenseRequestContext?
 ```
 
-`IntelliSenseRequestContext` 包含本 session 冻结的设置、上下文与有效表达档案。
+`IntelliSenseRequestContext` 包含本 session 冻结的设置、上下文、有效表达档案、开始录音时的模式 ID、`sessionGeneration` 和最终 `frozenPrompt`。创建成功后不可变。
 
 ### 13.2 开始录音
 
@@ -824,7 +854,9 @@ private var intelliSenseRequestContext: IntelliSenseRequestContext?
 3. 异步启动上下文快照；
 4. 异步读取表达档案；
 5. 继续现有录音与 ASR 启动；
-6. 不调用 `PromptContext.capture()` 的剪贴板或选中文本路径来构建 Intelli Sense Prompt。
+6. 完全跳过 `PromptContext.capture()`，不得读取剪贴板、选中文本或触发临时 Command+C；
+7. 复用录音开始时已经捕获的 `targetBundleId` 作为快照锚点和 App 级片段替换作用域，不做第二次前台 App 读取；
+8. 在首次 LLM 请求前将可用快照、设置和表达档案冻结并只构建一次 `frozenPrompt`。
 
 其他模式继续使用现有 `PromptContext`，不受影响。
 
@@ -842,9 +874,9 @@ HotwordStorage.loadEffective()
 
 所有模式继续在 LLM 前调用全局和 App 片段替换。Intelli Sense 在此基础上：
 
-1. 获取本 session 动态 Prompt；
-2. 将场景和表达参数合并；
-3. 发起现有单次 LLM 请求；
+1. 获取本 session 的 `frozenPrompt`；
+2. speculative、fresh final 和同步 final 调用点直接使用该值，不调用 `promptContext.expandContextVariables(currentMode.prompt)`；
+3. 发起现有 LLM 请求；若 `TranscriptDiff` 判定 speculative 结果不可复用，沿用现有逻辑取消旧任务并发起一次 fresh final，不增加额外校验请求；
 4. 通过 `IntelliSenseOutputGuard` 检查结果；
 5. 失败时回退片段替换后的 ASR 文本。
 
@@ -857,7 +889,7 @@ let needsObservation = settings.correctionDetectionEnabled
     || settings.expressionLearningEnabled
 ```
 
-注入成功后将上下文交给统一观察器。App 黑名单、敏感控件或 Guard 拒绝时，纠错观察和表达习惯学习均不启动，避免基于降级文本产生噪声样本。
+只有 `injectionResult.outcome == .inserted` 且 `injectionResult.observationContext != nil` 时，才将上下文交给统一观察器。App 黑名单、敏感控件或 Guard 拒绝时，纠错观察和表达习惯学习均不启动，避免基于降级文本产生噪声样本。
 
 ### 13.6 清理
 
@@ -870,7 +902,19 @@ let needsObservation = settings.correctionDetectionEnabled
 - LLM 超时；
 - 强制 reset；
 - recovery 中断；
-- session generation 变化。
+- session generation 变化；
+- 录音中通过跨模式结束切出 Intelli Sense。
+
+### 13.7 跨模式结束
+
+`switchMode(to:)` 必须显式处理 Intelli Sense request context：
+
+- 从 Intelli Sense 切换到其他模式：立即取消上下文与表达档案任务，清空 request context，最终完全按目标模式的现有路径处理；
+- 从其他模式切换到 Intelli Sense：由于录音开始时没有冻结 Intelli Sense 场景，当前 session 只使用 Intelli Sense 基础润色 Prompt，不补读剪贴板、选中文本或 L3 上下文，不启动表达习惯学习；
+- 同一模式内的结束不重建 context；
+- 任何切换结果都携带原始 `sessionGeneration` 校验，旧任务不得写回。
+
+该规则只影响当前 session 的处理路由，不覆盖 `tf_lastSelectedModeID`。
 
 ---
 
@@ -915,7 +959,7 @@ let needsObservation = settings.correctionDetectionEnabled
 | 上下文读取 | 50ms | 300ms | 不携带上下文 |
 | 表达档案读取 | 2ms | 10ms | 不应用表达习惯 |
 | Prompt 构建 | 1ms | 5ms | 使用基础 Prompt |
-| 输出 Guard | 2ms | 10ms | 保守拒绝并回退 ASR 文本 |
+| 输出 Guard | 2ms | 10ms | 仅硬错误回退 ASR 文本，普通变化保留并记录 warning |
 
 ### 15.2 延迟控制
 
@@ -925,6 +969,24 @@ let needsObservation = settings.correctionDetectionEnabled
 - Prompt 只注入有限策略，不注入完整画像；
 - 学习分析在注入完成后低优先级执行；
 - 文件写入防抖，多个特征更新合并为一次原子保存。
+
+Intelli Sense 不新增场景路由或 Guard 校验网络请求。现有 speculative 请求在 `TranscriptDiff` 不可复用时可能被一次 fresh final 替代，这是当前流水线行为。性能验收同时记录 speculative 复用率、fresh final 触发率以及停止录音到注入的端到端 P50/P95，不能只测本地 Prompt 构建耗时。
+
+### 15.3 脱敏可观测性
+
+只记录不含正文的聚合指标：
+
+- App 类别、控件类别、上下文可用性、前后字符数与截断状态；
+- 本次启用的四个感知层；
+- 表达档案命中作用域与稳定指令数量；
+- 改口分析是否生效、候选与最终文本长度；
+- Guard warning、总拒绝率和按 `GuardRejection` 分类的比例；
+- 回退片段替换后 ASR 文本的会话占比；
+- Guard 回退后发生实质编辑的比例与编辑距离；
+- 输出主要语言整体切换的拒绝率；
+- 单个中英文 token 不进入翻译误判统计。
+
+“误拒绝率”不能直接由 Guard 自身判断，以回退后编辑行为和离线标注样本作为代理信号。
 
 ---
 
@@ -961,6 +1023,28 @@ let needsObservation = settings.correctionDetectionEnabled
 
 Release 构建不得记录上下文正文、原始编辑 diff 或表达模型具体值。
 
+### 16.4 历史记录处理轨迹
+
+Intelli Sense 完成最终 Guard 后构造 `IntelliSenseHistoryTrace`，以版本化 JSON 写入历史表的可空 `intelli_sense_trace` 字段。轨迹只保存可验证、可枚举的信息：
+
+- App 显示名称、App 类别和控件类别；
+- 上下文可用性；
+- 已开启与本次实际应用的感知层；
+- 场景策略枚举；
+- 确定性检测到的主要结果变化；
+- 是否检测到明确改口；
+- Guard 接受、警告、拒绝或处理不可用状态。
+
+轨迹禁止包含上下文正文、表达档案指令、Prompt、模型解释、候选全文、密钥或敏感字段。App 名称裁剪到 80 个字符。说明文案不写入数据库，由 UI 根据枚举在当前语言下生成。
+
+轨迹必须基于最终实际采用的路径：LLM 失败时 `appliedLayers` 为空并记录 `processingFallback`；Guard 拒绝时记录 `protectedResultFallback`；跨模式结束的基础回退不生成 Intelli Sense 轨迹。这样历史说明不会把“功能已开启”误写成“本次已生效”。
+
+历史表另增可空的 `llm_provider` 与 `llm_model`，记录本次实际处理请求所使用的 LLM 快照。speculative 结果被复用时记录 speculative 请求的模型；最终文本变化而重发请求时以 fresh final 请求覆盖；短文本豁免或未配置 LLM 时保持为空。LLM 请求失败仍保留已尝试的模型，便于诊断。字段只保存 provider ID 和模型 ID，不保存 URL、凭据或 Prompt。
+
+历史展开区的来源标签按职责分离：麦克风图标只显示 ASR 服务与模型，CPU 图标只显示上述 LLM 快照。UI 不读取当前 LLM 设置解释过去记录，也不对旧记录推测回填；旧记录只显示已有的 ASR 信息。
+
+历史表追加可空 `asr_duration_seconds` 与 `llm_duration_seconds`。`asr_duration_seconds` 从停止录音入口开始计时，到最终转写文本可用为止；发生批量恢复时延长到恢复结果确定，不包含录音时长。`llm_duration_seconds` 记录最终采用或尝试采用的那次请求自身耗时；复用 speculative 结果时使用该 speculative 请求的耗时，fresh final 覆盖旧 speculative 快照，超时记录实际等待上限。展开 UI 以一位小数附在对应模型名称后；旧记录保持 `NULL`。
+
 ---
 
 ## 17. 错误处理与降级矩阵
@@ -989,10 +1073,12 @@ Release 构建不得记录上下文正文、原始编辑 diff 或表达模型具
 1. `ModeStorage` 补入 Intelli Sense；
 2. 不修改现有模式顺序、Prompt 和快捷键；
 3. 创建默认全关闭的设置文件；
-4. 若旧纠错开关存在，迁移其值；
-5. 从通用设置移除旧入口；
-6. 不移动或复制热词、片段替换；
-7. 不创建表达档案，直到用户开启表达习惯感知并产生有效样本。
+4. 若旧纠错开关存在，迁移其值，并写入 `tf_intelliSenseSettingsMigratedV1 = true` 防止重复迁移；
+5. 新增 `tf_lastSelectedModeID`；首次升级没有该值时保留旧启动选择逻辑，首次有效选择后写入；
+6. 从通用设置移除旧入口；
+7. 不移动或复制热词、片段替换；
+8. 不创建表达档案，直到用户开启表达习惯感知并产生有效样本。
+9. 为 `recognition_history` 增加可空 `intelli_sense_trace TEXT`、`llm_provider TEXT`、`llm_model TEXT`、`asr_duration_seconds REAL` 和 `llm_duration_seconds REAL`；旧行保持 `NULL`，不回填和重新处理旧文本。
 
 ### 18.2 回滚
 
@@ -1011,25 +1097,26 @@ Release 构建不得记录上下文正文、原始编辑 diff 或表达模型具
 ```text
 Type4Me/Services/IntelliSenseSettings.swift
 Type4Me/Services/IntelliSenseContext.swift
-Type4Me/Services/IntelliSensePromptBuilder.swift
-Type4Me/Services/IntelliSenseOutputGuard.swift
-Type4Me/Services/ExpressionLearning.swift
+Type4Me/LLM/IntelliSensePrompt.swift
+Type4Me/LLM/IntelliSenseOutputGuard.swift
+Type4Me/Services/ExpressionProfileStore.swift
 Type4Me/UI/Settings/IntelliSenseModeDetail.swift
 
 Type4MeTests/IntelliSenseSettingsTests.swift
 Type4MeTests/IntelliSenseContextTests.swift
-Type4MeTests/IntelliSensePromptBuilderTests.swift
-Type4MeTests/IntelliSenseOutputGuardTests.swift
-Type4MeTests/ExpressionLearningTests.swift
+Type4MeTests/IntelliSensePromptAndGuardTests.swift
+Type4MeTests/ExpressionProfileStoreTests.swift
 ```
 
 ### 19.2 修改文件
 
 | 文件 | 修改内容 |
 |---|---|
-| `Type4Me/UI/AppState.swift` | 新模式 ID、定义、默认列表；移除旧智能模式默认选择 |
+| `Type4Me/UI/AppState.swift` | 新模式 ID、定义、默认列表；最后选择模式持久化与旧启动行为兼容 |
 | `Type4Me/Services/ModeStorage.swift` | 新模式补入与兼容迁移 |
 | `Type4Me/Session/RecognitionSession.swift` | 上下文任务、动态 Prompt、Guard、统一观察入口 |
+| `Type4Me/Database/HistoryStore.swift` | 增加可空轨迹与 LLM 快照列、向后兼容迁移与读写 |
+| `Type4Me/UI/Settings/HistoryTab.swift` | 展开 Intelli Sense 记录时显示三行脱敏说明，并分开展示 ASR 与当次 LLM |
 | `Type4Me/Services/CorrectionLearning.swift` | 观察资格改为 Intelli Sense；抽取统一观察生命周期 |
 | `Type4Me/Injection/TextInjectionEngine.swift` | 暴露可复用的安全焦点快照结构或采集器 |
 | `Type4Me/UI/Settings/ModesSettingsTab.swift` | Intelli Sense 专用详情分支 |
@@ -1043,7 +1130,6 @@ Type4MeTests/ExpressionLearningTests.swift
 - `CorrectionLearningPanel.swift` 的卡片结构和交互；
 - `HotwordStorage` 与 `SnippetStorage` 的文件格式；
 - 其他官方模式的名称、Prompt 和执行行为；
-- `HistoryStore` schema；
 - Mac Actions、Ask Anything、翻译和 Prompt 优化流程。
 
 ---
@@ -1053,12 +1139,19 @@ Type4MeTests/ExpressionLearningTests.swift
 ### 20.1 模式与迁移
 
 - 新安装包含 Intelli Sense；
+- 新安装的 `defaults` 顺序为快速模式、Intelli Sense、语音润色；
 - 现有安装只补入一次；
+- 现有安装将 Intelli Sense 追加到末尾，不改变既有顺序；
 - 新模式 ID 与旧 `smartDirectId` 不同；
 - 不覆盖用户模式顺序和快捷键；
 - 不自动切换当前模式；
+- 首次升级无 `tf_lastSelectedModeID` 时保持旧启动选择行为；
+- 用户主动选择后正确恢复最后有效模式；
+- 已保存模式被删除时安全回退；
+- 临时跨模式结束不覆盖最后选择模式；
 - 设置四项默认关闭；
 - 旧纠错开关存在时正确迁移；
+- 迁移标志防止旧纠错开关被重复复制；
 - 损坏设置文件安全回退。
 
 ### 20.2 上下文捕获
@@ -1072,7 +1165,10 @@ Type4MeTests/ExpressionLearningTests.swift
 - 上下文截取前 300、后 100 字符；
 - 不支持参数化范围时安全回退；
 - 安全输入框不返回正文；
-- 不读取剪贴板或把选择内容当处理目标。
+- terminal/development 在 Beta 阶段不返回上下文正文；
+- API Key、Secret、Bearer/JWT、私钥头、长 Base64/Hex 等敏感模式丢弃正文；
+- 不读取剪贴板或把选择内容当处理目标；
+- Intelli Sense 路径完全不调用 `PromptContext.capture()`，也不触发临时 Command+C。
 
 ### 20.3 Prompt
 
@@ -1083,24 +1179,43 @@ Type4MeTests/ExpressionLearningTests.swift
 - 黑名单忽略所有增强；
 - 上下文中的命令不会改变 Prompt 任务；
 - `{text}` 只保留一次且不会被上下文二次展开；
-- speculative 与 final Prompt 完全一致。
+- `frozenPrompt` 不包含 `{selected}`、`{clipboard}` 或 `{tools_json}`；
+- Intelli Sense 三个 LLM 调用点均不经过 `PromptContext.expandContextVariables(_:)`；
+- speculative、fresh final 与同步 final Prompt 完全一致。
 
 ### 20.4 Guard
 
+- `3 点，不对，改成 4 点` 只保护最终事实；普通“不是周二，是周四”保护完整对比，不能当作口误；
+- “预算 1200 元，不要改成 1500 元”保护两个数字与真实否定；
 - 数字、日期、金额变化被拒绝；
 - 否定关系变化被拒绝；
 - URL、邮箱、路径、标识符丢失被拒绝；
-- 无依据翻译被拒绝；
+- 整段主要语言无依据切换被拒绝，单个中英文 token 不因此被拒绝；
 - 回答或解释型输出被拒绝；
 - 合法去语气词、去重复和断句被接受；
-- 合理分段和场景语气调整被接受；
+- 合理分段、术语规范化和场景语气调整被接受或只产生 warning；
 - 拒绝后回退正确文本。
 
-### 20.5 纠错词
+### 20.5 独立语义评测包
+
+`Evaluation/IntelliSenseEval` 是手动运行的独立 Swift Package，通过本地 package dependency 直接依赖生产 `Type4MeIntelliSenseCore`，不复制 Prompt。它不加入根目录 `swift test`、Dev/Release 构建、PR CI 或定时任务。
+
+- 首版 120 条人工策划 JSONL：`core-polish` 40、`boundary-fidelity` 20、`application` 20、`context` 20、`expression` 12、`privacy-fallback` 8；
+- `smoke` 是其中 24 条子集，12 条最高风险案例可用 `--repeat 3` 检查稳定性；
+- 支持 suite、case ID、tag、模型、限并发、请求缓存和 `--no-cache`；
+- 每次运行生成 `run.jsonl`、摘要和分 suite 的 `review-packet-*.md`，包含生产 Prompt 哈希、候选、Guard 结果、最终文本、diff、延迟与人工裁判栏；
+- API Key 仅从环境变量或 Git 忽略的本地配置读取；原始缓存、运行报告与本地配置均不入库；
+- 报告不自动调用裁判模型，按 `pass / acceptable / fail / needs-review` 人工或交由外部强模型统一评审。
+
+发布前手动运行全量；修改 Prompt、Guard、App 策略或上下文规则时至少运行对应 suite。验收标准为：边界违规零容忍；核心去噪/改口 `pass + acceptable ≥ 95%`；App/上下文 `≥ 85%`；`mustChange` 原样输出 `≤ 5%`；保真案例过度改写 `≤ 5%`；安全候选不得被 Guard 错误回退；基础润色套件不得弱于 Voice Polish。
+
+### 20.6 纠错词
 
 - 只有 Intelli Sense 启动观察；
 - 快速模式和语音润色不启动观察；
 - 开关关闭、黑名单、敏感控件和注入失败不观察；
+- `.inserted` 但 `observationContext == nil` 时不观察；
+- `.copiedToClipboard` 时不观察；
 - 现有卡片回调不变；
 - 确认后同时更新热词与片段替换；
 - 新词在所有模式的有效热词中出现；
@@ -1108,7 +1223,7 @@ Type4MeTests/ExpressionLearningTests.swift
 - 映射保存失败回滚热词；
 - 既有中文候选、敏感过滤和多修改拒绝测试继续通过。
 
-### 20.6 表达习惯
+### 20.7 表达习惯
 
 - 单次样本不生效；
 - 有效样本达到阈值后生效；
@@ -1122,17 +1237,29 @@ Type4MeTests/ExpressionLearningTests.swift
 - 清除表达数据不删除热词和片段替换；
 - 模型文件不包含输入或输出全文。
 
-### 20.7 生命周期与并发
+### 20.8 生命周期与并发
 
 - 新录音取消上一观察器；
 - AX 元素销毁释放 observer；
 - 超时任务和防抖任务被正确取消；
 - 旧 session 的上下文不会污染新 session；
-- 设置在录音中变化只影响下一次；
+- 设置在录音中变化不改写本次已冻结的 Prompt；若注入后观察期间关闭学习开关或加入黑名单，则立即停止对应观察；
+- 从 Intelli Sense 跨模式切出时取消并清空 request context；
+- 从其他模式跨入 Intelli Sense 时只使用基础润色且不启动表达学习；
 - App 退出、权限撤销和文件写入失败不崩溃；
 - panel controller 保持懒加载，关闭纠错检测时不创建动画视图。
 
-### 20.8 回归
+### 20.9 回归
+
+历史轨迹专项测试：
+
+- Dia 搜索框记录应用与搜索场景，并产生“转为搜索关键词”；
+- 上下文和表达习惯只记录是否应用，不序列化正文或具体画像；
+- LLM 失败不声称任何增强感知已生效；
+- Guard 拒绝记录保护回退；
+- 旧数据库自动增加可空列，旧记录正常读取且不显示说明；
+- 其他模式、跨模式基础回退和旧记录不生成轨迹；
+- 历史列表折叠状态不解码轨迹，不改变现有滚动性能设计。
 
 执行完整 `swift test`，并重点覆盖：
 
@@ -1154,10 +1281,11 @@ Type4MeTests/ExpressionLearningTests.swift
 
 1. 新增独立模式 ID 和官方模式定义；
 2. 完成模式补入与迁移；
-3. 新增设置 Store；
-4. 增加 Intelli Sense 模式详情页；
-5. 迁移纠错开关入口；
-6. 暂时只使用基础润色 Prompt。
+3. 新增最后选择模式持久化和首次升级兼容；
+4. 新增设置 Store；
+5. 增加 Intelli Sense 模式详情页；
+6. 迁移纠错开关入口；
+7. 暂时只使用基础润色 Prompt。
 
 验收条件：新模式可独立录音、润色、注入；其他模式零行为变化。
 
@@ -1194,10 +1322,11 @@ Type4MeTests/ExpressionLearningTests.swift
 ### 阶段 E：上下文感知
 
 1. 有限文字读取；
-2. 敏感控件和黑名单保护；
-3. Prompt 数据隔离；
-4. 截断、超时与隐私测试；
-5. 灰度指标验证。
+2. terminal/development 类别正文禁读；
+3. 敏感控件、敏感模式扫描和黑名单保护；
+4. Prompt 数据隔离；
+5. 截断、超时与隐私测试；
+6. 灰度指标验证。
 
 验收条件：上下文不持久化、不阻塞输入，并能改善称呼、术语和语气一致性。
 
@@ -1221,6 +1350,9 @@ Type4MeTests/ExpressionLearningTests.swift
 12. 任一增强能力失败时仍能完成输入；
 13. speculative LLM、历史、注入和其他模式无回归；
 14. 完整测试套件通过；
-15. 性能指标满足第 15 节预算。
+15. Intelli Sense 不读取剪贴板或选中文本，所有 LLM 路径使用同一冻结 Prompt；
+16. 跨模式切换不会复用错误的上下文或覆盖最后选择模式；
+17. Guard 拒绝率、ASR 回退率和端到端延迟可在不记录正文的前提下观测；
+18. 性能指标满足第 15 节预算。
 
 本文档没有遗留产品待确认项；后续进入研发前，只需评审技术拆分、估时与发布批次。

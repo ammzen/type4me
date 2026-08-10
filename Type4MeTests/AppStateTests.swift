@@ -4,6 +4,50 @@ import XCTest
 @MainActor
 final class AppStateTests: XCTestCase {
 
+    private func makeDefaults() -> UserDefaults {
+        let suite = "Type4MeTests.AppState.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
+    }
+
+    func testFreshInstallStartsInQuickMode() {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("type4me-fresh-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let appState = AppState(modeStorage: ModeStorage(fileURL: url), userDefaults: makeDefaults())
+
+        XCTAssertEqual(appState.currentMode.id, ProcessingMode.directId)
+    }
+
+    func testExistingInstallWithoutSelectionPreservesLegacySmartModeStartup() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("type4me-existing-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let storage = ModeStorage(fileURL: url)
+        try storage.save([.direct, .smartDirect])
+
+        let appState = AppState(modeStorage: storage, userDefaults: makeDefaults())
+
+        XCTAssertEqual(appState.currentMode.id, ProcessingMode.smartDirectId)
+    }
+
+    func testRecordingSelectionPersistsAndRestoresLastValidMode() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("type4me-selection-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let storage = ModeStorage(fileURL: url)
+        try storage.save(ProcessingMode.defaults)
+        let defaults = makeDefaults()
+        let first = AppState(modeStorage: storage, userDefaults: defaults)
+
+        first.selectModeForRecording(.intelliSense)
+        let restored = AppState(modeStorage: storage, userDefaults: defaults)
+
+        XCTAssertEqual(restored.currentMode.id, ProcessingMode.intelliSenseId)
+    }
+
     func testStartRecordingTransitionsToPreparing() {
         let appState = AppState()
         appState.startRecording()

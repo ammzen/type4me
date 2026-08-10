@@ -433,7 +433,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let action = await self.session.handleRecoveryHotkeyPress()
                         guard action == .interrupted else { return }
                         await MainActor.run {
-                            self.appState.currentMode = effectiveMode
+                            self.appState.selectModeForRecording(effectiveMode)
                             self.appState.startRecording()
                         }
                         await self.session.startRecording(mode: effectiveMode)
@@ -456,7 +456,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("[Type4Me] >>> HOTKEY: Record START (mode: %@)", effectiveMode.name)
                 DebugFileLogger.log("hotkey record start mode=\(effectiveMode.name)")
                 Task { @MainActor in
-                    self.appState.currentMode = effectiveMode
+                    self.appState.selectModeForRecording(effectiveMode)
                     self.appState.startRecording()
                 }
                 Task {
@@ -625,7 +625,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         DebugFileLogger.log("selectionAsk follow-up start")
         let generation = selectionAskFollowUpStartGate.begin()
-        appState.currentMode = effectiveMode
+        appState.selectModeForRecording(effectiveMode)
         appState.startRecording()
         Task {
             let ready = await self.session.awaitIdle()

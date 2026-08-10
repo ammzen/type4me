@@ -1,5 +1,6 @@
 import XCTest
 @testable import Type4Me
+@testable import Type4MeIntelliSenseCore
 
 final class CorrectionDiffAnalyzerTests: XCTestCase {
     func testEnglishWordCorrection() throws {
@@ -175,6 +176,52 @@ final class CorrectionLearningStoreTests: XCTestCase {
 }
 
 final class CorrectionLearningEligibilityTests: XCTestCase {
+    func testPostInjectionPlanGatesCrossModeAndSensitiveSessions() {
+        var settings = IntelliSenseSettings()
+        settings.correctionDetectionEnabled = true
+        settings.expressionLearningEnabled = true
+
+        let normal = PostInjectionLearningPlan.resolve(
+            settings: settings,
+            modeID: ProcessingMode.intelliSenseId,
+            startedModeID: ProcessingMode.intelliSenseId,
+            isCrossModeFallback: false,
+            aborted: false,
+            guardRejected: false,
+            contextAvailability: .full,
+            targetBundleIdentifier: "com.example.editor"
+        )
+        XCTAssertTrue(normal.correctionEnabled)
+        XCTAssertTrue(normal.expressionLearningEnabled)
+
+        let crossMode = PostInjectionLearningPlan.resolve(
+            settings: settings,
+            modeID: ProcessingMode.intelliSenseId,
+            startedModeID: ProcessingMode.directId,
+            isCrossModeFallback: true,
+            aborted: false,
+            guardRejected: false,
+            contextAvailability: nil,
+            targetBundleIdentifier: "com.example.editor"
+        )
+        XCTAssertTrue(crossMode.correctionEnabled)
+        XCTAssertFalse(crossMode.expressionLearningEnabled)
+
+        for availability in [ContextAvailability.sensitive, .blacklisted] {
+            let blocked = PostInjectionLearningPlan.resolve(
+                settings: settings,
+                modeID: ProcessingMode.intelliSenseId,
+                startedModeID: ProcessingMode.intelliSenseId,
+                isCrossModeFallback: false,
+                aborted: false,
+                guardRejected: false,
+                contextAvailability: availability,
+                targetBundleIdentifier: "com.example.editor"
+            )
+            XCTAssertFalse(blocked.shouldTrackInjection)
+        }
+    }
+
     @MainActor
     func testCancellingWithoutAnObservationDoesNotCreateAnimatedPanel() {
         let coordinator = CorrectionLearningCoordinator()
@@ -187,9 +234,10 @@ final class CorrectionLearningEligibilityTests: XCTestCase {
     }
 
     @MainActor
-    func testOnlyQuickModeAndVoicePolishAreSupported() {
-        XCTAssertTrue(CorrectionLearningCoordinator.supports(modeID: ProcessingMode.directId))
-        XCTAssertTrue(CorrectionLearningCoordinator.supports(modeID: ProcessingMode.formalWritingId))
+    func testOnlyIntelliSenseIsSupported() {
+        XCTAssertTrue(CorrectionLearningCoordinator.supports(modeID: ProcessingMode.intelliSenseId))
+        XCTAssertFalse(CorrectionLearningCoordinator.supports(modeID: ProcessingMode.directId))
+        XCTAssertFalse(CorrectionLearningCoordinator.supports(modeID: ProcessingMode.formalWritingId))
         XCTAssertFalse(CorrectionLearningCoordinator.supports(modeID: ProcessingMode.translateId))
         XCTAssertFalse(CorrectionLearningCoordinator.supports(modeID: UUID()))
     }
