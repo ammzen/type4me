@@ -7,21 +7,31 @@ final class KeychainServiceTests: XCTestCase {
     private var originalASRValues: [String: String]?
     private var originalLLMValues: [String: String]?
     private var originalMigrationMarker: Any?
-    private let appSupportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        .appendingPathComponent("Type4Me", isDirectory: true)
     private var credentialsURL: URL {
-        appSupportDir.appendingPathComponent("credentials.json")
+        KeychainService.credentialsFileURL
     }
 
-    override func setUp() {
-        super.setUp()
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        guard KeychainService.isUsingTestStorage else {
+            throw XCTSkip("Keychain tests require isolated test storage")
+        }
         originalProvider = KeychainService.selectedASRProvider
         originalASRValues = KeychainService.loadASRCredentials(for: .volcano)
         originalLLMValues = KeychainService.loadLLMCredentials(for: .doubao)
         originalMigrationMarker = UserDefaults.standard.object(forKey: "tf_migratedFromTypeFlow")
     }
 
+    func testUsesIsolatedCredentialStorage() {
+        XCTAssertTrue(KeychainService.isUsingTestStorage)
+        XCTAssertEqual(credentialsURL.deletingLastPathComponent().lastPathComponent, "Type4MeTests")
+    }
+
     override func tearDown() {
+        guard KeychainService.isUsingTestStorage else {
+            super.tearDown()
+            return
+        }
         KeychainService.delete(key: "test_key")
         if let originalASRValues {
             try? KeychainService.saveASRCredentials(for: .volcano, values: originalASRValues)

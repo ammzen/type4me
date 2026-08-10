@@ -5,12 +5,39 @@ enum KeychainService {
 
     private static let lock = NSLock()
     private static var cachedCredentials: [String: Any]?
+
+    #if DEBUG
+    private static let runningUnderXCTest: Bool = {
+        let process = ProcessInfo.processInfo
+        let processName = process.processName.lowercased()
+        return process.environment["XCTestConfigurationFilePath"] != nil
+            || processName == "xctest"
+            || processName.hasSuffix("packagetests")
+            || (CommandLine.arguments.first?.contains(".xctest") == true)
+    }()
+    private static let keychainScalarService = runningUnderXCTest
+        ? "com.type4me.tests.scalar"
+        : "com.type4me.scalar"
+    private static let keychainGroupedService = runningUnderXCTest
+        ? "com.type4me.tests.grouped"
+        : "com.type4me.grouped"
+    private static let credentialsDirectoryName = runningUnderXCTest ? "Type4MeTests" : "Type4Me"
+
+    /// Exposed internally so tests can fail fast instead of ever touching the
+    /// production credential namespace or Application Support file.
+    static var isUsingTestStorage: Bool { runningUnderXCTest }
+    #else
     private static let keychainScalarService = "com.type4me.scalar"
     private static let keychainGroupedService = "com.type4me.grouped"
+    private static let credentialsDirectoryName = "Type4Me"
 
-    private static var credentialsURL: URL {
+    /// Release builds contain no XCTest routing and always use production storage.
+    static var isUsingTestStorage: Bool { false }
+    #endif
+
+    static var credentialsFileURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Type4Me", isDirectory: true)
+            .appendingPathComponent(credentialsDirectoryName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("credentials.json")
     }
@@ -20,7 +47,7 @@ enum KeychainService {
     /// Load without acquiring lock — caller must hold `lock`.
     private static func _loadAllUnlocked() -> [String: Any] {
         if let cached = cachedCredentials { return cached }
-        guard let data = try? Data(contentsOf: credentialsURL),
+        guard let data = try? Data(contentsOf: credentialsFileURL),
               let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return [:] }
         cachedCredentials = dict
@@ -36,10 +63,10 @@ enum KeychainService {
 
     private static func saveAll(_ dict: [String: Any]) throws {
         let data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
-        try data.write(to: credentialsURL, options: .atomic)
+        try data.write(to: credentialsFileURL, options: .atomic)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o600],
-            ofItemAtPath: credentialsURL.path
+            ofItemAtPath: credentialsFileURL.path
         )
     }
 

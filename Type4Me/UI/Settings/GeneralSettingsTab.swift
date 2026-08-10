@@ -31,6 +31,8 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     @AppStorage(AudioInputDevicePreferenceStore.modeKey) private var microphonePreferenceMode = AudioInputDevicePreferenceMode.systemDefault.rawValue
     @AppStorage(AudioInputDevicePreferenceStore.priorityEntriesKey) private var microphonePriorityEntriesStorage = ""
     @AppStorage("tf_selectedSpeakerUID") private var selectedSpeakerUID = ""
+    @AppStorage(DebugSettingsAvailability.defaultsKey)
+    private var debugPanelEnabled = DebugSettingsAvailability.defaultEnabled
 
     @State private var hasMic = false
     @State private var hasAccessibility = false
@@ -181,6 +183,17 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
                     ),
                     isOn: $autoCorrectionLearningEnabled
                 )
+                #if TYPE4ME_DEV_BUILD
+                SettingsDivider()
+                settingsToggleRow(
+                    L("Debug 模式", "Debug Mode"),
+                    subtitle: L(
+                        "在左侧菜单显示调试与诊断入口。",
+                        "Show the Debug & Diagnostics entry in the sidebar."
+                    ),
+                    isOn: $debugPanelEnabled
+                )
+                #endif
             }
 
         }
