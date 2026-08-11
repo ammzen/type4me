@@ -38,6 +38,16 @@ final class HotkeyStateMachineTests: XCTestCase {
         return manager
     }
 
+    func testKeyboardHotkeysPreferHIDTapBeforeSessionFallback() {
+        XCTAssertEqual(
+            HotkeyManager.tapLocationPriority.map(\.rawValue),
+            [
+                CGEventTapLocation.cghidEventTap.rawValue,
+                CGEventTapLocation.cgSessionEventTap.rawValue,
+            ]
+        )
+    }
+
     private func makeHoldBinding(modeId: UUID, counters: BindingCounters) -> ModeBinding {
         ModeBinding(
             bindingId: UUID(),
@@ -287,36 +297,6 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertEqual(counters.startCount, 1)
         XCTAssertEqual(counters.stopCount, 0)
         XCTAssertTrue(manager.isActiveRecordingBinding(fnToggle.bindingId))
-    }
-
-    /// Regression: translation starts with Fn+Shift, then the user quickly taps Fn
-    /// to finish. Fn is a deferred hold prefix, but while a recording exists the quick
-    /// tap must be dispatched as a cross-mode finish instead of being silently dropped.
-    func testQuickFnTapStopsRecordingStartedByFnShift() {
-        let manager = makeManager()
-        let counters = BindingCounters()
-        let quickModeId = UUID()
-        let translationModeId = UUID()
-        let fnHold = makeFnBinding(style: .hold, modeId: quickModeId, counters: counters)
-        let fnShift = makeFnShiftBinding(modeId: translationModeId, counters: counters)
-        var crossModeFinishes: [UUID] = []
-        manager.onCrossModeFinish = { crossModeFinishes.append($0) }
-        manager.registerBindings([fnHold, fnShift])
-
-        manager.simulateModifierFlags([.maskSecondaryFn, .maskShift])
-        manager.simulateModifierFlags([])
-
-        XCTAssertEqual(counters.startCount, 1)
-        XCTAssertTrue(manager.isActiveRecordingBinding(fnShift.bindingId))
-
-        manager.simulateModifierFlags(.maskSecondaryFn)
-        manager.simulateModifierFlags([])
-
-        XCTAssertEqual(crossModeFinishes, [quickModeId])
-        XCTAssertFalse(manager.isActiveRecordingBinding(fnShift.bindingId))
-        XCTAssertFalse(manager.isHoldActive(for: fnHold.bindingId))
-        XCTAssertFalse(manager.hasPendingSafetyTimer(for: fnHold.bindingId))
-        XCTAssertEqual(counters.startCount, 1, "quick Fn must finish, not start a second recording")
     }
 
     /// Regression: Fn's state is not reliably present in

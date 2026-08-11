@@ -170,6 +170,14 @@ final class HotkeyManager: NSObject {
 
     // MARK: - Configuration
 
+    /// Global keyboard shortcuts must be observed before app-level consumers such as
+    /// Feishu/Lark can consume a bare Fn event. Always prefer the HID tap and retain the
+    /// session tap as a compatibility fallback when HID access is unavailable.
+    internal static let tapLocationPriority: [CGEventTapLocation] = [
+        .cghidEventTap,
+        .cgSessionEventTap,
+    ]
+
     private var bindings: [ModeBinding] = []
     /// Per-binding state, all keyed by `HotkeyBinding.id` so multiple bindings of the
     /// same mode never collide.
@@ -287,39 +295,30 @@ final class HotkeyManager: NSObject {
 
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
 
-        let tap: CFMachPort?
-        if hasMediaKeyBindings {
-            // Try cghidEventTap first for more reliable interception of media/headphone keys.
-            // If unavailable (e.g. insufficient permissions), fall back to cgSessionEventTap.
+        var tap: CFMachPort?
+        var selectedTapLocation: CGEventTapLocation?
+        for location in Self.tapLocationPriority where tap == nil {
             tap = CGEvent.tapCreate(
-                tap: .cghidEventTap,
-                place: .headInsertEventTap,
-                options: .defaultTap,
-                eventsOfInterest: eventMask,
-                callback: hotkeyCallback,
-                userInfo: userInfo
-            ) ?? CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
+                tap: location,
                 place: .headInsertEventTap,
                 options: .defaultTap,
                 eventsOfInterest: eventMask,
                 callback: hotkeyCallback,
                 userInfo: userInfo
             )
-        } else {
-            tap = CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
-                place: .headInsertEventTap,
-                options: .defaultTap,
-                eventsOfInterest: eventMask,
-                callback: hotkeyCallback,
-                userInfo: userInfo
-            )
+            if tap != nil {
+                selectedTapLocation = location
+            }
         }
 
         guard let tap = tap else {
             return false
         }
+
+        let locationName = selectedTapLocation == .cghidEventTap ? "hid" : "session"
+        DebugFileLogger.log(
+            "hotkey event tap installed location=\(locationName) mediaBindings=\(hasMediaKeyBindings)"
+        )
 
         eventTap = tap
         lastEventTime = nil
@@ -400,6 +399,9 @@ final class HotkeyManager: NSObject {
         // When macOS disables the tap (main thread blocked >1s), keyUp events are lost.
         // We must check if held keys are still physically down; if not, fire onStop.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            DebugFileLogger.log(
+                "hotkey event tap disabled type=\(type.rawValue) recording=\(activeRecordingBindingId != nil)"
+            )
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
@@ -489,6 +491,11 @@ final class HotkeyManager: NSObject {
         // flags exactly match a registered combo, swallow the event so the modifier
         // doesn't also trigger its own system behavior.
         if type == .flagsChanged {
+            if activeRecordingBindingId != nil {
+                DebugFileLogger.log(
+                    "hotkey flagsChanged keyCode=\(keyCode) rawFlags=\(normalizedModifierFlags(event.flags).rawValue) previousFlags=\(previousModifierFlags.rawValue)"
+                )
+            }
             let matchedCombo = evaluateModifierBindings(currentFlags: event.flags)
             return matchedCombo ? nil : Unmanaged.passUnretained(event)
         }
@@ -798,9 +805,6 @@ final class HotkeyManager: NSObject {
         cancelPendingModifierTriggers(except: binding.bindingId)
         let token = UUID()
         pendingModifierTriggers[binding.bindingId] = PendingModifierTrigger(binding: binding, token: token)
-        DebugFileLogger.log(
-            "hotkey modifier prefix pending keyCode=\(binding.keyCode) style=\(binding.style.rawValue) recording=\(activeRecordingBindingId != nil) delayMs=\(Int(modifierPrefixTriggerDelay * 1_000))"
-        )
         DispatchQueue.main.asyncAfter(deadline: .now() + modifierPrefixTriggerDelay) { [weak self] in
             self?.firePendingModifierTrigger(bindingId: binding.bindingId, token: token)
         }
@@ -812,28 +816,11 @@ final class HotkeyManager: NSObject {
               isExactModifierComboActive(for: pending.binding)
         else { return }
         pendingModifierTriggers.removeValue(forKey: bindingId)
-        DebugFileLogger.log(
-            "hotkey modifier prefix fired keyCode=\(pending.binding.keyCode) style=\(pending.binding.style.rawValue) recording=\(activeRecordingBindingId != nil)"
-        )
         handleBindingEvent(binding: pending.binding, pressed: true)
     }
 
     private func consumePendingModifierRelease(for binding: ModeBinding) -> Bool {
         guard let pending = pendingModifierTriggers.removeValue(forKey: binding.bindingId) else { return false }
-
-        // A quick prefix tap while another binding is already recording is an explicit
-        // stop request, not an attempted hold start. Dispatch the short press before
-        // applying the idle-only hold suppression below. This is especially important
-        // for the default Fn / Fn+Shift pair: a translation started with Fn+Shift must
-        // still be stoppable by a quick tap of Fn.
-        if activeRecordingBindingId != nil {
-            DebugFileLogger.log(
-                "hotkey modifier prefix quick release dispatched keyCode=\(pending.binding.keyCode) style=\(pending.binding.style.rawValue) action=finishRecording"
-            )
-            handleBindingEvent(binding: pending.binding, pressed: true)
-            handleBindingEvent(binding: pending.binding, pressed: false)
-            return true
-        }
 
         // A hold binding released before its prefix delay elapsed was never
         // physically active. Starting and stopping it back-to-back is both
@@ -842,12 +829,7 @@ final class HotkeyManager: NSObject {
         // recording start unstopped. A quick release should therefore cancel
         // the pending hold entirely. Toggle bindings still need a synthesized
         // press/release so a quick tap retains toggle semantics.
-        guard pending.binding.style == .toggle else {
-            DebugFileLogger.log(
-                "hotkey modifier prefix quick release ignored keyCode=\(pending.binding.keyCode) style=\(pending.binding.style.rawValue) reason=idleHold"
-            )
-            return true
-        }
+        guard pending.binding.style == .toggle else { return true }
         handleBindingEvent(binding: pending.binding, pressed: true)
         handleBindingEvent(binding: pending.binding, pressed: false)
         return true
