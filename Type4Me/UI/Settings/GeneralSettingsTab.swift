@@ -254,9 +254,15 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     }
 
     private var launchAtLoginRow: some View {
-        settingsToggleRow(
+        let isSupported = LoginItemRegistrationPolicy.supportsCurrentProcess
+        return settingsToggleRow(
             L("开机自动启动", "Launch at Startup"),
-            isOn: $launchAtLogin
+            subtitle: isSupported ? nil : L(
+                "仅在 Type4Me 以 App 形式运行时可用",
+                "Available only when Type4Me runs as an app"
+            ),
+            isOn: $launchAtLogin,
+            isEnabled: isSupported
         )
     }
 
@@ -564,6 +570,10 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     // MARK: - Login Item
 
     private func setLoginItem(enabled: Bool) {
+        guard LoginItemRegistrationPolicy.supportsCurrentProcess else {
+            launchAtLogin = false
+            return
+        }
         do {
             if enabled {
                 try SMAppService.mainApp.register()
@@ -576,6 +586,10 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     }
 
     private func syncLoginItemState() {
+        guard LoginItemRegistrationPolicy.supportsCurrentProcess else {
+            launchAtLogin = false
+            return
+        }
         let status = SMAppService.mainApp.status
         if status == .notRegistered, !UserDefaults.standard.bool(forKey: "tf_didInitialLoginItemSetup") {
             // First launch: register login item by default
