@@ -24,4 +24,12 @@ enum TranslationPromptBuilder {
             .replacingOccurrences(of: "{target_language_name}", with: target.promptName)
             .replacingOccurrences(of: "{target_language_code}", with: target.rawValue)
     }
+
+    static func retryPrompt(target: TranslationLanguage) -> String {
+        """
+        IMPORTANT RETRY: The previous output was rejected because it was not in \(target.promptName) (\(target.rawValue)). You must translate the complete user input into \(target.promptName). Do not return the source language.
+
+        \(prompt(target: target))
+        """
+    }
 }

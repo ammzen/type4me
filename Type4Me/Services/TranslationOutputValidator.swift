@@ -19,6 +19,56 @@ enum TranslationValidationDecision: Equatable, Sendable {
     case reject(TranslationValidationFailure)
 }
 
+enum TranslationValidationAttempt: Sendable {
+    case initial
+    case retry
+}
+
+enum TranslationValidationAction: Equatable, Sendable {
+    case accept
+    case retry
+    case reject(TranslationValidationFailure)
+}
+
+/// Converts detector evidence into product behavior. Short or uncertain text
+/// remains warning-only, while a confident target-language mismatch gets one
+/// retry before becoming a hard failure.
+enum TranslationValidationPolicy {
+    static func action(
+        for decision: TranslationValidationDecision,
+        attempt: TranslationValidationAttempt
+    ) -> TranslationValidationAction {
+        switch decision {
+        case .accept:
+            return .accept
+        case .acceptWithWarning(.unexpectedLanguage(let detected, let confidence)):
+            switch attempt {
+            case .initial:
+                return .retry
+            case .retry:
+                return .reject(.unexpectedLanguage(
+                    detected: detected,
+                    confidence: confidence
+                ))
+            }
+        case .acceptWithWarning:
+            return .accept
+        case .reject(.unexpectedLanguage(let detected, let confidence)):
+            switch attempt {
+            case .initial:
+                return .retry
+            case .retry:
+                return .reject(.unexpectedLanguage(
+                    detected: detected,
+                    confidence: confidence
+                ))
+            }
+        case .reject(let failure):
+            return .reject(failure)
+        }
+    }
+}
+
 protocol TranslationLanguageDetecting: Sendable {
     func hypotheses(for text: String) -> [String: Double]
 }
@@ -45,8 +95,9 @@ struct TranslationOutputValidator: Sendable {
     static let dominantWrongLanguageConfidence = 0.90
     static let maximumTargetLanguageConfidenceForMismatch = 0.03
 
-    /// Initial rollout policy: collect evidence without rejecting plausible
-    /// translations. Structural failures are still rejected.
+    /// The detector reports language mismatches as warnings. The session-level
+    /// policy promotes a confident mismatch to one retry, then a hard failure.
+    /// Structural failures are rejected immediately.
     static let production = TranslationOutputValidator(
         detector: NaturalTranslationLanguageDetector(),
         unexpectedLanguagePolicy: .warn

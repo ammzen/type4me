@@ -21,4 +21,13 @@ final class TranslationPromptBuilderTests: XCTestCase {
         XCTAssertTrue(prompt.contains("file paths"))
         XCTAssertTrue(prompt.contains("Return only the final translated text"))
     }
+
+    func testRetryPromptReinforcesTargetAndKeepsSingleTextPlaceholder() {
+        let prompt = TranslationPromptBuilder.retryPrompt(target: .japanese)
+
+        XCTAssertTrue(prompt.contains("IMPORTANT RETRY"))
+        XCTAssertTrue(prompt.contains("not in Japanese (ja)"))
+        XCTAssertTrue(prompt.contains("Do not return the source language"))
+        XCTAssertEqual(prompt.components(separatedBy: "{text}").count - 1, 1)
+    }
 }

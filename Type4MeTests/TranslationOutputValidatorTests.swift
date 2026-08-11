@@ -17,7 +17,7 @@ final class TranslationOutputValidatorTests: XCTestCase {
         )
     }
 
-    func testProductionPolicyWarnsInsteadOfRejectingWrongLanguage() {
+    func testDetectorReportsWrongLanguageAsWarningForActionPolicy() {
         let validator = TranslationOutputValidator(
             detector: FixedTranslationLanguageDetector(values: ["en": 0.97, "ja": 0.01]),
             unexpectedLanguagePolicy: .warn
@@ -36,6 +36,73 @@ final class TranslationOutputValidatorTests: XCTestCase {
         XCTAssertEqual(
             validator.validate("This is clearly a long English output from the model.", target: .japanese),
             .reject(.unexpectedLanguage(detected: "en", confidence: 0.97))
+        )
+    }
+
+    func testConfidentWrongLanguageRetriesOnceThenRejects() {
+        let mismatch = TranslationValidationDecision.acceptWithWarning(
+            .unexpectedLanguage(detected: "zh-Hans", confidence: 0.999997854)
+        )
+
+        XCTAssertEqual(
+            TranslationValidationPolicy.action(for: mismatch, attempt: .initial),
+            .retry
+        )
+        XCTAssertEqual(
+            TranslationValidationPolicy.action(for: mismatch, attempt: .retry),
+            .reject(.unexpectedLanguage(
+                detected: "zh-Hans",
+                confidence: 0.999997854
+            ))
+        )
+    }
+
+    func testStrictDetectorMismatchStillUsesSingleRetryPolicy() {
+        let mismatch = TranslationValidationDecision.reject(
+            .unexpectedLanguage(detected: "en", confidence: 0.97)
+        )
+
+        XCTAssertEqual(
+            TranslationValidationPolicy.action(for: mismatch, attempt: .initial),
+            .retry
+        )
+        XCTAssertEqual(
+            TranslationValidationPolicy.action(for: mismatch, attempt: .retry),
+            .reject(.unexpectedLanguage(detected: "en", confidence: 0.97))
+        )
+    }
+
+    func testUncertainWarningsRemainAcceptedWithoutRetry() {
+        XCTAssertEqual(
+            TranslationValidationPolicy.action(
+                for: .acceptWithWarning(.insufficientNaturalLanguage),
+                attempt: .initial
+            ),
+            .accept
+        )
+        XCTAssertEqual(
+            TranslationValidationPolicy.action(
+                for: .acceptWithWarning(.lowConfidence),
+                attempt: .retry
+            ),
+            .accept
+        )
+    }
+
+    func testStructuralFailuresNeverRetry() {
+        XCTAssertEqual(
+            TranslationValidationPolicy.action(
+                for: .reject(.emptyOutput),
+                attempt: .initial
+            ),
+            .reject(.emptyOutput)
+        )
+        XCTAssertEqual(
+            TranslationValidationPolicy.action(
+                for: .reject(.unsafeStructure),
+                attempt: .initial
+            ),
+            .reject(.unsafeStructure)
         )
     }
 

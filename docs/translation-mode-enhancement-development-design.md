@@ -598,6 +598,12 @@ enum TranslationValidationDecision: Equatable {
     case reject(TranslationValidationFailure)
 }
 
+enum TranslationValidationAction: Equatable {
+    case accept
+    case retry
+    case reject(TranslationValidationFailure)
+}
+
 protocol TranslationLanguageDetecting: Sendable {
     func hypotheses(for text: String) -> [String: Double]
 }
@@ -613,22 +619,34 @@ protocol TranslationLanguageDetecting: Sendable {
 4. 清理代码块、URL、路径、邮箱、标识符和纯数字后统计自然语言字符；
 5. 文本过短或检测置信度不足：带 warning 接受；
 6. 目标语言命中或位于高概率候选：接受；
-7. 另一语言高置信度占优且目标概率极低：首个版本带 warning 接受；
+7. 另一语言高置信度占优且目标概率极低：第一次请求重试，重试仍不匹配则拒绝；
 8. 其他不确定情况：带 warning 接受。
 
-Validator 保留 `.warn` / `.reject` 两种集中策略。首个 Dev 和上线版本固定使用 `.warn`；只有积累样本并验证误拒率后，才考虑启用 `.reject`。即便未来启用 reject，也必须同时满足：
+Validator 继续用 warning 表达语言检测证据，独立的 `TranslationValidationPolicy` 将它转换为产品动作。只有高置信度错误语言从首次 warning 升级为一次 retry；第二次仍出现同类 warning 时升级为 reject。短文本和低置信度 warning 始终接受。错误语言必须同时满足：
 
 - 可检测自然语言字符不少于 12；
 - 非目标语言置信度不低于 `0.90`；
 - 目标语言置信度不高于 `0.03`。
 
-首版阈值进一步保守化为错误语言置信度不低于 `0.90`、目标语言置信度不高于 `0.03`。阈值必须集中定义并通过测试调整，不散落在 Session 中。空输出和工具调用结构不受 warning-only 策略影响，始终拒绝。
+错误语言阈值为置信度不低于 `0.90`、目标语言置信度不高于 `0.03`。阈值必须集中定义并通过测试调整，不散落在 Session 中。空输出和工具调用结构不经过重试，始终立即拒绝。
 
-### 11.3 简繁中文
+### 11.3 错误语言重试
+
+首次高置信度语言不匹配时：
+
+1. 不注入首次候选；
+2. 使用完整最终 ASR（包含已应用的 snippet replacement）重新请求一次；
+3. 使用 `TranslationPromptBuilder.retryPrompt(target:)` 强调上次输出语言错误；
+4. 重试成功且校验通过后才继续注入；
+5. 重试仍为高置信度错误语言时抛出 `TranslationError.unexpectedLanguage`；
+6. 重试请求失败或超时按 `llmUnavailable` 处理；
+7. 两次 LLM 耗时累加到同一条历史记录。
+
+### 11.4 简繁中文
 
 `zh-Hans` 和 `zh-Hant` 分别映射到 NaturalLanguage 对应标识。短文本或简繁共用字符较多时不得强拒绝，只记录 warning。
 
-### 11.4 混合和技术文本
+### 11.5 混合和技术文本
 
 代码、路径和品牌词会显著干扰语言检测，因此 validator 只检查清理后的自然语言主体。
 
@@ -649,6 +667,7 @@ Validator 保留 `.warn` / `.reject` 两种集中策略。首个 Dev 和上线�
 - 超时；
 - 空输出；
 - validator 拒绝；
+- 错误语言重试后仍不匹配；
 - 目标语言配置无效。
 
 统一返回 `TranslationError`，例如：
@@ -868,11 +887,12 @@ translation failed reason=unexpectedOutputLanguage target=ja detected=en
 - `{text}` 只保留一个数据占位；
 - 包含不回答、不执行和内容保护规则；
 - 输入边界不会二次展开用户文本中的变量。
+- retry Prompt 明确强化目标语言且只保留一个 `{text}` 占位符。
 
 ### 16.5 TranslationOutputValidatorTests
 
 - 正确目标语言接受；
-- 高置信度错误语言拒绝；
+- 高置信度错误语言第一次要求重试，第二次拒绝；
 - 短文本不误拒；
 - 混合技术词不误拒；
 - URL、路径、代码和数字不主导检测；
@@ -886,6 +906,8 @@ translation failed reason=unexpectedOutputLanguage target=ja detected=en
 - 处理中修改设置不改变 Prompt；
 - 同模式另一快捷键结束仍用冻结 target；
 - speculative 和同步路径使用相同 validator；
+- 错误语言重试使用完整最终输入且最多一次；
+- 重试成功后正常注入，重试仍不匹配时写入 `translation_error`；
 - LLM 失败不注入 ASR 原文；
 - validator 拒绝不注入；
 - 其他模式仍保持原有 fallback；

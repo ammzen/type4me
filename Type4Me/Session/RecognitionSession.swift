@@ -16,6 +16,7 @@ enum TranslationError: LocalizedError, Sendable {
     case llmUnavailable
     case emptyOutput
     case unsafeOutput
+    case unexpectedLanguage(TranslationLanguage)
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +28,11 @@ enum TranslationError: LocalizedError, Sendable {
             return L("翻译模型没有返回有效内容，请重试。", "The translation model returned no usable text. Please try again.")
         case .unsafeOutput:
             return L("翻译结果包含异常结构，已停止粘贴。", "The translation contained an unsafe structure and was not pasted.")
+        case .unexpectedLanguage(let target):
+            return L(
+                "翻译结果不是目标语言（\(target.displayName)），已停止粘贴。",
+                "The translation was not in the target language (\(target.displayName)) and was not pasted."
+            )
         }
     }
 }
@@ -1463,7 +1469,10 @@ actor RecognitionSession {
                     }
                     if currentMode.id == ProcessingMode.translationModeId {
                         do {
-                            let translated = try resolveTranslationOutput(cleaned)
+                            let translated = try await resolveTranslationOutputWithRetry(
+                                cleaned,
+                                sourceText: finalText
+                            )
                             processedText = translated
                             finalText = translated
                             onASREvent?(.processingResult(text: translated))
@@ -1559,7 +1568,10 @@ actor RecognitionSession {
                         }
                         if currentMode.id == ProcessingMode.translationModeId {
                             do {
-                                let translated = try resolveTranslationOutput(cleaned)
+                                let translated = try await resolveTranslationOutputWithRetry(
+                                    cleaned,
+                                    sourceText: finalText
+                                )
                                 processedText = translated
                                 finalText = translated
                                 onASREvent?(.processingResult(text: translated))
@@ -2392,30 +2404,164 @@ actor RecognitionSession {
         translationRequestContext = nil
     }
 
-    private func resolveTranslationOutput(_ candidate: String) throws -> String {
+    private func resolveTranslationOutputWithRetry(
+        _ candidate: String,
+        sourceText: String
+    ) async throws -> String {
         guard let context = translationRequestContext,
               context.generation == sessionGeneration else {
             throw TranslationError.llmUnavailable
         }
-        let decision = TranslationOutputValidator.production.validate(
+
+        let initialDecision = TranslationOutputValidator.production.validate(
             candidate,
             target: context.target
         )
-        switch decision {
+        switch translationValidationAction(
+            initialDecision,
+            attempt: .initial,
+            target: context.target
+        ) {
+        case .accept:
+            return candidate
+        case .reject(let failure):
+            throw translationError(for: failure, target: context.target)
+        case .retry:
+            break
+        }
+
+        guard let runtime = LLMRuntime.resolve(isCloudMode: isCloudModeForLLM) else {
+            throw TranslationError.llmUnavailable
+        }
+        rememberHistoryLLM(runtime)
+        let retryPrompt = TranslationPromptBuilder.retryPrompt(target: context.target)
+        DebugFileLogger.log(
+            "translation retry started reason=unexpectedLanguage target=\(context.target.rawValue) model=\(runtime.config.model) input=\(sourceText.count)chars"
+        )
+        let retryOutcome = await performTranslationRetry(
+            text: sourceText,
+            prompt: retryPrompt,
+            runtime: runtime
+        )
+        historyLLMDurationSeconds = (historyLLMDurationSeconds ?? 0)
+            + retryOutcome.durationSeconds
+        guard let retryResult = retryOutcome.text else {
+            throw TranslationError.llmUnavailable
+        }
+
+        let cleanedRetry = retryResult.collapsingExtraSpaces
+        let retryDecision = TranslationOutputValidator.production.validate(
+            cleanedRetry,
+            target: context.target
+        )
+        switch translationValidationAction(
+            retryDecision,
+            attempt: .retry,
+            target: context.target
+        ) {
         case .accept:
             DebugFileLogger.log(
-                "translation validation decision=accept target=\(context.target.rawValue)"
+                "translation retry completed decision=accept target=\(context.target.rawValue) chars=\(cleanedRetry.count)"
             )
-            return candidate
-        case .acceptWithWarning(let warning):
+            return cleanedRetry
+        case .retry:
+            assertionFailure("Retry validation must not request another retry")
+            throw TranslationError.unexpectedLanguage(context.target)
+        case .reject(let failure):
+            throw translationError(for: failure, target: context.target)
+        }
+    }
+
+    private func translationValidationAction(
+        _ decision: TranslationValidationDecision,
+        attempt: TranslationValidationAttempt,
+        target: TranslationLanguage
+    ) -> TranslationValidationAction {
+        let action = TranslationValidationPolicy.action(for: decision, attempt: attempt)
+        switch (decision, action) {
+        case (.accept, .accept):
             DebugFileLogger.log(
-                "translation validation decision=warning target=\(context.target.rawValue) warning=\(String(describing: warning))"
+                "translation validation decision=accept target=\(target.rawValue) attempt=\(String(describing: attempt))"
             )
-            return candidate
-        case .reject(.emptyOutput):
-            throw TranslationError.emptyOutput
-        case .reject:
-            throw TranslationError.unsafeOutput
+        case (.acceptWithWarning(let warning), .accept):
+            DebugFileLogger.log(
+                "translation validation decision=warning target=\(target.rawValue) attempt=\(String(describing: attempt)) warning=\(String(describing: warning))"
+            )
+        case (.acceptWithWarning(let warning), .retry):
+            DebugFileLogger.log(
+                "translation validation decision=retry target=\(target.rawValue) warning=\(String(describing: warning))"
+            )
+        case (_, .reject(let failure)):
+            DebugFileLogger.log(
+                "translation validation decision=reject target=\(target.rawValue) attempt=\(String(describing: attempt)) failure=\(String(describing: failure))"
+            )
+        default:
+            break
+        }
+        return action
+    }
+
+    private func translationError(
+        for failure: TranslationValidationFailure,
+        target: TranslationLanguage
+    ) -> TranslationError {
+        switch failure {
+        case .emptyOutput:
+            return .emptyOutput
+        case .unsafeStructure:
+            return .unsafeOutput
+        case .unexpectedLanguage:
+            return .unexpectedLanguage(target)
+        }
+    }
+
+    private func performTranslationRetry(
+        text: String,
+        prompt: String,
+        runtime: ResolvedLLMRuntime
+    ) async -> TimedLLMResult {
+        let requestStartedAt = Date()
+        return await withCheckedContinuation { continuation in
+            let finished = OSAllocatedUnfairLock(initialState: false)
+            let retryTask = Task {
+                do {
+                    let result = try await runtime.client.process(
+                        text: text,
+                        prompt: prompt,
+                        config: runtime.config
+                    )
+                    DebugFileLogger.log(
+                        "translation retry response chars=\(result.count) model=\(runtime.config.model)"
+                    )
+                    return TimedLLMResult(
+                        text: result,
+                        durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                    )
+                } catch {
+                    DebugFileLogger.log("translation retry failed error=\(error)")
+                    return TimedLLMResult(
+                        text: nil,
+                        durationSeconds: max(0, Date().timeIntervalSince(requestStartedAt))
+                    )
+                }
+            }
+            Task {
+                let result = await retryTask.value
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    continuation.resume(returning: result)
+                }
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(15))
+                if finished.withLock({ let old = $0; $0 = true; return !old }) {
+                    retryTask.cancel()
+                    DebugFileLogger.log("translation retry timeout after 15s")
+                    continuation.resume(returning: TimedLLMResult(
+                        text: nil,
+                        durationSeconds: 15
+                    ))
+                }
+            }
         }
     }
 

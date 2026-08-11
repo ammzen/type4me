@@ -107,6 +107,15 @@ final class RecognitionSessionTests: XCTestCase {
         }
     }
 
+    func testUnexpectedTranslationLanguageHasUserFacingFailureMessage() {
+        let error = TranslationError.unexpectedLanguage(.japanese)
+
+        XCTAssertEqual(error.errorDescription, L(
+            "翻译结果不是目标语言（日语），已停止粘贴。",
+            "The translation was not in the target language (Japanese) and was not pasted."
+        ))
+    }
+
     func testShouldAttemptBatchFallbackWhenStreamingErrorWasObserved() {
         let shouldFallback = RecognitionSession.shouldAttemptBatchFallback(
             uploadFailed: false,
