@@ -122,15 +122,27 @@ struct PromptContext: Sendable {
 
         let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1_000)
         var copiedText = ""
+        var copiedChangeCount: Int?
         while Date() < deadline {
             try? await Task.sleep(for: .milliseconds(25))
             if pasteboard.changeCount != previousChangeCount {
                 copiedText = pasteboard.string(forType: .string) ?? ""
+                copiedChangeCount = pasteboard.changeCount
                 break
             }
         }
 
-        snapshot.restore(to: pasteboard)
+        // Command+C is a no-op when there is no selection in many apps. Avoid
+        // rewriting an unchanged pasteboard because clipboard-history apps treat
+        // the restoration as a fresh user copy. The expected count also avoids
+        // overwriting a clipboard change made by another app in the meantime.
+        if let copiedChangeCount,
+           PasteboardHistoryPolicy.shouldRestoreTemporaryCopy(
+               previousChangeCount: previousChangeCount,
+               currentChangeCount: copiedChangeCount
+           ) {
+            snapshot.restore(to: pasteboard, expectedChangeCount: copiedChangeCount)
+        }
         return copiedText
     }
 
@@ -161,7 +173,8 @@ struct PromptContext: Sendable {
         }
 
         @MainActor
-        func restore(to pasteboard: NSPasteboard) {
+        func restore(to pasteboard: NSPasteboard, expectedChangeCount: Int) {
+            guard pasteboard.changeCount == expectedChangeCount else { return }
             pasteboard.clearContents()
             guard !items.isEmpty else { return }
 
@@ -170,6 +183,7 @@ struct PromptContext: Sendable {
                 for (type, data) in storedItem {
                     item.setData(data, forType: type)
                 }
+                PasteboardHistoryPolicy.markTransient(item)
                 return item
             }
             pasteboard.writeObjects(restoredItems)

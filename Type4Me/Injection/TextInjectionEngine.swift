@@ -20,7 +20,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         let hasFocusedElement: Bool
     }
 
-    private struct ClipboardSnapshot {
+    struct ClipboardSnapshot {
         /// Only safe, non-blocking text types are captured.
         /// Binary types (images, RTF, file promises) are skipped because
         /// reading them can trigger lazy data providers in other apps,
@@ -41,8 +41,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         let items: [Item]
         let changeCount: Int
 
-        static func capture() -> ClipboardSnapshot {
-            let pb = NSPasteboard.general
+        static func capture(from pb: NSPasteboard = .general) -> ClipboardSnapshot {
             let changeCount = pb.changeCount
             let safeSet = Set(safeTypes.map(\.rawValue))
             var items: [Item] = []
@@ -60,20 +59,25 @@ final class TextInjectionEngine: @unchecked Sendable {
             return ClipboardSnapshot(items: items, changeCount: changeCount)
         }
 
-        func restore(expectedChangeCount: Int) {
-            let pb = NSPasteboard.general
-            guard !items.isEmpty else { return }
+        func restore(
+            to pb: NSPasteboard = .general,
+            expectedChangeCount: Int
+        ) {
             guard pb.changeCount == expectedChangeCount else { return }
             pb.clearContents()
-            for item in items {
+
+            let restoredItems = items.map { item in
                 let pbItem = NSPasteboardItem()
                 for type in item.types {
                     if let data = item.data[type] {
                         pbItem.setData(data, forType: type)
                     }
                 }
-                pb.writeObjects([pbItem])
+                PasteboardHistoryPolicy.markTransient(pbItem)
+                return pbItem
             }
+            guard !restoredItems.isEmpty else { return }
+            pb.writeObjects(restoredItems)
         }
     }
 
@@ -122,7 +126,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         pb.clearContents()
         pb.setString(text, forType: .string)
         if transient {
-            pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+            pb.setData(Data(), forType: PasteboardHistoryPolicy.transientType)
         }
     }
 
