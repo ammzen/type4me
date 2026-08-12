@@ -120,6 +120,7 @@ actor RecognitionSession {
     private let injectionEngine = TextInjectionEngine()
     let historyStore = HistoryStore()
     private var asrClient: (any SpeechRecognizer)?
+    private var llmClientCache = LLMClientCache()
 
     private let logger = Logger(
         subsystem: "com.type4me.session",
@@ -130,14 +131,28 @@ actor RecognitionSession {
     private var isCloudMode: Bool { activeProvider == .cloud }
     #endif
 
-    /// Return the appropriate LLM client for the currently selected provider.
-    private func currentLLMClient() -> any LLMClient {
-        LLMRuntime.currentClient(isCloudMode: isCloudModeForLLM)
-    }
+    private func resolveLLMRuntime() async -> ResolvedLLMRuntime? {
+        guard let resolution = LLMRuntime.resolve(
+            isCloudMode: isCloudModeForLLM,
+            cache: &llmClientCache
+        ) else {
+            if let staleClient = llmClientCache.remove() {
+                await staleClient.invalidate()
+                DebugFileLogger.log("llm client cache cleared reason=configurationUnavailable")
+            }
+            return nil
+        }
 
-    /// Load LLM credentials from KeychainService.
-    private func loadEffectiveLLMConfig() -> LLMConfig? {
-        LLMRuntime.currentConfig(isCloudMode: isCloudModeForLLM)
+        if let invalidated = resolution.invalidated {
+            await invalidated.invalidate()
+            let reasons = resolution.invalidationReasons.joined(separator: ",")
+            DebugFileLogger.log("llm client cache replaced reasons=\(reasons)")
+        } else if resolution.reused {
+            DebugFileLogger.log("llm client cache reused provider=\(resolution.runtime.providerID)")
+        } else {
+            DebugFileLogger.log("llm client cache created provider=\(resolution.runtime.providerID)")
+        }
+        return resolution.runtime
     }
 
     private var isCloudModeForLLM: Bool {
@@ -758,9 +773,8 @@ actor RecognitionSession {
         DebugFileLogger.log("ASR pipeline live, flushed \(bufferedChunks.count) buffered chunks")
 
         // Pre-warm LLM connection for modes with post-processing
-        if !currentMode.prompt.isEmpty, let llmConfig = loadEffectiveLLMConfig() {
-            let client = currentLLMClient()
-            Task { await client.warmUp(baseURL: llmConfig.baseURL) }
+        if !currentMode.prompt.isEmpty, let runtime = await resolveLLMRuntime() {
+            Task { await runtime.client.warmUp(baseURL: runtime.config.baseURL) }
         }
 
         // Safety: auto-stop after maxRecordingDuration to prevent unbounded memory use
@@ -984,7 +998,7 @@ actor RecognitionSession {
             return
         }
 
-        guard let llmConfig = loadEffectiveLLMConfig() else {
+        guard let runtime = await resolveLLMRuntime() else {
             onASREvent?(.selectionAskStarted(
                 requestID: requestID,
                 question: question,
@@ -1014,7 +1028,8 @@ actor RecognitionSession {
             contextWasTruncated: requestContext.contextWasTruncated || fittedRequest.wasTruncated
         ))
 
-        let client = currentLLMClient()
+        let llmConfig = runtime.config
+        let client = runtime.client
         let effectiveContext = PromptContext(selectedText: fittedRequest.selectedText, clipboardText: "")
         let prompt = SelectionAskPromptBuilder.requestText(
             mode: currentMode,
@@ -1185,7 +1200,9 @@ actor RecognitionSession {
                     asrCleanupGeneration = myGeneration
                     asrCleanupTask = Task { [weak self, myGeneration] in
                         if let evtTask { _ = await self?.withTimeout(.seconds(3)) { await evtTask.value } }
-                        guard !Task.isCancelled else { return }
+                        // Cancellation means a newer session no longer wants to
+                        // wait for the drain; disconnect is still mandatory so
+                        // the previous client's resources cannot be stranded.
                         await client.disconnect()
                         DebugFileLogger.log("stop: phase 2 background cleanup done")
                         await self?.clearASRCleanupTask(generation: myGeneration)
@@ -1241,7 +1258,8 @@ actor RecognitionSession {
                     if let evtTask {
                         _ = await self?.withTimeout(.seconds(3)) { await evtTask.value }
                     }
-                    guard !Task.isCancelled else { return }
+                    // A new recording may cancel this wait, but it must not
+                    // cancel ownership cleanup for the previous ASR client.
                     await client.disconnect()
                     DebugFileLogger.log("stop: ASR background cleanup done")
                     await self?.clearASRCleanupTask(generation: myGeneration)
@@ -1305,7 +1323,7 @@ actor RecognitionSession {
                     historyLLMProvider = nil
                     historyLLMModel = nil
                     historyLLMDurationSeconds = nil
-                    if let runtime = LLMRuntime.resolve(isCloudMode: isCloudModeForLLM) {
+                    if let runtime = await resolveLLMRuntime() {
                         rememberHistoryLLM(runtime)
                         let llmConfig = runtime.config
                         let prompt = await promptForCurrentMode()
@@ -1506,7 +1524,7 @@ actor RecognitionSession {
                 }
             } else if needsLLM {
                 state = .postProcessing
-                if let runtime = LLMRuntime.resolve(isCloudMode: isCloudModeForLLM) {
+                if let runtime = await resolveLLMRuntime() {
                     rememberHistoryLLM(runtime)
                     let llmConfig = runtime.config
                     DebugFileLogger.log("stop: sync LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(finalText.count) chars")
@@ -2220,7 +2238,7 @@ actor RecognitionSession {
 
     private func fireSpeculativeLLM(text: String) async {
         guard speculativeThrottle.beginDebouncedRequest(for: text) else { return }
-        guard let runtime = LLMRuntime.resolve(isCloudMode: isCloudModeForLLM) else {
+        guard let runtime = await resolveLLMRuntime() else {
             _ = speculativeThrottle.requestCompleted(input: text)
             return
         }
@@ -2430,7 +2448,7 @@ actor RecognitionSession {
             break
         }
 
-        guard let runtime = LLMRuntime.resolve(isCloudMode: isCloudModeForLLM) else {
+        guard let runtime = await resolveLLMRuntime() else {
             throw TranslationError.llmUnavailable
         }
         rememberHistoryLLM(runtime)

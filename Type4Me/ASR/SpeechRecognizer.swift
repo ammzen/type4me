@@ -17,9 +17,9 @@ struct ASRRequestOptions: Sendable, Equatable {
         return config
     }
 
-    /// Shared URLSession for ASR WebSocket connections.
-    /// Reusing one session across recordings keeps the TCP connection pool warm,
-    /// saving ~150-300ms on each subsequent connect (skips TCP + TLS handshake).
+    /// Shared URLSession for ASR connections. WebSocket clients use callback-
+    /// driven receive loops so retained CFNetwork tasks do not also retain a
+    /// suspended Swift concurrency graph.
     static let sharedSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
@@ -27,8 +27,8 @@ struct ASRRequestOptions: Sendable, Equatable {
         return URLSession(configuration: config)
     }()
 
-    /// The URLSession to use for ASR connections. Returns the shared session
-    /// unless bypassProxy is set (which needs a custom configuration).
+    /// Proxy bypass needs a private configuration; otherwise reuse the shared
+    /// connection pool to avoid adding a handshake to every recording.
     var resolvedSession: URLSession {
         bypassProxy ? URLSession(configuration: urlSessionConfiguration) : Self.sharedSession
     }

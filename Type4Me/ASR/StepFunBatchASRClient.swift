@@ -10,6 +10,7 @@ actor StepFunBatchASRClient: SpeechRecognizer {
     private var config: StepFunBatchASRConfig?
     private var options = ASRRequestOptions()
     private var session: URLSession?
+    private var ownsSession = false
     private var audioBuffer = Data()
     private var eventContinuation: AsyncStream<RecognitionEvent>.Continuation?
     private var _events: AsyncStream<RecognitionEvent>?
@@ -30,6 +31,7 @@ actor StepFunBatchASRClient: SpeechRecognizer {
         self.config = stepFunConfig
         self.options = options
         session = options.resolvedSession
+        ownsSession = options.bypassProxy
         audioBuffer = Data()
 
         let (stream, continuation) = AsyncStream<RecognitionEvent>.makeStream()
@@ -78,11 +80,15 @@ actor StepFunBatchASRClient: SpeechRecognizer {
         }
     }
 
-    func disconnect() {
+    func disconnect() async {
         eventContinuation?.finish()
         eventContinuation = nil
         _events = nil
         audioBuffer = Data()
+        if ownsSession {
+            session?.invalidateAndCancel()
+        }
+        ownsSession = false
         session = nil
         config = nil
     }

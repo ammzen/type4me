@@ -39,7 +39,7 @@ actor VolcASRClient: SpeechRecognizer {
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
     private var ownsSession = false
-    private var receiveTask: Task<Void, Never>?
+    private var receiveGeneration = 0
 
     private var eventContinuation: AsyncStream<RecognitionEvent>.Continuation?
     private var _events: AsyncStream<RecognitionEvent>?
@@ -101,8 +101,8 @@ actor VolcASRClient: SpeechRecognizer {
 
         let initialSession = options.resolvedSession
         var activeSession = initialSession
-        var activeTask = initialSession.webSocketTask(with: request)
         var activeOwnsSession = options.bypassProxy
+        var activeTask = initialSession.webSocketTask(with: request)
         activeTask.resume()
 
         lastTranscript = .empty
@@ -122,6 +122,9 @@ actor VolcASRClient: SpeechRecognizer {
             // Retry once with a fresh session before showing a user-visible error.
             NSLog("[ASR] WebSocket send failed: %@, retrying with fresh session...", String(describing: error))
             activeTask.cancel(with: .goingAway, reason: nil)
+            if activeOwnsSession {
+                initialSession.invalidateAndCancel()
+            }
 
             let retrySession = URLSession(configuration: options.urlSessionConfiguration)
             let retryTask = retrySession.webSocketTask(with: request)
@@ -129,8 +132,8 @@ actor VolcASRClient: SpeechRecognizer {
             do {
                 try await retryTask.send(.data(message))
                 activeSession = retrySession
-                activeTask = retryTask
                 activeOwnsSession = true
+                activeTask = retryTask
                 NSLog("[ASR] WebSocket retry sent full_client_request OK")
             } catch {
                 retryTask.cancel(with: .goingAway, reason: nil)
@@ -240,16 +243,18 @@ actor VolcASRClient: SpeechRecognizer {
 
     // MARK: - Disconnect
 
-    func disconnect() {
-        receiveTask?.cancel()
-        receiveTask = nil
-        webSocketTask?.cancel(with: .normalClosure, reason: nil)
+    func disconnect() async {
+        receiveGeneration &+= 1
+        let socket = webSocketTask
         webSocketTask = nil
+        // Use URLSessionTask.cancel() here instead of the graceful WebSocket
+        // close overload. At teardown the transcript is already settled; a
+        // pending close handshake would keep CFNetwork continuations alive.
+        socket?.cancel()
         if ownsSession {
             session?.invalidateAndCancel()
         }
         ownsSession = false
-        // Don't invalidate shared session — just release our reference
         session = nil
         eventContinuation?.finish()
         eventContinuation = nil
@@ -260,36 +265,55 @@ actor VolcASRClient: SpeechRecognizer {
     // MARK: - Receive Loop
 
     private func startReceiveLoop() {
-        receiveTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                do {
-                    guard let task = await self.webSocketTask else { break }
-                    let message = try await task.receive()
-                    await self.handleMessage(message)
-                } catch {
-                    NSLog("[ASR] Receive loop error: %@", String(describing: error))
-                    if !Task.isCancelled {
-                        if await self.didRequestEnd {
-                            // We already sent end-of-stream — socket close is normal.
-                            NSLog("[ASR] Treating as normal session end (sent %d packets)", await self.audioPacketCount)
-                        } else if await self.audioPacketCount == 0 {
-                            // No audio sent yet — real connection/auth error.
-                            await self.emitEvent(.error(error))
-                        } else {
-                            // Audio was flowing but we never sent end-of-stream — network failure.
-                            NSLog("[ASR] Unexpected close during audio (sent %d packets)", await self.audioPacketCount)
-                            await self.emitEvent(.error(error))
-                        }
-                        await self.emitEvent(.completed)
-                    }
-                    break
-                }
-            }
-            NSLog("[ASR] Receive loop ended")
-            // Finish the event stream so consumers (eventConsumptionTask) can complete.
-            await self.eventContinuation?.finish()
+        receiveGeneration &+= 1
+        guard let task = webSocketTask else { return }
+        scheduleReceive(on: task, generation: receiveGeneration)
+    }
+
+    /// URLSessionWebSocketTask's async `receive()` leaves a Foundation
+    /// continuation graph alive after cancellation on current macOS releases.
+    /// Drive the socket with the callback API so each receive owns no suspended
+    /// Swift task while preserving actor-isolated message handling.
+    private func scheduleReceive(on task: URLSessionWebSocketTask, generation: Int) {
+        task.receive { [weak self, weak task] result in
+            guard let self, let task else { return }
+            Task { await self.handleReceiveResult(result, task: task, generation: generation) }
         }
+    }
+
+    private func handleReceiveResult(
+        _ result: Result<URLSessionWebSocketTask.Message, Error>,
+        task: URLSessionWebSocketTask,
+        generation: Int
+    ) {
+        guard generation == receiveGeneration, task === webSocketTask else { return }
+
+        switch result {
+        case .success(let message):
+            handleMessage(message)
+            if generation == receiveGeneration, task === webSocketTask {
+                scheduleReceive(on: task, generation: generation)
+            } else {
+                finishReceiveLoop()
+            }
+        case .failure(let error):
+            NSLog("[ASR] Receive loop error: %@", String(describing: error))
+            if didRequestEnd {
+                NSLog("[ASR] Treating as normal session end (sent %d packets)", audioPacketCount)
+            } else if audioPacketCount == 0 {
+                emitEvent(.error(error))
+            } else {
+                NSLog("[ASR] Unexpected close during audio (sent %d packets)", audioPacketCount)
+                emitEvent(.error(error))
+            }
+            emitEvent(.completed)
+            finishReceiveLoop()
+        }
+    }
+
+    private func finishReceiveLoop() {
+        NSLog("[ASR] Receive loop ended")
+        eventContinuation?.finish()
     }
 
     private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
@@ -313,7 +337,10 @@ actor VolcASRClient: SpeechRecognizer {
                     NSLog("[ASR] Session ended by server after %d audio packets", audioPacketCount)
                 }
                 emitEvent(.completed)
-                webSocketTask?.cancel(with: .normalClosure, reason: nil)
+                // The server has already ended the logical session. A graceful
+                // close here leaves CFNetwork's close-handshake graph retained;
+                // force task cancellation so the completed WebSocket can detach.
+                webSocketTask?.cancel()
                 webSocketTask = nil
                 return
             }
