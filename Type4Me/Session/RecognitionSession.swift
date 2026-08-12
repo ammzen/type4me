@@ -311,6 +311,7 @@ actor RecognitionSession {
     private var recoveryInterruptPromptShown = false
     private var recoveryRecordId: String?
     private var recoveryCreatedAt: Date?
+    private var recoveryRawPartialText = ""
     private var recoveryPartialText = ""
     private var recoveryDuration: Double = 0
     private var recoveryModeName: String?
@@ -1472,7 +1473,7 @@ actor RecognitionSession {
 
                 if let result = earlyResult, !result.isEmpty {
                     DebugFileLogger.log("stop: early LLM result received \(result.count) chars +\(ContinuousClock.now - stopT0)")
-                    let cleaned = result.collapsingExtraSpaces
+                    let cleaned = result
                     if currentMode.id == ProcessingMode.macActionId {
                         let action = await dispatchMacAction(llmReply: cleaned)
                         await completeMacAction(
@@ -1571,7 +1572,7 @@ actor RecognitionSession {
                     let llmResult = llmOutcome.text
 
                     if let result = llmResult {
-                        let cleaned = result.collapsingExtraSpaces
+                        let cleaned = result
                         if currentMode.id == ProcessingMode.macActionId {
                             let action = await dispatchMacAction(llmReply: cleaned)
                             await completeMacAction(
@@ -1633,8 +1634,7 @@ actor RecognitionSession {
                 }
             }
 
-            finalText = finalText.removingCJKLatinSpaces
-            finalText = finalText.strippingTrailingPunctuation
+            finalText = TextOutputFormatter.format(finalText)
 
             state = .injecting
             let defaults = UserDefaults.standard
@@ -1798,7 +1798,8 @@ actor RecognitionSession {
         let provider = activeProvider
         let config = currentConfig
         let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
-        let partialText = normalizedRecoveryText(currentTranscript.displayText)
+        let rawPartialText = currentTranscript.displayText
+        let partialText = normalizedRecoveryText(rawPartialText)
         let asrModel = currentASRModelLabel(for: provider)
 
         DebugFileLogger.log("recovery started trigger=\(trigger) partial=\(partialText.count) chars")
@@ -1806,6 +1807,7 @@ actor RecognitionSession {
         recoveryInterruptPromptShown = false
         recoveryRecordId = UUID().uuidString
         recoveryCreatedAt = Date()
+        recoveryRawPartialText = rawPartialText
         recoveryPartialText = partialText
         recoveryDuration = duration
         recoveryModeName = currentMode == .direct ? nil : currentMode.name
@@ -1832,9 +1834,9 @@ actor RecognitionSession {
         uploadFailureFlag = nil
         lastStreamingError = nil
 
-        if !partialText.isEmpty {
-            await saveRecoveryHistory(status: "stream_partial_saved", finalText: partialText)
-            injectRecoveryPartial(partialText)
+        if !recoveryPartialText.isEmpty {
+            await saveRecoveryHistory(status: "stream_partial_saved", finalText: recoveryPartialText)
+            injectRecoveryPartial(recoveryPartialText)
         }
 
         onASREvent?(.recoveryStarted(
@@ -1921,9 +1923,7 @@ actor RecognitionSession {
     }
 
     private func normalizedRecoveryText(_ text: String) -> String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines)
-            .removingCJKLatinSpaces
-            .strippingTrailingPunctuation
+        TextOutputFormatter.format(text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private func injectRecoveryPartial(_ text: String) {
@@ -1941,7 +1941,7 @@ actor RecognitionSession {
             id: recordId,
             createdAt: recoveryCreatedAt ?? Date(),
             durationSeconds: recoveryDuration,
-            rawText: recoveryPartialText,
+            rawText: recoveryRawPartialText,
             processingMode: recoveryModeName,
             processedText: nil,
             finalText: finalText,
@@ -1958,6 +1958,7 @@ actor RecognitionSession {
         recoveryInterruptPromptShown = false
         recoveryRecordId = nil
         recoveryCreatedAt = nil
+        recoveryRawPartialText = ""
         recoveryPartialText = ""
         recoveryDuration = 0
         recoveryModeName = nil
@@ -2467,7 +2468,7 @@ actor RecognitionSession {
             throw TranslationError.llmUnavailable
         }
 
-        let cleanedRetry = retryResult.collapsingExtraSpaces
+        let cleanedRetry = retryResult
         let retryDecision = TranslationOutputValidator.production.validate(
             cleanedRetry,
             target: context.target
@@ -2931,72 +2932,4 @@ actor RecognitionSession {
         SystemVolumeManager.restore()
     }
 
-}
-
-// MARK: - String helpers
-
-// `internal` (not `private`) so the text-normalization rules can be unit-tested
-// via `@testable import Type4Me` (see RecognitionSessionTests).
-extension String {
-    /// Collapse runs of 2+ spaces into a single space.
-    /// LLMs sometimes insert extra spaces between CJK and Latin text.
-    var collapsingExtraSpaces: String {
-        replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression)
-    }
-
-    /// Remove spurious spaces that hug a CJK character, while preserving the
-    /// space between a CJK character and an adjacent Latin letter or digit
-    /// (Pangu spacing, e.g. "最新的 prompt 提交" stays intact — see issue #186).
-    ///
-    /// Chinese text uses no inter-word spaces, so a space between two CJK
-    /// characters — or between a CJK character and punctuation — is noise from
-    /// ASR token boundaries or LLM formatting and is removed (中↔中, 中↔符,
-    /// 符↔中). A space between a CJK character and an ASCII letter/digit is
-    /// intentional and is kept (中↔英, 英↔中, 中↔数). Pure English
-    /// "hello world" is untouched.
-    var removingCJKLatinSpaces: String {
-        let cjk = "[\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF]"
-        let preserveCJKLatinSpacing = UserDefaults.standard.object(forKey: "tf_preserveCJKLatinSpacing") as? Bool ?? true
-        guard preserveCJKLatinSpacing else {
-            var s = self
-            s = s.replacingOccurrences(of: "(?<=\(cjk)) +(?=\\S)", with: "", options: .regularExpression)
-            s = s.replacingOccurrences(of: "(?<=\\S) +(?=\(cjk))", with: "", options: .regularExpression)
-            return s
-        }
-        // A neighbour that should hug the CJK character with no space: anything
-        // that is neither whitespace nor an ASCII letter/digit (i.e. another CJK
-        // char, punctuation, or a symbol). Latin letters/digits are excluded so
-        // Pangu spacing is preserved.
-        let glue = "[^\\sA-Za-z0-9]"
-        var s = self
-        // Space after CJK, before a non-letter/digit: "你 好" / "你 ，" → "你好" / "你，"
-        // ("最新的 prompt" keeps its space because 'p' is a letter.)
-        s = s.replacingOccurrences(of: "(?<=\(cjk)) +(?=\(glue))", with: "", options: .regularExpression)
-        // Space before CJK, after a non-letter/digit: "， 你" → "，你"
-        // ("Max 你" / "3 个" keep their space because 'x' / '3' are letter/digit.)
-        s = s.replacingOccurrences(of: "(?<=\(glue)) +(?=\(cjk))", with: "", options: .regularExpression)
-        return s
-    }
-
-    /// Strip trailing punctuation based on user preference (tf_stripTrailingPunctuation).
-    var strippingTrailingPunctuation: String {
-        let mode = UserDefaults.standard.string(forKey: "tf_stripTrailingPunctuation") ?? "off"
-        guard mode != "off", !isEmpty else { return self }
-        var s = self
-        if mode == "period" {
-            // Remove trailing periods: 。.
-            while s.hasSuffix("。") || s.hasSuffix(".") {
-                s.removeLast()
-            }
-        } else if mode == "all" {
-            // Remove trailing punctuation (CJK + ASCII)
-            let cjkPunc = "\u{3002}\u{FF0C}\u{FF01}\u{FF1F}\u{FF1B}\u{FF1A}\u{3001}\u{2026}\u{2014}\u{FF5E}\u{00B7}\u{300C}\u{300D}\u{300E}\u{300F}\u{3010}\u{3011}\u{FF08}\u{FF09}\u{300A}\u{300B}\u{201C}\u{201D}\u{2018}\u{2019}"
-            let trailing = CharacterSet.punctuationCharacters
-                .union(CharacterSet(charactersIn: cjkPunc))
-            while let last = s.unicodeScalars.last, trailing.contains(last) {
-                s.unicodeScalars.removeLast()
-            }
-        }
-        return s
-    }
 }

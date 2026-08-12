@@ -22,7 +22,8 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     @AppStorage("tf_showDockIcon") private var showDockIcon = true
     @AppStorage("tf_bypassProxy") private var bypassProxy = "off"
     @AppStorage("tf_stripTrailingPunctuation") private var stripTrailingPunctuation = "off"
-    @AppStorage("tf_preserveCJKLatinSpacing") private var preserveCJKLatinSpacing = true
+    @AppStorage(CJKSpacingMode.storageKey) private var cjkSpacingMode = CJKSpacingMode.defaultValue
+    @AppStorage(CornerQuotePreference.storageKey) private var useCornerQuotes = CornerQuotePreference.defaultValue
     @AppStorage(LiveTranscriptDisplayPreference.storageKey) private var showLiveTranscript = LiveTranscriptDisplayPreference.defaultValue
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
     @AppStorage("tf_micKeepAlive") private var micKeepAlive = false
@@ -87,7 +88,9 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
                 SettingsDivider()
                 stripPunctuationRow
                 SettingsDivider()
-                cjkLatinSpacingRow
+                panguSpacingRow
+                SettingsDivider()
+                cornerQuotesRow
             }
 
             Spacer().frame(height: 16)
@@ -299,10 +302,30 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
         }
     }
 
-    private var cjkLatinSpacingRow: some View {
+    private var panguSpacingRow: some View {
+        settingsOptionRow(
+            L("盘古之白", "Pangu Spacing"),
+            subtitle: L(
+                "自动在中文与英文、数字和半角符号之间添加空格",
+                "Automatically add spaces between CJK text and half-width letters, numbers, and symbols"
+            )
+        ) {
+            settingsDropdown(
+                selection: $cjkSpacingMode,
+                options: [
+                    (CJKSpacingMode.pangu.rawValue, L("开启", "On")),
+                    (CJKSpacingMode.off.rawValue, L("关闭", "Off")),
+                    (CJKSpacingMode.remove.rawValue, L("移除空格", "Remove Spaces")),
+                ]
+            )
+        }
+    }
+
+    private var cornerQuotesRow: some View {
         settingsToggleRow(
-            L("保留中英文空格", "Keep CJK-Latin Spacing"),
-            isOn: $preserveCJKLatinSpacing
+            L("使用直角引号「」代替引号“”", "Use Corner Quotes 「」 Instead of Curly Quotes “”"),
+            subtitle: L("同时使用『』代替‘’", "Also use 『』 instead of ‘’"),
+            isOn: $useCornerQuotes
         )
     }
 

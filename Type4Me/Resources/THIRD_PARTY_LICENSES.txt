@@ -59,4 +59,13 @@ SHA-256: 479cf8cc37e78bc908ae330d9153375547d4ff7f7d03a1ac4d4908d3677ff664
 
 ---
 
+pangu.js
+Copyright (c) 2013 Vinta
+License: MIT
+Source: https://github.com/vinta/pangu.js
+Version: 9.1.0
+Pinned commit: 5071904474c3a3d71610d572be618744459ffa26
+
+---
+
 Full license texts are available at the respective source repositories.

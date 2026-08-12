@@ -130,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotwordStorage.migrateIfNeeded()
         SnippetStorage.migrateIfNeeded()
         AudioInputDevicePreferenceStore.migrateIfNeeded()
+        CJKSpacingMode.migrateIfNeeded()
 
         // Sync hotwords to Volcengine cloud table (async, non-blocking)
         VolcHotwordSyncManager.syncIfNeeded()
