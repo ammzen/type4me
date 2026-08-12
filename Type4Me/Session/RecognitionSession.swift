@@ -439,7 +439,7 @@ actor RecognitionSession {
         }
 
         await MainActor.run {
-            CorrectionLearningCoordinator.shared.cancelObservation()
+            CorrectionLearningCoordinator.shared.finalizeBeforeNextRecording()
         }
 
         stoppedByMaxDuration = false

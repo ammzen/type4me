@@ -45,6 +45,9 @@ struct ExpressionProfileDocument: Codable, Equatable, Sendable {
     var global = ScopeExpressionProfile()
     var categories: [String: ScopeExpressionProfile] = [:]
     var applications: [String: ScopeExpressionProfile] = [:]
+    /// Persisted rebuild watermark. Historical observations at or before this
+    /// instant must never repopulate a profile the user explicitly cleared.
+    var expressionLearningResetAt: Date?
 }
 
 struct ExpressionLearningThresholds: Equatable, Sendable {
@@ -194,8 +197,10 @@ actor ExpressionProfileStore {
     }
 
     func record(_ observation: ExpressionObservation) throws {
-        guard let sample = ExpressionFeatureExtractor.extract(observation) else { return }
         var document = loadDocument()
+        guard document.expressionLearningResetAt.map({ observation.createdAt > $0 }) ?? true,
+              let sample = ExpressionFeatureExtractor.extract(observation)
+        else { return }
         update(&document.global, sample: sample, at: observation.createdAt)
         update(&document.categories[observation.appCategory.rawValue, default: ScopeExpressionProfile()], sample: sample, at: observation.createdAt)
         if let bundleID = normalizedBundleID(observation.appBundleIdentifier) {
@@ -235,11 +240,49 @@ actor ExpressionProfileStore {
         )
     }
 
-    func clear() throws {
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            try FileManager.default.removeItem(at: fileURL)
+    func clear(at date: Date = Date()) throws {
+        var empty = ExpressionProfileDocument()
+        empty.expressionLearningResetAt = date
+        try persist(empty)
+        cached = empty
+    }
+
+    func rebuild(from records: [HistoryRecord]) throws {
+        let previous = loadDocument()
+        var rebuilt = ExpressionProfileDocument()
+        rebuilt.expressionLearningResetAt = previous.expressionLearningResetAt
+        for record in records {
+            guard let edited = record.userEditedText,
+                  record.userEditVersion == UserEditObservationFormat.currentVersion,
+                  record.userEditStatus == .edited || record.userEditStatus == .clearedAfterEdit,
+                  rebuilt.expressionLearningResetAt.map({ record.createdAt > $0 }) ?? true
+            else { continue }
+            let classification = UserEditClassifier.classify(
+                original: record.finalText,
+                edited: edited
+            )
+            guard classification == .expressionEdit || classification == .mixedEdit else {
+                continue
+            }
+            let observation = ExpressionObservation(
+                sessionID: record.id,
+                createdAt: record.userEditObservedAt ?? record.createdAt,
+                appBundleIdentifier: nil,
+                appCategory: .other,
+                injectedText: record.finalText,
+                finalObservedText: edited,
+                correctionCandidateRange: nil
+            )
+            guard let sample = ExpressionFeatureExtractor.extract(observation) else { continue }
+            update(&rebuilt.global, sample: sample, at: observation.createdAt)
+            update(
+                &rebuilt.categories[ApplicationCategory.other.rawValue, default: ScopeExpressionProfile()],
+                sample: sample,
+                at: observation.createdAt
+            )
         }
-        cached = ExpressionProfileDocument()
+        try persist(rebuilt)
+        cached = rebuilt
     }
 
     func documentForTesting() -> ExpressionProfileDocument { loadDocument() }

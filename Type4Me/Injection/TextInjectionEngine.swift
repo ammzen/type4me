@@ -11,6 +11,8 @@ final class TextInjectionEngine: @unchecked Sendable {
         let role: String?
         let subrole: String?
         let value: String?
+        let placeholder: String?
+        let accessibilityDescription: String?
         let selectedRange: NSRange?
         let isEditable: Bool
         /// true when AX successfully found a focused UI element; false when
@@ -225,6 +227,8 @@ final class TextInjectionEngine: @unchecked Sendable {
                 role: nil,
                 subrole: nil,
                 value: nil,
+                placeholder: nil,
+                accessibilityDescription: nil,
                 selectedRange: nil,
                 isEditable: false,
                 hasFocusedElement: false
@@ -264,6 +268,8 @@ final class TextInjectionEngine: @unchecked Sendable {
                 role: nil,
                 subrole: nil,
                 value: nil,
+                placeholder: nil,
+                accessibilityDescription: nil,
                 selectedRange: nil,
                 isEditable: false,
                 hasFocusedElement: false
@@ -279,6 +285,8 @@ final class TextInjectionEngine: @unchecked Sendable {
         let role = copyStringAttribute(kAXRoleAttribute as CFString, from: element)
         let subrole = copyStringAttribute(kAXSubroleAttribute as CFString, from: element)
         let value = copyStringAttribute(kAXValueAttribute as CFString, from: element)
+        let placeholder = copyStringAttribute(kAXPlaceholderValueAttribute as CFString, from: element)
+        let accessibilityDescription = copyStringAttribute(kAXDescriptionAttribute as CFString, from: element)
         let selectedRange = copyRangeAttribute(kAXSelectedTextRangeAttribute as CFString, from: element)
         var processIdentifier: pid_t = 0
         let pidStatus = AXUIElementGetPid(element, &processIdentifier)
@@ -299,6 +307,8 @@ final class TextInjectionEngine: @unchecked Sendable {
             role: role,
             subrole: subrole,
             value: value,
+            placeholder: placeholder,
+            accessibilityDescription: accessibilityDescription,
             selectedRange: selectedRange,
             isEditable: isEditable,
             hasFocusedElement: true
@@ -422,6 +432,12 @@ final class TextInjectionEngine: @unchecked Sendable {
             injectedRange: insertedRange,
             beforeSelectedRange: before.selectedRange,
             afterSelectedRange: after.selectedRange,
+            placeholderCandidates: [
+                before.placeholder,
+                after.placeholder,
+                before.accessibilityDescription,
+                after.accessibilityDescription,
+            ].compactMap { $0 },
             injectedText: pastedText,
             sourceRecordID: sourceRecordID,
             modeID: modeID

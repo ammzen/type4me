@@ -82,13 +82,29 @@ final class ExpressionProfileStoreTests: XCTestCase {
         let reloaded = await reloadedStore.documentForTesting()
         XCTAssertEqual(reloaded.applications["com.example.editor"]?.sampleCount, 3)
 
-        try await store.clear()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: profileURL.path))
+        let resetAt = Date(timeIntervalSince1970: 1_800_000_000)
+        try await store.clear(at: resetAt)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: profileURL.path))
+        let clearedDocument = await store.documentForTesting()
+        XCTAssertEqual(clearedDocument.expressionLearningResetAt, resetAt)
+        XCTAssertEqual(clearedDocument.global.sampleCount, 0)
         let cleared = await store.effectiveProfile(
             bundleIdentifier: "com.example.editor",
             category: .document
         )
         XCTAssertNil(cleared)
+
+        try await store.record(ExpressionObservation(
+            sessionID: "old-after-reset",
+            createdAt: resetAt.addingTimeInterval(-1),
+            appBundleIdentifier: "com.example.editor",
+            appCategory: .document,
+            injectedText: "原文",
+            finalObservedText: "修改后的文字。",
+            correctionCandidateRange: nil
+        ))
+        let afterOldRecord = await store.documentForTesting()
+        XCTAssertEqual(afterOldRecord.global.sampleCount, 0)
     }
 
     func testRejectsSensitiveOrFactChangingEdits() {
@@ -102,5 +118,70 @@ final class ExpressionProfileStoreTests: XCTestCase {
             correctionCandidateRange: nil
         )
         XCTAssertNil(ExpressionFeatureExtractor.extract(sensitive))
+    }
+
+    func testOfflineRebuildHonorsResetWatermarkAndSafeClassifications() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ExpressionProfileStore(fileURL: directory.appendingPathComponent("profile.json"))
+        let resetAt = Date(timeIntervalSince1970: 1_800_000_000)
+        try await store.clear(at: resetAt)
+        let old = historyRecord(
+            id: "old",
+            date: resetAt.addingTimeInterval(-1),
+            final: "这是第一句话这是第二句话内容比较长",
+            edited: "这是第一句话。\n这是第二句话，内容比较长。"
+        )
+        let safe = historyRecord(
+            id: "safe",
+            date: resetAt.addingTimeInterval(1),
+            final: "这是第一句话这是第二句话内容比较长",
+            edited: "这是第一句话。\n这是第二句话，内容比较长。"
+        )
+        let factual = historyRecord(
+            id: "fact",
+            date: resetAt.addingTimeInterval(2),
+            final: "版本 3",
+            edited: "版本 4"
+        )
+        let legacy = historyRecord(
+            id: "legacy-v1",
+            date: resetAt.addingTimeInterval(3),
+            final: "这是第一句话这是第二句话内容比较长",
+            edited: "这是第一句话。\n这是第二句话，内容比较长。",
+            version: 1
+        )
+
+        try await store.rebuild(from: [old, safe, factual, legacy])
+
+        let document = await store.documentForTesting()
+        XCTAssertEqual(document.expressionLearningResetAt, resetAt)
+        XCTAssertEqual(document.global.sampleCount, 1)
+    }
+
+    private func historyRecord(
+        id: String,
+        date: Date,
+        final: String,
+        edited: String,
+        version: Int = UserEditObservationFormat.currentVersion
+    ) -> HistoryRecord {
+        HistoryRecord(
+            id: id,
+            createdAt: date,
+            durationSeconds: 1,
+            rawText: final,
+            processingMode: "智能感知",
+            processedText: final,
+            finalText: final,
+            status: "completed",
+            characterCount: final.count,
+            asrProvider: nil,
+            userEditedText: edited,
+            userEditStatus: .edited,
+            userEditObservedAt: date,
+            userEditVersion: version
+        )
     }
 }

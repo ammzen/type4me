@@ -117,6 +117,14 @@ cp "$BINARY" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE"
 cp "$PROJECT_DIR/Type4Me/Resources/${APP_ICON_NAME}.icns" "$APP_PATH/Contents/Resources/${APP_ICON_NAME}.icns" 2>/dev/null || true
 mkdir -p "$APP_PATH/Contents/Resources/Assets"
 cp "$PROJECT_DIR/Type4Me/Resources/Assets/"*.svg "$APP_PATH/Contents/Resources/Assets/"
+if [ -f "$PROJECT_DIR/CppJiebaBridge/marker" ]; then
+    mkdir -p "$APP_PATH/Contents/Resources/Jieba"
+    cp "$PROJECT_DIR/Type4Me/Resources/Jieba/dict.txt.small" "$APP_PATH/Contents/Resources/Jieba/"
+    cp "$PROJECT_DIR/Type4Me/Resources/Jieba/hmm_model.utf8" "$APP_PATH/Contents/Resources/Jieba/"
+    cp "$PROJECT_DIR/Type4Me/Resources/Jieba/user.dict.utf8" "$APP_PATH/Contents/Resources/Jieba/"
+    cp "$PROJECT_DIR/CppJiebaBridge/CPPJIEBA_LICENSE" "$APP_PATH/Contents/Resources/Jieba/"
+    cp "$PROJECT_DIR/CppJiebaBridge/JIEBA_LICENSE" "$APP_PATH/Contents/Resources/Jieba/"
+fi
 
 cat >"$INFO_PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

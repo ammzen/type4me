@@ -39,7 +39,11 @@ actor HistoryStore {
                 llm_provider TEXT,
                 llm_model TEXT,
                 asr_duration_seconds REAL,
-                llm_duration_seconds REAL
+                llm_duration_seconds REAL,
+                user_edited_text TEXT,
+                user_edit_status TEXT,
+                user_edit_observed_at TEXT,
+                user_edit_version INTEGER
             );
             """
             sqlite3_exec(db, sql, nil, nil, nil)
@@ -72,6 +76,13 @@ actor HistoryStore {
             let alterLLMDurationSQL = "ALTER TABLE recognition_history ADD COLUMN llm_duration_seconds REAL;"
             sqlite3_exec(db, alterLLMDurationSQL, nil, nil, nil)
 
+            // User-edit evidence fields are appended in the same order for new
+            // and migrated databases because row decoding uses stable indexes.
+            sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN user_edited_text TEXT;", nil, nil, nil)
+            sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN user_edit_status TEXT;", nil, nil, nil)
+            sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN user_edit_observed_at TEXT;", nil, nil, nil)
+            sqlite3_exec(db, "ALTER TABLE recognition_history ADD COLUMN user_edit_version INTEGER;", nil, nil, nil)
+
             // Index for ORDER BY created_at DESC pagination
             sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_history_created_at ON recognition_history(created_at DESC);", nil, nil, nil)
         }
@@ -82,8 +93,8 @@ actor HistoryStore {
     func insert(_ record: HistoryRecord) {
         let sql = """
         INSERT OR REPLACE INTO recognition_history
-        (id, created_at, duration_seconds, raw_text, processing_mode, processed_text, final_text, status, character_count, asr_provider, asr_model, intelli_sense_trace, llm_provider, llm_model, asr_duration_seconds, llm_duration_seconds)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        (id, created_at, duration_seconds, raw_text, processing_mode, processed_text, final_text, status, character_count, asr_provider, asr_model, intelli_sense_trace, llm_provider, llm_model, asr_duration_seconds, llm_duration_seconds, user_edited_text, user_edit_status, user_edit_observed_at, user_edit_version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -110,6 +121,14 @@ actor HistoryStore {
         bindOptional(stmt, 14, record.llmModel)
         bindOptionalDouble(stmt, 15, record.asrDurationSeconds)
         bindOptionalDouble(stmt, 16, record.llmDurationSeconds)
+        bindOptional(stmt, 17, record.userEditedText)
+        bindOptional(stmt, 18, record.userEditStatus?.rawValue)
+        bindOptional(stmt, 19, record.userEditObservedAt.map(iso.string(from:)))
+        if let version = record.userEditVersion {
+            sqlite3_bind_int(stmt, 20, Int32(version))
+        } else {
+            sqlite3_bind_null(stmt, 20)
+        }
         if sqlite3_step(stmt) == SQLITE_DONE {
             postDidChangeNotification()
         }
@@ -180,7 +199,11 @@ actor HistoryStore {
                 llmModel: optionalColumn(stmt, 13),
                 asrDurationSeconds: optionalDoubleColumn(stmt, 14),
                 llmDurationSeconds: optionalDoubleColumn(stmt, 15),
-                intelliSenseTraceJSON: optionalColumn(stmt, 11)
+                intelliSenseTraceJSON: optionalColumn(stmt, 11),
+                userEditedText: optionalColumn(stmt, 16),
+                userEditStatus: optionalColumn(stmt, 17).flatMap(UserEditObservationStatus.init(rawValue:)),
+                userEditObservedAt: optionalColumn(stmt, 18).flatMap(iso.date(from:)),
+                userEditVersion: optionalIntColumn(stmt, 19)
             ))
         }
         return records
@@ -207,6 +230,25 @@ actor HistoryStore {
             ))
         }
         return results
+    }
+
+    func fetchUserEditEvidenceRecords(
+        version: Int = UserEditObservationFormat.currentVersion
+    ) -> [HistoryRecord] {
+        let sql = """
+        SELECT * FROM recognition_history
+        WHERE user_edit_version = ?
+          AND user_edit_status IN ('edited', 'clearedAfterEdit')
+          AND user_edited_text IS NOT NULL
+          AND user_edited_text != ''
+          AND final_text != ''
+        ORDER BY user_edit_observed_at DESC, created_at DESC;
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int(statement, 1, Int32(version))
+        return readRows(statement)
     }
 
     func count(from start: Date? = nil, to end: Date? = nil) -> Int {
@@ -277,6 +319,75 @@ actor HistoryStore {
         if sqlite3_exec(db, "DELETE FROM recognition_history;", nil, nil, nil) == SQLITE_OK {
             postDidChangeNotification()
         }
+    }
+
+    @discardableResult
+    func updateUserEditObservation(
+        recordID: String,
+        text: String?,
+        status: UserEditObservationStatus,
+        observedAt: Date?,
+        version: Int = UserEditObservationFormat.currentVersion
+    ) -> Bool {
+        let selectSQL = """
+        SELECT user_edited_text, user_edit_status, user_edit_observed_at, user_edit_version
+        FROM recognition_history WHERE id = ?;
+        """
+        var selectStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, selectSQL, -1, &selectStatement, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_finalize(selectStatement) }
+        bind(selectStatement, 1, recordID)
+        guard sqlite3_step(selectStatement) == SQLITE_ROW else {
+            DebugFileLogger.log("user edit observation update skipped: missing history record")
+            return false
+        }
+
+        let iso = ISO8601DateFormatter()
+        let existingText = optionalColumn(selectStatement, 0)
+        let existingStatus = optionalColumn(selectStatement, 1)
+            .flatMap(UserEditObservationStatus.init(rawValue:))
+        let existingObservedAt = optionalColumn(selectStatement, 2).flatMap(iso.date(from:))
+        let existingVersion = optionalIntColumn(selectStatement, 3)
+
+        if let existingObservedAt, let observedAt {
+            if existingObservedAt > observedAt { return true }
+            if existingObservedAt == observedAt,
+               (existingStatus?.informationRank ?? -1) > status.informationRank {
+                return true
+            }
+        } else if existingObservedAt != nil, observedAt == nil {
+            return true
+        }
+
+        if existingText == text,
+           existingStatus == status,
+           existingObservedAt == observedAt,
+           existingVersion == version {
+            return true
+        }
+
+        let updateSQL = """
+        UPDATE recognition_history
+        SET user_edited_text = ?, user_edit_status = ?, user_edit_observed_at = ?, user_edit_version = ?
+        WHERE id = ?;
+        """
+        var updateStatement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, updateSQL, -1, &updateStatement, nil) == SQLITE_OK else {
+            return false
+        }
+        defer { sqlite3_finalize(updateStatement) }
+        bindOptional(updateStatement, 1, text)
+        bind(updateStatement, 2, status.rawValue)
+        bindOptional(updateStatement, 3, observedAt.map(iso.string(from:)))
+        sqlite3_bind_int(updateStatement, 4, Int32(version))
+        bind(updateStatement, 5, recordID)
+        guard sqlite3_step(updateStatement) == SQLITE_DONE, sqlite3_changes(db) > 0 else {
+            return false
+        }
+        postDidChangeNotification()
+        return true
     }
 
     // MARK: - Migration
@@ -449,6 +560,10 @@ actor HistoryStore {
 
     private func optionalDoubleColumn(_ stmt: OpaquePointer?, _ index: Int32) -> Double? {
         sqlite3_column_type(stmt, index) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, index)
+    }
+
+    private func optionalIntColumn(_ stmt: OpaquePointer?, _ index: Int32) -> Int? {
+        sqlite3_column_type(stmt, index) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, index))
     }
 
     private func column(_ stmt: OpaquePointer?, _ index: Int32) -> String {
