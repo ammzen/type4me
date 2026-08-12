@@ -95,6 +95,16 @@ final class IntelliSensePromptTests: XCTestCase {
         XCTAssertTrue(prompt.contains("1. 登录错误提示不清楚"))
     }
 
+    func testBasePromptDistinguishesResponseMarkersFromFillers() {
+        let prompt = IntelliSensePromptBuilder.baseTemplate
+
+        XCTAssertTrue(prompt.contains("不得按词表机械删除"))
+        XCTAssertTrue(prompt.contains("如果在表达同意、确认、理解、惊讶、转折"))
+        XCTAssertTrue(prompt.contains("输入：嗯，可以，那我们明天下午 3 点见。"))
+        XCTAssertTrue(prompt.contains("输入：OK，那就按这个版本发布。"))
+        XCTAssertTrue(prompt.contains("输入：好的，你再修改一下"))
+    }
+
     func testCompactMessagingSceneCannotSuppressExplicitMultiPointLists() {
         var settings = IntelliSenseSettings()
         settings.applicationAwarenessEnabled = true
@@ -190,6 +200,64 @@ final class IntelliSensePromptTests: XCTestCase {
 }
 
 final class IntelliSenseOutputGuardTests: XCTestCase {
+    func testAllowsAnswerLikePrefixWhenItCameFromUser() {
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "好的你再修改一下然后给我几个实际用例",
+                output: "好的，你再修改一下，然后给我几个实际用例。"
+            ),
+            .accept
+        )
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "当然可以，我们明天下午继续。",
+                output: "当然可以，我们明天下午继续。"
+            ),
+            .accept
+        )
+    }
+
+    func testStillRejectsNewAnswerFramingAddedByModel() {
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "怎么部署这个项目",
+                output: "好的，先运行构建命令"
+            ),
+            .reject(.answerOrExplanation)
+        )
+    }
+
+    func testProtectsHighConfidenceLeadingResponseMarkers() {
+        for (input, output) in [
+            ("嗯，可以，那我们明天下午 3 点见。", "可以，那我们明天下午 3 点见。"),
+            ("哦，原来是这样，那就继续。", "原来是这样，那就继续。"),
+            ("OK，那就按这个版本发布。", "那就按这个版本发布。"),
+        ] {
+            XCTAssertEqual(
+                IntelliSenseOutputGuard.evaluate(input: input, output: output),
+                .reject(.responseMarkerChanged),
+                "failed case \(input)"
+            )
+        }
+    }
+
+    func testFillerAndCorrectionMarkersRemainRemovable() {
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "嗯那个我们明天下午开会。",
+                output: "我们明天下午开会。"
+            ),
+            .accept
+        )
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "哦，不对，应该是周四上线。",
+                output: "应该是周四上线。"
+            ),
+            .accept
+        )
+    }
+
     func testAcceptsConservativePolishAndMixedEnglishToken() {
         XCTAssertEqual(
             IntelliSenseOutputGuard.evaluate(

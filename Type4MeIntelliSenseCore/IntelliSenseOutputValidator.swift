@@ -13,6 +13,7 @@ public enum IntelliSenseGuardRejection: String, Codable, Equatable, Sendable {
     case emptyOutput
     case protectedTokenChanged
     case negationChanged
+    case responseMarkerChanged
     case answerOrExplanation
     case claimedExecution
     case codeFence
@@ -89,7 +90,12 @@ public enum IntelliSenseOutputValidator {
         guard !trimmed.isEmpty else { return .reject(.emptyOutput) }
         guard !trimmed.contains("```") else { return .reject(.codeFence) }
         guard !looksLikeToolCall(trimmed) else { return .reject(.toolCall) }
-        guard !looksLikeAnswerOrExplanation(trimmed) else { return .reject(.answerOrExplanation) }
+        guard preservesLeadingResponseMarker(input: input, output: trimmed) else {
+            return .reject(.responseMarkerChanged)
+        }
+        guard !looksLikeAnswerOrExplanation(input: input, output: trimmed) else {
+            return .reject(.answerOrExplanation)
+        }
         guard !claimsExecution(input: input, output: trimmed) else { return .reject(.claimedExecution) }
 
         for token in analysis.requiredProtectedTokens
@@ -155,13 +161,63 @@ public enum IntelliSenseOutputValidator {
             && input["never", default: 0] == output["never", default: 0]
     }
 
-    private static func looksLikeAnswerOrExplanation(_ text: String) -> Bool {
+    private static func looksLikeAnswerOrExplanation(input: String, output: String) -> Bool {
+        guard let outputPrefix = leadingAnswerPrefix(in: output) else { return false }
+        return !sourceStartsWithAnswerPrefix(input, prefix: outputPrefix)
+    }
+
+    private static func sourceStartsWithAnswerPrefix(_ text: String, prefix: String) -> Bool {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalized.hasPrefix(prefix) else { return false }
+        let isASCIIEnglishPrefix = prefix.unicodeScalars.allSatisfy { $0.value < 128 }
+        guard isASCIIEnglishPrefix else { return true }
+        let boundaryIndex = normalized.index(normalized.startIndex, offsetBy: prefix.count)
+        guard boundaryIndex < normalized.endIndex else { return true }
+        let next = normalized[boundaryIndex]
+        return next.isWhitespace || "，,：:。.!！?？".contains(next)
+    }
+
+    private static func leadingAnswerPrefix(in text: String) -> String? {
         let prefixes = [
-            "答案是", "回答：", "当然可以", "好的，", "以下是", "解释如下", "建议如下",
-            "the answer is", "sure,", "here is", "here's", "i recommend",
+            "答案是", "回答", "当然可以", "好的", "以下是", "解释如下", "建议如下",
+            "the answer is", "sure", "here is", "here's", "i recommend",
         ]
-        let lower = text.lowercased()
-        return prefixes.contains { lower.hasPrefix($0.lowercased()) }
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return prefixes.first { prefix in
+            guard normalized.hasPrefix(prefix) else { return false }
+            let boundaryIndex = normalized.index(normalized.startIndex, offsetBy: prefix.count)
+            guard boundaryIndex < normalized.endIndex else { return true }
+            let next = normalized[boundaryIndex]
+            return next.isWhitespace || "，,：:。.!！?？".contains(next)
+        }
+    }
+
+    private static func preservesLeadingResponseMarker(input: String, output: String) -> Bool {
+        guard let inputMarker = leadingResponseMarker(in: input) else { return true }
+        return leadingResponseMarker(in: output) == inputMarker
+    }
+
+    private static func leadingResponseMarker(in text: String) -> String? {
+        let markers = ["当然可以", "好的", "okay", "yes", "ok", "嗯", "哦", "好"]
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = normalized.lowercased()
+        for marker in markers where lower.hasPrefix(marker) {
+            let boundaryIndex = lower.index(lower.startIndex, offsetBy: marker.count)
+            guard boundaryIndex < lower.endIndex else { return marker }
+            let next = lower[boundaryIndex]
+            guard "，,：:。.!！?？".contains(next) else { continue }
+            let remainder = lower[lower.index(after: boundaryIndex)...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let nonResponseContinuations = [
+                "那个", "呃", "啊", "就是说", "你知道吧",
+                "不对", "哦不", "改成", "换成", "应该是", "i mean", "sorry",
+            ]
+            guard !nonResponseContinuations.contains(where: remainder.hasPrefix) else {
+                continue
+            }
+            return marker
+        }
+        return nil
     }
 
     private static func claimsExecution(input: String, output: String) -> Bool {
