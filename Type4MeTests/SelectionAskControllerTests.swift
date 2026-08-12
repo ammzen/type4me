@@ -3,6 +3,36 @@ import XCTest
 
 @MainActor
 final class SelectionAskControllerTests: XCTestCase {
+    func testRecordingCoordinatorDoesNotEvaluateFollowUpPathUntilAction() {
+        var followUpChecks = 0
+        let coordinator = RecordingControlCoordinator(
+            onFollowUpAction: { _ in
+                followUpChecks += 1
+                return false
+            },
+            onStandardAction: { _ in }
+        )
+
+        XCTAssertEqual(followUpChecks, 0)
+        coordinator.perform(.finish)
+        XCTAssertEqual(followUpChecks, 1)
+    }
+
+    func testHiddenCompletedPanelBecomesReleasable() {
+        var releaseNotifications = 0
+        let controller = SelectionAskController(onBecameReleasable: {
+            releaseNotifications += 1
+        })
+        controller.begin(question: "Question", selectedText: "Context")
+
+        controller.hide()
+        XCTAssertFalse(controller.isReleasable)
+        controller.completeAnswer()
+
+        XCTAssertTrue(controller.isReleasable)
+        XCTAssertEqual(releaseNotifications, 1)
+    }
+
     func testIdleStateDoesNotRunAnswerLoadingAnimation() {
         let state = SelectionAskState()
 
@@ -181,7 +211,7 @@ final class SelectionAskControllerTests: XCTestCase {
             onCancelFollowUp: { cancelCount += 1 }
         )
         let coordinator = RecordingControlCoordinator(
-            followUpController: controller,
+            onFollowUpAction: { controller.handleActiveRecordingAction($0) },
             onStandardAction: { standardActions.append($0) }
         )
         controller.begin(question: "First question", selectedText: "Context")
@@ -209,7 +239,7 @@ final class SelectionAskControllerTests: XCTestCase {
         var standardActions: [RecordingControlAction] = []
         let controller = SelectionAskController()
         let coordinator = RecordingControlCoordinator(
-            followUpController: controller,
+            onFollowUpAction: { controller.handleActiveRecordingAction($0) },
             onStandardAction: { standardActions.append($0) }
         )
 
@@ -229,7 +259,7 @@ final class SelectionAskControllerTests: XCTestCase {
             onCancelFollowUp: { cancelCount += 1 }
         )
         let coordinator = RecordingControlCoordinator(
-            followUpController: controller,
+            onFollowUpAction: { controller.handleActiveRecordingAction($0) },
             onStandardAction: { _ in standardCount += 1 }
         )
         controller.begin(question: "First question", selectedText: "Context")

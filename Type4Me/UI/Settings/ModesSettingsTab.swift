@@ -40,6 +40,7 @@ private struct RecordingTarget: Identifiable {
 struct ModesSettingsTab: View {
 
     var showsHeader = true
+    let draftCoordinator: SettingsDraftCoordinator
 
     @Environment(AppState.self) private var appState
     @Environment(AskAnythingCoordinator.self) private var askAnythingCoordinator
@@ -284,6 +285,17 @@ struct ModesSettingsTab: View {
             Button(L("好", "OK"), role: .cancel) { askAnythingSettingsError = nil }
         } message: {
             Text(askAnythingSettingsError ?? "")
+        }
+        .onAppear {
+            draftCoordinator.register(
+                .modes,
+                isDirty: { draftDirty },
+                save: saveDraftBeforeLeaving,
+                discard: discardDraftBeforeLeaving
+            )
+        }
+        .onDisappear {
+            draftCoordinator.unregister(.modes)
         }
     }
 
@@ -858,12 +870,14 @@ struct ModesSettingsTab: View {
         persistModes()
     }
 
-    private func persistModes() {
+    @discardableResult
+    private func persistModes() -> Bool {
         do {
             try ModeStorage().save(modes)
         } catch {
             NSLog("[Type4Me] Failed to persist mode order/settings: %@", error.localizedDescription)
             DebugFileLogger.log("failed to persist mode order/settings: \(error)")
+            return false
         }
         appState.availableModes = modes
         NotificationCenter.default.post(name: .modesDidChange, object: nil)
@@ -872,6 +886,29 @@ struct ModesSettingsTab: View {
         } else if let fallback = modes.first {
             appState.currentMode = fallback
         }
+        return true
+    }
+
+    private func saveDraftBeforeLeaving() -> Bool {
+        guard draftDirty else { return true }
+        guard let draftMode,
+              let index = modes.firstIndex(where: { $0.id == draftMode.id })
+        else { return false }
+        let previous = modes[index]
+        modes[index] = draftMode
+        guard persistModes() else {
+            modes[index] = previous
+            return false
+        }
+        self.draftMode = nil
+        draftDirty = false
+        return true
+    }
+
+    private func discardDraftBeforeLeaving() {
+        draftMode = nil
+        draftDirty = false
+        pendingSelection = nil
     }
 
     private func deleteMode(_ id: UUID) {

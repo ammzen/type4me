@@ -48,21 +48,19 @@ struct Type4MeApp: App {
 
 @MainActor
 final class RecordingControlCoordinator {
-    private weak var followUpController: SelectionAskController?
+    private let onFollowUpAction: (RecordingControlAction) -> Bool
     private let onStandardAction: (RecordingControlAction) -> Void
 
     init(
-        followUpController: SelectionAskController,
+        onFollowUpAction: @escaping (RecordingControlAction) -> Bool,
         onStandardAction: @escaping (RecordingControlAction) -> Void
     ) {
-        self.followUpController = followUpController
+        self.onFollowUpAction = onFollowUpAction
         self.onStandardAction = onStandardAction
     }
 
     func perform(_ action: RecordingControlAction) {
-        if followUpController?.handleActiveRecordingAction(action) == true {
-            return
-        }
+        if onFollowUpAction(action) { return }
         onStandardAction(action)
     }
 }
@@ -103,21 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var floatingBarController: FloatingBarController?
     let askAnythingStore = AskAnythingStore()
     lazy var askAnythingCoordinator = AskAnythingCoordinator(store: askAnythingStore)
-    private lazy var selectionAskController = SelectionAskController(
-        coordinator: askAnythingCoordinator
-    ) { [weak self] requestContext in
-        self?.startSelectionAskFollowUp(requestContext: requestContext) ?? false
-    } onStartNewQuestion: { [weak self] requestContext in
-        self?.startSelectionAskFollowUp(requestContext: requestContext) ?? false
-    } onFinishFollowUp: { [weak self] in
-        self?.finishSelectionAskFollowUp()
-    } onCancelFollowUp: { [weak self] in
-        self?.cancelSelectionAskFollowUp()
-    } onOpenInType4Me: { [weak self] sessionID in
-        self?.presentAskAnything(sessionID: sessionID)
-    }
+    private var selectionAskController: SelectionAskController?
     private lazy var recordingControlCoordinator = RecordingControlCoordinator(
-        followUpController: selectionAskController
+        onFollowUpAction: { [weak self] action in
+            self?.selectionAskController?.handleActiveRecordingAction(action) == true
+        }
     ) { [weak self] action in
         self?.performStandardRecordingAction(action)
     }
@@ -217,7 +205,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     case .transcript(let transcript):
                         appState.setLiveTranscript(transcript)
                     case .completed:
-                        self.selectionAskController.recordingDidEnd(.finish)
+                        self.selectionAskController?.recordingDidEnd(.finish)
                         appState.stopRecording()
                         if await session.stoppedByMaxDuration {
                             appState.processingLabelOverride = L("已达最大时长", "Max duration reached")
@@ -266,7 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         let contextWasTruncated
                     ):
                         appState.cancel()
-                        self.selectionAskController.begin(
+                        self.ensureSelectionAskController().begin(
                             requestID: requestID,
                             question: question,
                             selectedText: selectedText,
@@ -274,18 +262,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         )
                         self.hotkeyManager.isProcessing = true
                     case .selectionAskAnswerDelta(let requestID, let delta):
-                        self.selectionAskController.appendAnswerDelta(requestID: requestID, delta: delta)
+                        self.selectionAskController?.appendAnswerDelta(requestID: requestID, delta: delta)
                     case .selectionAskAnswerCompleted(let requestID):
-                        self.selectionAskController.completeAnswer(requestID: requestID)
+                        self.selectionAskController?.completeAnswer(requestID: requestID)
                         self.hotkeyManager.isProcessing = false
                         self.safeResetHotkeyState()
                     case .selectionAskAnswerFailed(let requestID, let message):
-                        self.selectionAskController.showError(requestID: requestID, message: message)
+                        self.selectionAskController?.showError(requestID: requestID, message: message)
                         self.hotkeyManager.isProcessing = false
                         self.safeResetHotkeyState()
                     case .error(let error):
                         appState.showError(self.userFacingMessage(for: error))
-                        self.selectionAskController.recordingDidEnd(.cancel)
+                        self.selectionAskController?.recordingDidEnd(.cancel)
                         self.hotkeyManager.isProcessing = false
                         self.safeResetHotkeyState()
                     }
@@ -414,7 +402,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .hotkeyBindings
             .map { HotkeyRecorderView.keyDisplayName(keyCode: $0.keyCode, modifiers: $0.modifiers) }
             .joined(separator: " / ") ?? ""
-        selectionAskController.updateFollowUpShortcutHint(hint)
+        askAnythingCoordinator.updateFollowUpShortcutHint(hint)
+    }
+
+    @discardableResult
+    private func ensureSelectionAskController() -> SelectionAskController {
+        if let selectionAskController { return selectionAskController }
+        let controller = SelectionAskController(
+            coordinator: askAnythingCoordinator,
+            onStartFollowUp: { [weak self] requestContext in
+                self?.startSelectionAskFollowUp(requestContext: requestContext) ?? false
+            },
+            onStartNewQuestion: { [weak self] requestContext in
+                self?.startSelectionAskFollowUp(requestContext: requestContext) ?? false
+            },
+            onFinishFollowUp: { [weak self] in
+                self?.finishSelectionAskFollowUp()
+            },
+            onCancelFollowUp: { [weak self] in
+                self?.cancelSelectionAskFollowUp()
+            },
+            onOpenInType4Me: { [weak self] sessionID in
+                self?.presentAskAnything(sessionID: sessionID)
+            },
+            onBecameReleasable: { [weak self] in
+                DispatchQueue.main.async { [weak self] in
+                    self?.releaseSelectionAskControllerIfPossible()
+                }
+            }
+        )
+        selectionAskController = controller
+        return controller
+    }
+
+    private func releaseSelectionAskControllerIfPossible() {
+        guard selectionAskController?.isReleasable == true else { return }
+        selectionAskController?.releasePanelResources()
+        selectionAskController = nil
     }
 
     private func registerHotkeys(for provider: ASRProvider) {
@@ -426,12 +450,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
 
                 if capturedMode.executionKind == .selectionAsk,
-                   MainActor.assumeIsolated({ self.selectionAskController.isVisible }) {
+                   MainActor.assumeIsolated({ self.selectionAskController?.isVisible == true }) {
                     let wasRecording = MainActor.assumeIsolated {
-                        self.selectionAskController.isRecordingFollowUp
+                        self.selectionAskController?.isRecordingFollowUp == true
                     }
                     let handled = MainActor.assumeIsolated {
-                        self.selectionAskController.performPrimaryFollowUpAction()
+                        self.selectionAskController?.performPrimaryFollowUpAction() == true
                     }
                     if !handled || wasRecording {
                         MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
@@ -530,7 +554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if capturedMode.executionKind == .selectionAsk,
                    MainActor.assumeIsolated({ self.askAnythingCoordinator.isRecordingFollowUp }) {
                     _ = MainActor.assumeIsolated {
-                        self.selectionAskController.handleActiveRecordingAction(.finish)
+                        self.selectionAskController?.handleActiveRecordingAction(.finish)
                     }
                     return
                 }
@@ -624,7 +648,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.askAnythingCoordinator.isRecordingFollowUp
             }) {
                 return MainActor.assumeIsolated {
-                    self.selectionAskController.handleActiveRecordingAction(.cancel)
+                    self.selectionAskController?.handleActiveRecordingAction(.cancel) == true
                 }
             }
             let phase = appState.barPhase
@@ -686,7 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let shouldStart = await MainActor.run {
                 self.selectionAskFollowUpStartGate.allowsStart(
                     token: generation,
-                    isFollowUpActive: self.selectionAskController.isRecordingFollowUp,
+                    isFollowUpActive: self.askAnythingCoordinator.isRecordingFollowUp,
                     phase: self.appState.barPhase
                 )
             }
@@ -994,7 +1018,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         navigationModel.selectedTab = .askAnything
         navigationModel.pendingAskAnythingSessionID = sessionID
         askAnythingCoordinator.presentInMainWindow()
-        selectionAskController.hide()
+        selectionAskController?.hide()
         presentSettings()
     }
 

@@ -199,6 +199,7 @@ final class SelectionAskController {
     private let onFinishFollowUp: () -> Void
     private let onCancelFollowUp: () -> Void
     private let onOpenInType4Me: (UUID) -> Void
+    private let onBecameReleasable: () -> Void
     private var currentRequestID: UUID?
 
     init(
@@ -207,7 +208,8 @@ final class SelectionAskController {
         onStartNewQuestion: @escaping (SelectionAskRequestContext) -> Bool = { _ in false },
         onFinishFollowUp: @escaping () -> Void = {},
         onCancelFollowUp: @escaping () -> Void = {},
-        onOpenInType4Me: @escaping (UUID) -> Void = { _ in }
+        onOpenInType4Me: @escaping (UUID) -> Void = { _ in },
+        onBecameReleasable: @escaping () -> Void = {}
     ) {
         self.coordinator = coordinator ?? AskAnythingCoordinator(
             store: AskAnythingStore(path: ":memory:"),
@@ -217,6 +219,7 @@ final class SelectionAskController {
         self.onFinishFollowUp = onFinishFollowUp
         self.onCancelFollowUp = onCancelFollowUp
         self.onOpenInType4Me = onOpenInType4Me
+        self.onBecameReleasable = onBecameReleasable
         self.coordinator.configureRuntime(
             onStartFollowUp: onStartFollowUp,
             onStartNewQuestion: onStartNewQuestion,
@@ -246,6 +249,9 @@ final class SelectionAskController {
     }
 
     var isVisible: Bool { panel.isVisible }
+    var isReleasable: Bool {
+        !panel.isVisible && !state.isRecordingFollowUp && currentRequestID == nil
+    }
 
     var isRecordingFollowUp: Bool { state.isRecordingFollowUp }
     var turns: [SelectionAskState.Turn] { state.turns }
@@ -295,12 +301,14 @@ final class SelectionAskController {
         guard let currentRequestID else { return }
         coordinator.completeAnswer(requestID: currentRequestID)
         self.currentRequestID = nil
+        notifyIfReleasable()
     }
 
     func completeAnswer(requestID: UUID) {
         guard currentRequestID == requestID else { return }
         coordinator.completeAnswer(requestID: requestID)
         currentRequestID = nil
+        notifyIfReleasable()
     }
 
     func appendAnswerDelta(requestID: UUID, delta: String) {
@@ -312,6 +320,7 @@ final class SelectionAskController {
         guard currentRequestID == requestID else { return }
         coordinator.failAnswer(requestID: requestID, message: message)
         currentRequestID = nil
+        notifyIfReleasable()
     }
 
     func showTransientError(_ message: String) {
@@ -327,6 +336,7 @@ final class SelectionAskController {
         if let currentRequestID {
             coordinator.failAnswer(requestID: currentRequestID, message: message)
             self.currentRequestID = nil
+            notifyIfReleasable()
         } else {
             showTransientError(message)
         }
@@ -334,15 +344,23 @@ final class SelectionAskController {
 
     func recordingDidEnd(_ action: RecordingControlAction) {
         coordinator.recordingDidEnd(action)
+        notifyIfReleasable()
     }
 
     func hide() {
         panel.orderOut(nil)
+        notifyIfReleasable()
     }
 
     func close() {
         _ = handleActiveRecordingAction(.cancel)
         hide()
+    }
+
+    func releasePanelResources() {
+        panel.orderOut(nil)
+        panel.contentView = nil
+        panel.onEscape = nil
     }
 
     private func show() {
@@ -412,5 +430,10 @@ final class SelectionAskController {
         let x = visible.midX - frame.width / 2
         let y = visible.midY - frame.height / 2
         panel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    private func notifyIfReleasable() {
+        guard isReleasable else { return }
+        onBecameReleasable()
     }
 }
