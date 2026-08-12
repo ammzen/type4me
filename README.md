@@ -130,6 +130,8 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 
 欢迎提交 PR/Issue，这个项目是我全部自己用 Claude Code 写的。
 
+开发与设计文档统一从 [`docs/README.md`](docs/README.md) 进入；历史方案已单独归档，避免误用旧文档。
+
 对于 PR，即便有 bug/代码质量不好，我最常跟 Claude 说的一句话就是不要漏了人家的贡献。你大不了合完再改。
 
 
@@ -297,6 +299,8 @@ The ASR provider architecture is fully pluggable: implement `ASRProviderConfig` 
 
 
 ## Contributing
+
+Start with the [`docs/README.md`](docs/README.md) documentation index. Historical plans and reviews are archived separately from current specifications.
 
 PRs and Issues are welcome. This entire project was built by the author using Claude Code.
 
