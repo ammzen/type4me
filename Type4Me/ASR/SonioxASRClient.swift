@@ -25,7 +25,6 @@ actor SonioxASRClient: SpeechRecognizer {
     private var webSocketTask: URLSessionWebSocketTask?
     private var receiveGeneration = 0
     private var session: URLSession?
-    private var ownsSession = false
 
     private var eventContinuation: AsyncStream<RecognitionEvent>.Continuation?
     private var _events: AsyncStream<RecognitionEvent>?
@@ -62,7 +61,7 @@ actor SonioxASRClient: SpeechRecognizer {
             config: sonioxConfig,
             options: options
         )
-        let session = options.resolvedSession
+        let session = URLSession(configuration: options.urlSessionConfiguration)
         let task = session.webSocketTask(with: url)
         task.resume()
         NSLog("[Soniox] Sending start message")
@@ -70,14 +69,11 @@ actor SonioxASRClient: SpeechRecognizer {
             try await task.send(.string(message))
         } catch {
             task.cancel(with: .goingAway, reason: nil)
-            if options.bypassProxy {
-                session.invalidateAndCancel()
-            }
+            session.invalidateAndCancel()
             throw error
         }
 
         self.session = session
-        ownsSession = options.bypassProxy
         webSocketTask = task
         accumulator = SonioxTranscriptAccumulator()
         lastTranscript = .empty
@@ -109,10 +105,7 @@ actor SonioxASRClient: SpeechRecognizer {
         let socket = webSocketTask
         webSocketTask = nil
         socket?.cancel()
-        if ownsSession {
-            session?.invalidateAndCancel()
-        }
-        ownsSession = false
+        session?.invalidateAndCancel()
         session = nil
         eventContinuation?.finish()
         eventContinuation = nil

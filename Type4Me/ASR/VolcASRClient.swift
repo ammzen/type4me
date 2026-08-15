@@ -38,7 +38,6 @@ actor VolcASRClient: SpeechRecognizer {
 
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
-    private var ownsSession = false
     private var receiveGeneration = 0
 
     private var eventContinuation: AsyncStream<RecognitionEvent>.Continuation?
@@ -99,11 +98,9 @@ actor VolcASRClient: SpeechRecognizer {
         )
         let message = VolcProtocol.encodeMessage(header: header, payload: payload)
 
-        let initialSession = options.resolvedSession
-        var activeSession = initialSession
-        var activeOwnsSession = options.bypassProxy
-        var activeTask = initialSession.webSocketTask(with: request)
-        activeTask.resume()
+        let session = URLSession(configuration: options.urlSessionConfiguration)
+        let task = session.webSocketTask(with: request)
+        task.resume()
 
         lastTranscript = .empty
         audioPacketCount = 0
@@ -116,40 +113,19 @@ actor VolcASRClient: SpeechRecognizer {
         lastServerConfirmedCount = 0
         NSLog("[ASR] Sending full_client_request (%d bytes), connectId=%@", message.count, connectId)
         do {
-            try await activeTask.send(.data(message))
+            try await task.send(.data(message))
         } catch {
-            // Long-idle shared URLSession sockets can fail on the first write.
-            // Retry once with a fresh session before showing a user-visible error.
-            NSLog("[ASR] WebSocket send failed: %@, retrying with fresh session...", String(describing: error))
-            activeTask.cancel(with: .goingAway, reason: nil)
-            if activeOwnsSession {
-                initialSession.invalidateAndCancel()
+            task.cancel(with: .goingAway, reason: nil)
+            session.invalidateAndCancel()
+            NSLog("[ASR] WebSocket send failed: %@, probing for server error...", String(describing: error))
+            if let serverError = await Self.probeServerError(request: request) {
+                throw serverError
             }
-
-            let retrySession = URLSession(configuration: options.urlSessionConfiguration)
-            let retryTask = retrySession.webSocketTask(with: request)
-            retryTask.resume()
-            do {
-                try await retryTask.send(.data(message))
-                activeSession = retrySession
-                activeOwnsSession = true
-                activeTask = retryTask
-                NSLog("[ASR] WebSocket retry sent full_client_request OK")
-            } catch {
-                retryTask.cancel(with: .goingAway, reason: nil)
-                retrySession.invalidateAndCancel()
-                // WebSocket handshake failed — probe with HTTP to get real auth/vendor errors.
-                NSLog("[ASR] WebSocket retry failed: %@, probing for server error...", String(describing: error))
-                if let serverError = await Self.probeServerError(request: request) {
-                    throw serverError
-                }
-                throw error
-            }
+            throw error
         }
 
-        self.session = activeSession
-        self.ownsSession = activeOwnsSession
-        self.webSocketTask = activeTask
+        self.session = session
+        self.webSocketTask = task
 
         NSLog("[ASR] full_client_request sent OK")
 
@@ -251,10 +227,7 @@ actor VolcASRClient: SpeechRecognizer {
         // close overload. At teardown the transcript is already settled; a
         // pending close handshake would keep CFNetwork continuations alive.
         socket?.cancel()
-        if ownsSession {
-            session?.invalidateAndCancel()
-        }
-        ownsSession = false
+        session?.invalidateAndCancel()
         session = nil
         eventContinuation?.finish()
         eventContinuation = nil
@@ -342,6 +315,8 @@ actor VolcASRClient: SpeechRecognizer {
                 // force task cancellation so the completed WebSocket can detach.
                 webSocketTask?.cancel()
                 webSocketTask = nil
+                session?.invalidateAndCancel()
+                session = nil
                 return
             }
 

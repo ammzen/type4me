@@ -57,7 +57,10 @@ actor JiebaChineseWordSegmenter: ChineseWordSegmenting {
 
     deinit {
         idleEvictionTask?.cancel()
-        if let handle { t4m_jieba_destroy(handle) }
+        if let handle {
+            t4m_jieba_destroy(handle)
+            t4m_jieba_purge_global_cache()
+        }
     }
 
     func tokenSpans(in text: String) -> [ChineseTokenSpan] {
@@ -255,6 +258,7 @@ actor JiebaChineseWordSegmenter: ChineseWordSegmenting {
         activityGeneration &+= 1
         guard let handle else { return }
         t4m_jieba_destroy(handle)
+        t4m_jieba_purge_global_cache()
         self.handle = nil
         Task { await UserEditObservationMetrics.shared.record(.jiebaReleased) }
         DebugFileLogger.log("jieba compact dictionary released after idle")

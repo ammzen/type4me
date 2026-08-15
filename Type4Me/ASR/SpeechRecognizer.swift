@@ -16,22 +16,6 @@ struct ASRRequestOptions: Sendable, Equatable {
         }
         return config
     }
-
-    /// Shared URLSession for ASR connections. WebSocket clients use callback-
-    /// driven receive loops so retained CFNetwork tasks do not also retain a
-    /// suspended Swift concurrency graph.
-    static let sharedSession: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.httpMaximumConnectionsPerHost = 4
-        return URLSession(configuration: config)
-    }()
-
-    /// Proxy bypass needs a private configuration; otherwise reuse the shared
-    /// connection pool to avoid adding a handshake to every recording.
-    var resolvedSession: URLSession {
-        bypassProxy ? URLSession(configuration: urlSessionConfiguration) : Self.sharedSession
-    }
 }
 
 enum ProxyBypassMode: String {

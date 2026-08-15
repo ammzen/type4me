@@ -210,6 +210,17 @@ final class AskAnythingStoreTests: XCTestCase {
         XCTAssertTrue(remaining.isEmpty)
     }
 
+    func testShrinkMemoryDoesNotThrowOrCorrupt() async throws {
+        let conversation = makeConversation(question: "Shrink test")
+        try await store.createConversation(
+            session: conversation.session,
+            firstTurn: conversation.turns[0]
+        )
+        await store.shrinkMemory()
+        let loaded = try await store.fetchConversation(id: conversation.session.id)
+        XCTAssertEqual(loaded?.session.title, "Shrink test")
+    }
+
     private func makeConversation(
         question: String = "Question",
         sourceText: String = "Selected text",

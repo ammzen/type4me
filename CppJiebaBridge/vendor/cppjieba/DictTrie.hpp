@@ -106,6 +106,11 @@ class DictTrie {
     return min_weight_;
   }
 
+  static void PurgeDictCache() {
+    std::lock_guard<std::mutex> lock(GetDictCacheMutex());
+    GetDictCacheMap().clear();
+  }
+
   void InserUserDictNode(const std::string& line) {
     std::vector<std::string> buf;
     DictUnit node_info;
@@ -262,10 +267,19 @@ class DictTrie {
     return entry;
   }
 
-  static const DictCacheEntry& GetDictCache(const std::string& filePath) {
+  static std::unordered_map<std::string, DictCacheEntry>& GetDictCacheMap() {
     static std::unordered_map<std::string, DictCacheEntry> cache;
+    return cache;
+  }
+
+  static std::mutex& GetDictCacheMutex() {
     static std::mutex cache_mutex;
-    std::lock_guard<std::mutex> lock(cache_mutex);
+    return cache_mutex;
+  }
+
+  static const DictCacheEntry& GetDictCache(const std::string& filePath) {
+    std::lock_guard<std::mutex> lock(GetDictCacheMutex());
+    std::unordered_map<std::string, DictCacheEntry>& cache = GetDictCacheMap();
     std::unordered_map<std::string, DictCacheEntry>::const_iterator it = cache.find(filePath);
     if (it != cache.end()) {
       return it->second;

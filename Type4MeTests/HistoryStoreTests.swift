@@ -341,4 +341,17 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(rows.last?.modelName, L("未知", "Unknown"))
         XCTAssertEqual(rows.dropLast().map(\.allTimeDuration), rows.dropLast().map(\.allTimeDuration).sorted(by: >))
     }
+
+    func testShrinkMemoryDoesNotThrowOrCorrupt() async {
+        let record = HistoryRecord(
+            id: UUID().uuidString, createdAt: Date(), durationSeconds: 1.0,
+            rawText: "shrink test", processingMode: nil, processedText: nil,
+            finalText: "shrink test", status: "completed", characterCount: 11, asrProvider: nil
+        )
+        await store.insert(record)
+        await store.shrinkMemory()
+        let fetched = await store.fetchAll()
+        XCTAssertEqual(fetched.count, 1)
+        XCTAssertEqual(fetched.first?.rawText, "shrink test")
+    }
 }

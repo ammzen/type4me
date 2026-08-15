@@ -21,6 +21,7 @@
 
 | 功能 | 文档 | 类型 | 状态 | 设计日期 | 实现基线 |
 |---|---|---|---|---:|---|
+| 运行时性能 | [运行时内存优化二期](features/runtime/runtime-memory-optimization-v2-design.md) | 专项开发设计 | 设计完成，待评审与实现 | 2026-08-15 | 当前工作树（待合并） |
 | Intelli Sense | [用户纠正文本识别](features/intelli-sense/user-correction-text-recognition-design.md) | 专项开发设计 | 已实现，待 Beta 验证 | 2026-08-12 | 当前工作树（待合并） |
 | 翻译模式 | [产品设计](features/translation/product-design.md) | 产品设计 | 已实现，持续验证 | 2026-08-11 | `5076296`，修订至 `0bc9bf8` |
 | 翻译模式 | [开发设计](features/translation/development-design.md) | 开发设计 | 已实现，持续验证 | 2026-08-11 | `5076296`，修订至 `0bc9bf8` |

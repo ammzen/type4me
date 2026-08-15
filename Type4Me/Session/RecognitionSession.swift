@@ -57,7 +57,15 @@ actor RecognitionSession {
         case interrupted
     }
 
-    private(set) var state: SessionState = .idle
+    private(set) var state: SessionState = .idle {
+        didSet {
+            if state == .idle {
+                Task { [historyStore] in
+                    await historyStore.shrinkMemory()
+                }
+            }
+        }
+    }
 
     var canStartRecording: Bool { state == .idle }
 
@@ -242,7 +250,7 @@ actor RecognitionSession {
         var req = URLRequest(url: url)
         req.httpMethod = "HEAD"
         req.timeoutInterval = 5
-        _ = try? await ASRRequestOptions.sharedSession.data(for: req)
+        _ = try? await URLSession.shared.data(for: req)
     }
 
     private func currentASREndpoint() -> String {

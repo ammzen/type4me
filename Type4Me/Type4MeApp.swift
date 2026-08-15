@@ -440,6 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard selectionAskController?.isReleasable == true else { return }
         selectionAskController?.releasePanelResources()
         selectionAskController = nil
+        Task { await askAnythingStore.shrinkMemory() }
     }
 
     private func registerHotkeys(for provider: ASRProvider) {

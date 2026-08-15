@@ -109,6 +109,9 @@ actor AskAnythingStore {
         do {
             try Self.execute(db, sql: "PRAGMA foreign_keys = ON;")
             _ = try? Self.execute(db, sql: "PRAGMA journal_mode = WAL;")
+            try Self.execute(db, sql: "PRAGMA cache_size = -2000;")
+            try Self.execute(db, sql: "PRAGMA temp_store = MEMORY;")
+            try Self.execute(db, sql: "PRAGMA mmap_size = 2097152;")
             try Self.migrate(db)
         } catch let error as AskAnythingStoreError {
             initializationError = error
@@ -119,6 +122,11 @@ actor AskAnythingStore {
 
     deinit {
         sqlite3_close(db)
+    }
+
+    func shrinkMemory() {
+        guard let db else { return }
+        sqlite3_db_release_memory(db)
     }
 
     func createConversation(

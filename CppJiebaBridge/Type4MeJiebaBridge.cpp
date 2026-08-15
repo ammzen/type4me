@@ -51,6 +51,10 @@ void t4m_jieba_destroy(T4MJiebaHandle *handle) {
     delete handle;
 }
 
+void t4m_jieba_purge_global_cache(void) {
+    cppjieba::DictTrie::PurgeDictCache();
+}
+
 bool t4m_jieba_cut(
     T4MJiebaHandle *handle,
     const char *utf8_text,

@@ -22,6 +22,10 @@ actor HistoryStore {
         }
 
         if sqlite3_open(dbPath, &db) == SQLITE_OK {
+            sqlite3_exec(db, "PRAGMA cache_size = -2000;", nil, nil, nil)
+            sqlite3_exec(db, "PRAGMA temp_store = MEMORY;", nil, nil, nil)
+            sqlite3_exec(db, "PRAGMA mmap_size = 2097152;", nil, nil, nil)
+
             let sql = """
             CREATE TABLE IF NOT EXISTS recognition_history (
                 id TEXT PRIMARY KEY,
@@ -572,6 +576,11 @@ actor HistoryStore {
 
     private func optionalColumn(_ stmt: OpaquePointer?, _ index: Int32) -> String? {
         sqlite3_column_text(stmt, index).map { String(cString: $0) }
+    }
+
+    func shrinkMemory() {
+        guard let db else { return }
+        sqlite3_db_release_memory(db)
     }
 
     private func postDidChangeNotification() {

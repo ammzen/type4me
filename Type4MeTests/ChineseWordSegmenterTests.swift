@@ -142,6 +142,31 @@ final class ChineseWordSegmenterTests: XCTestCase {
         XCTAssertTrue(persisted.contains("阶跃星辰"))
     }
 
+    func testDynamicUserWordInsertionMatchesImmediatelyOnCompactTrie() async throws {
+        let resources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Type4Me/Resources/Jieba")
+        let overlay = FileManager.default.temporaryDirectory
+            .appendingPathComponent("type4me-jieba-dynamic-\(UUID().uuidString).utf8")
+        defer { try? FileManager.default.removeItem(at: overlay) }
+        let segmenter = JiebaChineseWordSegmenter(
+            resourceDirectory: resources,
+            overlayURL: overlay
+        )
+
+        // 1. Initial cut (loads static compact Trie)
+        _ = await segmenter.tokenSpans(in: "测试分词系统")
+
+        // 2. Insert new custom word while Trie is already loaded in memory
+        await segmenter.insertConfirmedUserWord("深度求索")
+
+        // 3. Verify the new dynamic word matches immediately via dynamic trie branch
+        let text = "欢迎使用深度求索模型"
+        let spans = await segmenter.tokenSpans(in: text)
+        XCTAssertTrue(spans.contains { String(text[$0.range]) == "深度求索" })
+    }
+
     func testIdleJiebaUnloadsAndReloadsWithoutDuplicatingOverlay() async throws {
         let resources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -226,6 +251,88 @@ final class ChineseWordSegmenterTests: XCTestCase {
 
         XCTAssertTrue(disabledSpans.isEmpty)
         XCTAssertFalse(loadedAfterDisable)
+    }
+
+    func testUnloadAndPurgeGlobalCacheDoesNotBreakSubsequentReload() async throws {
+        let resources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Type4Me/Resources/Jieba")
+        let overlay = FileManager.default.temporaryDirectory
+            .appendingPathComponent("type4me-jieba-purge-\(UUID().uuidString).utf8")
+        defer { try? FileManager.default.removeItem(at: overlay) }
+        let segmenter = JiebaChineseWordSegmenter(
+            resourceDirectory: resources,
+            overlayURL: overlay
+        )
+
+        let initialSpans = await segmenter.tokenSpans(in: "智能感知测试")
+        XCTAssertFalse(initialSpans.isEmpty)
+        let loadedInitial = await segmenter.isLoadedForTesting()
+        XCTAssertTrue(loadedInitial)
+
+        await segmenter.unloadForTesting()
+        let loadedAfterUnload = await segmenter.isLoadedForTesting()
+        XCTAssertFalse(loadedAfterUnload)
+
+        // Ensure that reload after global cache purge works seamlessly
+        let reloadedSpans = await segmenter.tokenSpans(in: "智能感知测试")
+        XCTAssertFalse(reloadedSpans.isEmpty)
+        let loadedReloaded = await segmenter.isLoadedForTesting()
+        XCTAssertTrue(loadedReloaded)
+    }
+
+    func testBoostExistingBaseDictWordOverridesInDAG() async throws {
+        let resources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Type4Me/Resources/Jieba")
+        let overlay = FileManager.default.temporaryDirectory
+            .appendingPathComponent("type4me-jieba-boost-\(UUID().uuidString).utf8")
+        defer { try? FileManager.default.removeItem(at: overlay) }
+        let segmenter = JiebaChineseWordSegmenter(
+            resourceDirectory: resources,
+            overlayURL: overlay
+        )
+
+        // "云计算" and "技术" are in base dict. Boost "云计算技术" as a single user unit.
+        await segmenter.insertConfirmedUserWord("云计算技术")
+        let text = "这项云计算技术非常先进"
+        let spans = await segmenter.tokenSpans(in: text)
+        XCTAssertTrue(spans.contains { String(text[$0.range]) == "云计算技术" })
+    }
+
+    func testSegmentationEquivalenceAcrossDiverseSentences() async throws {
+        let resources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Type4Me/Resources/Jieba")
+        let overlay = FileManager.default.temporaryDirectory
+            .appendingPathComponent("type4me-jieba-equiv-\(UUID().uuidString).utf8")
+        defer { try? FileManager.default.removeItem(at: overlay) }
+        let segmenter = JiebaChineseWordSegmenter(
+            resourceDirectory: resources,
+            overlayURL: overlay
+        )
+
+        let testSentences = [
+            "Type4Me 是一个强大的语音输入工具",
+            "我们使用智能感知模式进行实时转写",
+            "南京市长江大桥",
+            "今天天气真好，去公园散步吧",
+            "深度学习与自然语言处理技术",
+            "中华人民共和国万岁"
+        ]
+
+        for sentence in testSentences {
+            let spans = await segmenter.tokenSpans(in: sentence)
+            XCTAssertFalse(spans.isEmpty, "Spans should not be empty for: \(sentence)")
+            for span in spans {
+                XCTAssertTrue(span.range.lowerBound >= sentence.startIndex)
+                XCTAssertTrue(span.range.upperBound <= sentence.endIndex)
+                XCTAssertFalse(sentence[span.range].isEmpty)
+            }
+        }
     }
 
     private func sha256(_ data: Data) -> String {
