@@ -128,6 +128,43 @@ final class TextOutputFormatterTests: XCTestCase {
         )
     }
 
+    func testCornerQuotesPreserveEnglishApostrophes() {
+        // User report scenario: translation output with curly apostrophes
+        let translationSentence = "Sorry, I was just driving outside. If there’s anything we need to discuss in detail, I’m available now."
+        XCTAssertEqual(
+            TextOutputFormatter.format(translationSentence, options: options(spacing: .pangu, cornerQuotes: true)),
+            "Sorry, I was just driving outside. If there’s anything we need to discuss in detail, I’m available now."
+        )
+
+        // Contractions & possessives
+        let contractions = "Don’t worry, it’s not Apple’s fault, we’ll fix it by 5 o’clock."
+        XCTAssertEqual(
+            TextOutputFormatter.format(contractions, options: options(spacing: .pangu, cornerQuotes: true)),
+            "Don’t worry, it’s not Apple’s fault, we’ll fix it by 5 o’clock."
+        )
+
+        // Plural possessive & leading decade/omissions
+        let edgeCases = "The users’ data from ’90s rock ’n’ roll was restored."
+        XCTAssertEqual(
+            TextOutputFormatter.format(edgeCases, options: options(spacing: .pangu, cornerQuotes: true)),
+            "The users’ data from ’90s rock ’n’ roll was restored."
+        )
+
+        // Mixed Chinese quotes and English contractions
+        let mixed = "他说“I’m ready”，但大家觉得“it’s impossible”，她说‘没关系’。"
+        XCTAssertEqual(
+            TextOutputFormatter.format(mixed, options: options(spacing: .pangu, cornerQuotes: true)),
+            "他说「I’m ready」，但大家觉得「it’s impossible」，她说『没关系』。"
+        )
+
+        // Nested quote wrapping English words
+        let quotedEnglish = "关于‘Prompt Engineering’的研究"
+        XCTAssertEqual(
+            TextOutputFormatter.format(quotedEnglish, options: options(spacing: .pangu, cornerQuotes: true)),
+            "关于『Prompt Engineering』的研究"
+        )
+    }
+
     func testTrailingPunctuationRunsLast() {
         XCTAssertEqual(
             TextOutputFormatter.format("版本3。", options: options(trailing: .period)),

@@ -79,11 +79,39 @@ enum TextOutputFormatter {
     }
 
     private static func replacingCurlyQuotes(in text: String) -> String {
-        text
+        // Protect English apostrophes (e.g., I’m, there’s, don’t, users’, ’90s)
+        // so that typographic apostrophes (U+2019) are not mistaken for closing single quotes (』).
+        let apostrophePlaceholder = "\u{E020}"
+
+        // 1. In-word contractions & possessives: I'm, there's, don't, Apple's
+        var protectedText = RegexSupport.replace(
+            #"(?<=[A-Za-z0-9])’(?=[A-Za-z0-9])"#,
+            in: text,
+            with: apostrophePlaceholder
+        )
+
+        // 2. Trailing plural possessives: users' guide, James' book (not preceded by opening single quote)
+        protectedText = RegexSupport.replace(
+            #"(?<!‘)(?<=[A-Za-z0-9])’(?=[\s\.,!?;:\)\]\}，。！？；：）】]|$)"#,
+            in: protectedText,
+            with: apostrophePlaceholder
+        )
+
+        // 3. Leading decade/word omissions: ’90s, ’em, ’cause, rock ’n’ roll
+        protectedText = RegexSupport.replace(
+            #"(?<=^|[\s\(\[\{<，。！？；：（【])’(?=[0-9]{2}s?\b|[A-Za-z]+\b(?!\s*’))"#,
+            in: protectedText,
+            with: apostrophePlaceholder
+        )
+
+        // Replace curly quotes with corner quotes
+        let converted = protectedText
             .replacingOccurrences(of: "“", with: "「")
             .replacingOccurrences(of: "”", with: "」")
             .replacingOccurrences(of: "‘", with: "『")
             .replacingOccurrences(of: "’", with: "』")
+
+        return converted.replacingOccurrences(of: apostrophePlaceholder, with: "’")
     }
 
     /// Preserves the old "remove CJK/Latin spacing" behavior for compatibility.
