@@ -24,6 +24,119 @@ enum VolcASRError: Error, LocalizedError {
     }
 }
 
+enum VolcTranscriptTransition: String, Equatable {
+    case snapshot
+    case revision
+    case blankHeld
+    case final
+}
+
+struct VolcTranscriptAccumulation: Equatable {
+    let transcript: RecognitionTranscript
+    let transition: VolcTranscriptTransition
+}
+
+/// Converts each Volcano response into a complete canonical text snapshot.
+/// Server revisions replace the previous hypothesis instead of being appended
+/// as locally confirmed text.
+struct VolcTranscriptAccumulator {
+    private var lastCanonicalText = ""
+    private var lastTranscript: RecognitionTranscript = .empty
+
+    mutating func reset() {
+        self = VolcTranscriptAccumulator()
+    }
+
+    mutating func apply(
+        result: VolcASRResult,
+        isFinal: Bool
+    ) -> VolcTranscriptAccumulation {
+        let resultText = nonBlank(result.text) ? result.text : ""
+        let utteranceText = result.utterances
+            .map(\.text)
+            .filter { !$0.isEmpty }
+            .joined()
+
+        let incomingText = !resultText.isEmpty ? resultText : utteranceText
+        if incomingText.isEmpty, !isFinal, !lastCanonicalText.isEmpty {
+            return VolcTranscriptAccumulation(
+                transcript: lastTranscript,
+                transition: .blankHeld
+            )
+        }
+
+        let canonicalText = incomingText.isEmpty ? lastCanonicalText : incomingText
+        let previousCanonicalText = lastCanonicalText
+        let transcript = makeTranscript(
+            canonicalText: canonicalText,
+            utterances: result.utterances,
+            isFinal: isFinal
+        )
+
+        if !canonicalText.isEmpty {
+            lastCanonicalText = canonicalText
+            lastTranscript = transcript
+        }
+
+        let transition: VolcTranscriptTransition
+        if isFinal {
+            transition = .final
+        } else if !previousCanonicalText.isEmpty,
+                  canonicalText != previousCanonicalText {
+            transition = .revision
+        } else {
+            transition = .snapshot
+        }
+
+        return VolcTranscriptAccumulation(
+            transcript: transcript,
+            transition: transition
+        )
+    }
+
+    private func makeTranscript(
+        canonicalText: String,
+        utterances: [VolcUtterance],
+        isFinal: Bool
+    ) -> RecognitionTranscript {
+        if isFinal {
+            return RecognitionTranscript(
+                confirmedSegments: canonicalText.isEmpty ? [] : [canonicalText],
+                partialText: "",
+                authoritativeText: canonicalText,
+                isFinal: true
+            )
+        }
+
+        let serverConfirmed = utterances
+            .filter(\.definite)
+            .map(\.text)
+            .filter { !$0.isEmpty }
+        let confirmedText = serverConfirmed.joined()
+
+        let confirmedSegments: [String]
+        let partialText: String
+        if !confirmedText.isEmpty, canonicalText.hasPrefix(confirmedText) {
+            confirmedSegments = serverConfirmed
+            partialText = String(canonicalText.dropFirst(confirmedText.count))
+        } else {
+            confirmedSegments = []
+            partialText = canonicalText
+        }
+
+        return RecognitionTranscript(
+            confirmedSegments: confirmedSegments,
+            partialText: partialText,
+            authoritativeText: canonicalText,
+            isFinal: false
+        )
+    }
+
+    private func nonBlank(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
 actor VolcASRClient: SpeechRecognizer {
 
     private static let endpoint =
@@ -108,9 +221,7 @@ actor VolcASRClient: SpeechRecognizer {
         didRequestEnd = false
         sessionStartTime = ContinuousClock.now
         lastTranscriptTime = nil
-        localConfirmedSegments = []
-        lastPartialText = ""
-        lastServerConfirmedCount = 0
+        transcriptAccumulator.reset()
         NSLog("[ASR] Sending full_client_request (%d bytes), connectId=%@", message.count, connectId)
         do {
             try await task.send(.data(message))
@@ -183,15 +294,7 @@ actor VolcASRClient: SpeechRecognizer {
     private var lastTranscript: RecognitionTranscript = .empty
     private var lastTranscriptTime: ContinuousClock.Instant?
     private var sessionStartTime: ContinuousClock.Instant?
-
-    /// Locally promoted confirmed segments from dropped partials.
-    /// When the server starts a new utterance without confirming the previous partial,
-    /// we preserve the old partial here to prevent UI flicker.
-    private var localConfirmedSegments: [String] = []
-    /// Previous partial text for drop detection.
-    private var lastPartialText: String = ""
-    /// Previous server confirmed count, to detect genuine new confirmations vs stale state.
-    private var lastServerConfirmedCount: Int = 0
+    private var transcriptAccumulator = VolcTranscriptAccumulator()
 
     func sendAudio(_ data: Data) async throws {
         guard let task = webSocketTask else { return }
@@ -322,10 +425,16 @@ actor VolcASRClient: SpeechRecognizer {
 
             do {
                 let response = try VolcProtocol.decodeServerResponse(data)
-                let transcript = makeTranscript(
-                    from: response.result,
+                let accumulation = transcriptAccumulator.apply(
+                    result: response.result,
                     isFinal: response.header.flags == .asyncFinal
                 )
+                let transcript = accumulation.transcript
+                if accumulation.transition == .blankHeld {
+                    DebugFileLogger.log(
+                        "ASR transcript transition=blankHeld canonical=\(transcript.authoritativeText.count)chars"
+                    )
+                }
                 guard transcript != lastTranscript else { return }
                 lastTranscript = transcript
 
@@ -335,7 +444,7 @@ actor VolcASRClient: SpeechRecognizer {
                 lastTranscriptTime = now
 
                 let gapMs = Int(sinceLastUpdate.components.seconds * 1000 + sinceLastUpdate.components.attoseconds / 1_000_000_000_000_000)
-                DebugFileLogger.log("ASR transcript +\(sinceStart) gap=\(gapMs)ms confirmed=\(transcript.confirmedSegments.count) partial=\(transcript.partialText.count) final=\(transcript.isFinal)")
+                DebugFileLogger.log("ASR transcript +\(sinceStart) gap=\(gapMs)ms transition=\(accumulation.transition.rawValue) canonical=\(transcript.authoritativeText.count) confirmed=\(transcript.confirmedSegments.count) partial=\(transcript.partialText.count) final=\(transcript.isFinal)")
 
                 NSLog(
                     "[ASR] Transcript update +%@ gap=%dms confirmed=%d partial=%d final=%@",
@@ -365,85 +474,5 @@ actor VolcASRClient: SpeechRecognizer {
 
     private func emitEvent(_ event: RecognitionEvent) {
         eventContinuation?.yield(event)
-    }
-
-    private func makeTranscript(from result: VolcASRResult, isFinal: Bool) -> RecognitionTranscript {
-        let serverConfirmed = result.utterances
-            .filter(\.definite)
-            .map(\.text)
-            .filter { !$0.isEmpty }
-        let partialText = result.utterances.last(where: { !$0.definite && !$0.text.isEmpty })?.text ?? ""
-
-        let prevServerConfirmedCount = lastServerConfirmedCount
-        lastServerConfirmedCount = serverConfirmed.count
-
-        // When the server confirms new segments, sync local state
-        if serverConfirmed.count > localConfirmedSegments.count {
-            localConfirmedSegments = serverConfirmed
-        }
-
-        // Detect dropped partial: server started a new utterance without confirming the old one.
-        // Conditions: (1) server confirmed count didn't increase since last response,
-        // (2) old partial was substantial.
-        // Two sub-cases:
-        //   a) new partial is non-empty but shares <50% prefix with old → replaced
-        //   b) new partial is empty → server cleared it (e.g. during finalization)
-        if !isFinal,
-           serverConfirmed.count <= prevServerConfirmedCount,
-           lastPartialText.count >= 4
-        {
-            if partialText.isEmpty {
-                NSLog("[ASR] Partial cleared without confirmation: \"%@\", promoting to local confirmed",
-                      lastPartialText)
-                localConfirmedSegments.append(lastPartialText)
-            } else {
-                let lcp = longestCommonPrefixLength(lastPartialText, partialText)
-                let ratio = Double(lcp) / Double(lastPartialText.count)
-                if ratio < 0.5 {
-                    NSLog("[ASR] Dropped partial detected: \"%@\" → \"%@\" (LCP=%d ratio=%.2f), promoting to local confirmed",
-                          lastPartialText, partialText, lcp, ratio)
-                    localConfirmedSegments.append(lastPartialText)
-                }
-            }
-        }
-
-        lastPartialText = partialText
-
-        // Guard against false promotion: if the new partial overlaps significantly
-        // with the last promoted segment, the server merely re-analyzed — undo.
-        if !partialText.isEmpty && localConfirmedSegments.count > serverConfirmed.count {
-            let lastPromoted = localConfirmedSegments.last!
-            let lcp = longestCommonPrefixLength(lastPromoted, partialText)
-            let ratio = Double(lcp) / Double(lastPromoted.count)
-            if ratio >= 0.5 {
-                NSLog("[ASR] Un-promoting \"%@\" — partial \"%@\" reclaims it (LCP ratio=%.2f)",
-                      lastPromoted, partialText, ratio)
-                localConfirmedSegments.removeLast()
-            }
-        }
-
-        // Use local confirmed segments (which may include promoted partials)
-        let effectiveConfirmed = localConfirmedSegments.count > serverConfirmed.count
-            ? localConfirmedSegments : serverConfirmed
-
-        let composedText = (effectiveConfirmed + (partialText.isEmpty ? [] : [partialText])).joined()
-        let authoritativeText = result.text.isEmpty ? composedText : result.text
-        return RecognitionTranscript(
-            confirmedSegments: effectiveConfirmed,
-            partialText: partialText,
-            authoritativeText: authoritativeText,
-            isFinal: isFinal
-        )
-    }
-
-    private func longestCommonPrefixLength(_ a: String, _ b: String) -> Int {
-        var count = 0
-        var ai = a.startIndex, bi = b.startIndex
-        while ai < a.endIndex, bi < b.endIndex, a[ai] == b[bi] {
-            count += 1
-            ai = a.index(after: ai)
-            bi = b.index(after: bi)
-        }
-        return count
     }
 }
