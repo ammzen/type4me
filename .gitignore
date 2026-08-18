@@ -48,3 +48,8 @@ windows/
 # Test artifacts
 test-audio/
 test*.txt
+Evaluation/IntelliSenseEval/.build/
+Evaluation/IntelliSenseEval/.swiftpm/
+Evaluation/IntelliSenseEval/eval-config.json
+Evaluation/IntelliSenseEval/Runs/
+Evaluation/IntelliSenseEval/Cache/

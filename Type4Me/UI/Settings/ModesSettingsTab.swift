@@ -371,7 +371,14 @@ struct ModesSettingsTab: View {
 
     @ViewBuilder
     private func modeDetail(_ mode: ProcessingMode) -> some View {
-        if mode.isBuiltin && mode.id != ProcessingMode.formalWritingId {
+        if mode.id == ProcessingMode.intelliSenseId {
+            IntelliSenseModeDetail(
+                mode: mode,
+                onEditBinding: { editBinding(mode, $0) },
+                onDeleteBinding: { deleteBinding(mode.id, $0) },
+                onAddBinding: { addBinding(mode) }
+            )
+        } else if mode.isBuiltin && mode.id != ProcessingMode.formalWritingId {
             VStack(alignment: .leading, spacing: 18) {
                 builtinModeDetail(mode)
                 HotkeySectionView(
@@ -706,7 +713,7 @@ private struct ModeDropDelegate: DropDelegate {
 /// A hotkey list styled to match the other detail-form fields: a small section
 /// label plus a stack of low-chrome rows, each with a subtle color-coded style
 /// glyph and hover-revealed edit/delete actions consistent with other pages.
-private struct HotkeySectionView: View {
+struct HotkeySectionView: View {
     let bindings: [HotkeyBinding]
     let onEdit: (HotkeyBinding) -> Void
     let onDelete: (HotkeyBinding) -> Void

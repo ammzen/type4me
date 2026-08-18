@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 @testable import Type4Me
 
 final class HistoryStoreTests: XCTestCase {
@@ -42,6 +43,56 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(all.first?.processingMode, "润色")
         XCTAssertEqual(all.first?.processedText, "润色后的文本")
         XCTAssertEqual(all.first?.characterCount, 6)
+    }
+
+    func testIntelliSenseTracePersistsAndLegacyRowsRemainCompatible() async {
+        let legacyPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("type4me-legacy-history-\(UUID().uuidString).db").path
+        defer { try? FileManager.default.removeItem(atPath: legacyPath) }
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(legacyPath, &db), SQLITE_OK)
+        let createLegacyTable = """
+        CREATE TABLE recognition_history (
+            id TEXT PRIMARY KEY, created_at TEXT NOT NULL, duration_seconds REAL,
+            raw_text TEXT NOT NULL, processing_mode TEXT, processed_text TEXT,
+            final_text TEXT NOT NULL, status TEXT NOT NULL, character_count INTEGER,
+            asr_provider TEXT, asr_model TEXT
+        );
+        """
+        XCTAssertEqual(sqlite3_exec(db, createLegacyTable, nil, nil, nil), SQLITE_OK)
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let insertLegacy = """
+        INSERT INTO recognition_history VALUES
+        ('legacy', '\(timestamp)', 1, '旧记录', '智能感知', '旧记录', '旧记录', 'completed', 3, 'Volcano', NULL);
+        """
+        XCTAssertEqual(sqlite3_exec(db, insertLegacy, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+
+        let migratedStore = HistoryStore(path: legacyPath)
+        let legacy = await migratedStore.fetchAll()
+        XCTAssertEqual(legacy.first?.id, "legacy")
+        XCTAssertNil(legacy.first?.intelliSenseTraceJSON)
+        XCTAssertNil(legacy.first?.llmProvider)
+        XCTAssertNil(legacy.first?.llmModel)
+        XCTAssertNil(legacy.first?.asrDurationSeconds)
+        XCTAssertNil(legacy.first?.llmDurationSeconds)
+
+        let traceJSON = #"{"version":1,"scene":"search"}"#
+        await migratedStore.insert(HistoryRecord(
+            id: "new", createdAt: Date(), durationSeconds: 1,
+            rawText: "帮我查天气", processingMode: "智能感知", processedText: "天气",
+            finalText: "天气", status: "completed", characterCount: 2,
+            asrProvider: "Volcano", llmProvider: "deepseek", llmModel: "deepseek-v4-flash",
+            asrDurationSeconds: 0.62, llmDurationSeconds: 0.81,
+            intelliSenseTraceJSON: traceJSON
+        ))
+        let fetched = await migratedStore.fetchAll()
+        let newRecord = fetched.first(where: { $0.id == "new" })
+        XCTAssertEqual(newRecord?.intelliSenseTraceJSON, traceJSON)
+        XCTAssertEqual(newRecord?.llmProvider, "deepseek")
+        XCTAssertEqual(newRecord?.llmModel, "deepseek-v4-flash")
+        XCTAssertEqual(newRecord?.asrDurationSeconds ?? 0, 0.62, accuracy: 0.001)
+        XCTAssertEqual(newRecord?.llmDurationSeconds ?? 0, 0.81, accuracy: 0.001)
     }
 
     func testDelete() async {

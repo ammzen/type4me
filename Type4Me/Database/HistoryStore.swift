@@ -34,7 +34,12 @@ actor HistoryStore {
                 status TEXT NOT NULL,
                 character_count INTEGER,
                 asr_provider TEXT,
-                asr_model TEXT
+                asr_model TEXT,
+                intelli_sense_trace TEXT,
+                llm_provider TEXT,
+                llm_model TEXT,
+                asr_duration_seconds REAL,
+                llm_duration_seconds REAL
             );
             """
             sqlite3_exec(db, sql, nil, nil, nil)
@@ -51,6 +56,22 @@ actor HistoryStore {
             let alterASRModelSQL = "ALTER TABLE recognition_history ADD COLUMN asr_model TEXT;"
             sqlite3_exec(db, alterASRModelSQL, nil, nil, nil)
 
+            // Versioned privacy-safe metadata for expanded Intelli Sense history details.
+            let alterIntelliSenseTraceSQL = "ALTER TABLE recognition_history ADD COLUMN intelli_sense_trace TEXT;"
+            sqlite3_exec(db, alterIntelliSenseTraceSQL, nil, nil, nil)
+
+            // Freeze the LLM actually used by this record. These follow the
+            // trace column so new and migrated databases keep identical SELECT * indexes.
+            let alterLLMProviderSQL = "ALTER TABLE recognition_history ADD COLUMN llm_provider TEXT;"
+            sqlite3_exec(db, alterLLMProviderSQL, nil, nil, nil)
+            let alterLLMModelSQL = "ALTER TABLE recognition_history ADD COLUMN llm_model TEXT;"
+            sqlite3_exec(db, alterLLMModelSQL, nil, nil, nil)
+
+            let alterASRDurationSQL = "ALTER TABLE recognition_history ADD COLUMN asr_duration_seconds REAL;"
+            sqlite3_exec(db, alterASRDurationSQL, nil, nil, nil)
+            let alterLLMDurationSQL = "ALTER TABLE recognition_history ADD COLUMN llm_duration_seconds REAL;"
+            sqlite3_exec(db, alterLLMDurationSQL, nil, nil, nil)
+
             // Index for ORDER BY created_at DESC pagination
             sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_history_created_at ON recognition_history(created_at DESC);", nil, nil, nil)
         }
@@ -61,8 +82,8 @@ actor HistoryStore {
     func insert(_ record: HistoryRecord) {
         let sql = """
         INSERT OR REPLACE INTO recognition_history
-        (id, created_at, duration_seconds, raw_text, processing_mode, processed_text, final_text, status, character_count, asr_provider, asr_model)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        (id, created_at, duration_seconds, raw_text, processing_mode, processed_text, final_text, status, character_count, asr_provider, asr_model, intelli_sense_trace, llm_provider, llm_model, asr_duration_seconds, llm_duration_seconds)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -84,6 +105,11 @@ actor HistoryStore {
         }
         bindOptional(stmt, 10, record.asrProvider)
         bindOptional(stmt, 11, record.asrModel)
+        bindOptional(stmt, 12, record.intelliSenseTraceJSON)
+        bindOptional(stmt, 13, record.llmProvider)
+        bindOptional(stmt, 14, record.llmModel)
+        bindOptionalDouble(stmt, 15, record.asrDurationSeconds)
+        bindOptionalDouble(stmt, 16, record.llmDurationSeconds)
         if sqlite3_step(stmt) == SQLITE_DONE {
             postDidChangeNotification()
         }
@@ -149,7 +175,12 @@ actor HistoryStore {
                 status: column(stmt, 7),
                 characterCount: sqlite3_column_type(stmt, 8) == SQLITE_NULL ? nil : Int(sqlite3_column_int(stmt, 8)),
                 asrProvider: optionalColumn(stmt, 9),
-                asrModel: optionalColumn(stmt, 10)
+                asrModel: optionalColumn(stmt, 10),
+                llmProvider: optionalColumn(stmt, 12),
+                llmModel: optionalColumn(stmt, 13),
+                asrDurationSeconds: optionalDoubleColumn(stmt, 14),
+                llmDurationSeconds: optionalDoubleColumn(stmt, 15),
+                intelliSenseTraceJSON: optionalColumn(stmt, 11)
             ))
         }
         return records
@@ -406,6 +437,18 @@ actor HistoryStore {
         } else {
             sqlite3_bind_null(stmt, index)
         }
+    }
+
+    private func bindOptionalDouble(_ stmt: OpaquePointer?, _ index: Int32, _ value: Double?) {
+        if let value, value.isFinite, value >= 0 {
+            sqlite3_bind_double(stmt, index, value)
+        } else {
+            sqlite3_bind_null(stmt, index)
+        }
+    }
+
+    private func optionalDoubleColumn(_ stmt: OpaquePointer?, _ index: Int32) -> Double? {
+        sqlite3_column_type(stmt, index) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, index)
     }
 
     private func column(_ stmt: OpaquePointer?, _ index: Int32) -> String {

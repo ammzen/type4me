@@ -37,6 +37,12 @@ struct ModeStorage {
                 d.shortTextExemption = mode.shortTextExemption
                 return d
             }
+            if mode.id == ProcessingMode.intelliSenseId {
+                var d = ProcessingMode.intelliSense
+                d.hotkeyBindings = mode.hotkeyBindings
+                d.shortTextExemption = mode.shortTextExemption
+                return d
+            }
             if mode.id == ProcessingMode.smartDirectId {
                 return migrateDefaultMode(mode, fallback: .smartDirect)
             }
@@ -122,6 +128,7 @@ struct ModeStorage {
             ProcessingMode.directId,
             ProcessingMode.formalWritingId,
         ]
+        var insertedRequiredBuiltin = false
         for builtin in ProcessingMode.builtins where !resultIds.contains(builtin.id) {
             if originalBuiltinIds.contains(builtin.id),
                let idx = ProcessingMode.builtins.firstIndex(where: { $0.id == builtin.id }) {
@@ -130,6 +137,10 @@ struct ModeStorage {
             } else {
                 result.append(builtin)
             }
+            insertedRequiredBuiltin = true
+        }
+        if insertedRequiredBuiltin {
+            try? save(result)
         }
 
         // One-time seeds for deletable default modes on existing installs.
