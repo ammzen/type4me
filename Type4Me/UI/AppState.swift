@@ -1,5 +1,6 @@
 import SwiftUI
 import Type4MeIntelliSenseCore
+import Type4MeReviseCore
 
 // MARK: - Floating Bar Phase
 
@@ -11,6 +12,11 @@ enum FloatingBarPhase: Equatable {
     case recovering
     case done
     case error
+}
+
+enum RecordingActivityKind: Equatable, Sendable {
+    case standard
+    case revise
 }
 
 enum RecordingControlAction: Equatable {
@@ -1171,6 +1177,8 @@ final class AppState {
     var processingLabelOverride: String?
     var processingFinishTime: Date?
     var pinsTranscriptPopup = false
+    var activityKind: RecordingActivityKind = .standard
+    var latestReviseUndoTicketID: UUID? = nil
     var isQwen3OnlyMode: Bool {
         // SenseVoice (sherpa) provides real-time partials even when Qwen3 also runs for calibration
         guard KeychainService.selectedASRProvider != .sherpa else { return false }
@@ -1185,6 +1193,7 @@ final class AppState {
     @ObservationIgnored var onShowPanel: (() -> Void)?
     @ObservationIgnored var onHidePanel: (() -> Void)?
     @ObservationIgnored var onRecordingControlAction: ((RecordingControlAction) -> Void)?
+    @ObservationIgnored var onReviseUndo: ((UUID) -> Void)?
 
     // MARK: Update Check
 
@@ -1222,6 +1231,8 @@ final class AppState {
     // MARK: Actions
 
     func startRecording() {
+        activityKind = .standard
+        latestReviseUndoTicketID = nil
         segments = []
         audioLevel.current = 0
         recordingStartDate = nil
@@ -1233,6 +1244,20 @@ final class AppState {
         // Keep the transparent panel alive for every style so a live settings
         // change from `.hidden` can reveal the indicator immediately. The view
         // itself is responsible for rendering nothing for `.hidden`.
+        onShowPanel?()
+    }
+
+    func startReviseRecording() {
+        activityKind = .revise
+        latestReviseUndoTicketID = nil
+        segments = []
+        audioLevel.current = 0
+        recordingStartDate = nil
+        feedbackMessage = L("已改好", "Revised")
+        feedbackKind = .standard
+        processingLabelOverride = nil
+        pinsTranscriptPopup = false
+        barPhase = .preparing
         onShowPanel?()
     }
 
@@ -1354,6 +1379,8 @@ final class AppState {
     }
 
     func cancel() {
+        activityKind = .standard
+        latestReviseUndoTicketID = nil
         barPhase = .hidden
         segments = []
         audioLevel.current = 0
@@ -1361,7 +1388,90 @@ final class AppState {
         onHidePanel?()
     }
 
+    func showReviseProcessing() {
+        processingFinishTime = nil
+        processingLabelOverride = L("正在改口…", "Revising…")
+        barPhase = .processing
+        onShowPanel?()
+    }
+
+    func finalizeRevise(text: String, message: String, undoTicketID: UUID?) {
+        guard barPhase == .processing else { return }
+        activityKind = .revise
+        latestReviseUndoTicketID = undoTicketID
+        segments = [TranscriptionSegment(text: text, isConfirmed: true)]
+        showDone(message: message, delay: .seconds(2.5))
+    }
+
+    func showReviseUndone(text: String) {
+        activityKind = .revise
+        latestReviseUndoTicketID = nil
+        segments = [TranscriptionSegment(text: text, isConfirmed: true)]
+        showDone(message: L("已撤销", "Undone"), delay: .seconds(2.0))
+    }
+
+    func showReviseError(_ failure: ReviseFailure) {
+        activityKind = .standard
+        latestReviseUndoTicketID = nil
+        let msg: String
+        switch failure {
+        case .noTarget, .targetMissing:
+            msg = L("没找到可改口的内容", "No content to revise")
+        case .expired:
+            msg = L("上一轮输出已过期", "Previous output has expired")
+        case .instructionEmpty:
+            msg = L("未听清修改指令", "Instruction not clear")
+        case .nothingToUndo:
+            msg = L("已撤销过，没有可撤销的修改", "Nothing to undo")
+        case .noEditableTarget:
+            msg = L("只支持撤销操作", "Only undo is supported")
+        case .targetTooLong, .instructionTooLong:
+            msg = L("内容太长，单次最多支持 1,500 字", "Content too long")
+        case .sensitive:
+            msg = L("包含密码或敏感信息，已停止改口", "Sensitive content detected")
+        case .llmUnavailable:
+            msg = L("无法连接大模型服务，请检查配置", "LLM service unavailable")
+        case .providerFailure:
+            msg = L("改口服务暂时不可用，请稍后重试", "Revise service temporarily unavailable, please retry")
+        case .targetAmbiguous:
+            msg = L("未找到唯一匹配的内容", "Target text is ambiguous")
+        case .instructionAmbiguous:
+            msg = L("修改指令不够明确", "Instruction is ambiguous")
+        case .implicitReplacementAmbiguous:
+            msg = L("找到多个可修改位置，请说清楚要改哪一个", "Found multiple editable locations, please specify which one")
+        case .protectedFactConflict:
+            msg = L("修改涉及未授权内容，已保留原文", "Modification involves unauthorized content, original kept")
+        case .malformedModelResponse:
+            msg = L("模型返回格式异常，请重试", "Model response format invalid, please retry")
+        case .unsupportedInstruction:
+            msg = L("暂不支持该修改指令", "Instruction not supported")
+        case .responseTooLarge, .diffBudgetExceeded:
+            msg = L("改动量过大，已保留原文本", "Change too large, original kept")
+        case .appChanged, .controlChanged:
+            msg = L("目标输入框已失焦", "Target control lost focus")
+        case .targetChangedDuringProcessing:
+            msg = L("目标文本已被修改", "Target text changed")
+        case .partialFailure, .replacementFailed:
+            msg = L("修改失败，已保留原文本", "Revision failed, original kept")
+        case .disabled, .excludedApp:
+            msg = L("改口功能已在此应用停用", "Revise is disabled for this app")
+        case .busy, .staleTransaction:
+            msg = L("请先完成当前操作", "Please finish current operation")
+        default:
+            msg = L("修改失败，已保留原文本", "Revision failed, original kept")
+        }
+        showError(msg)
+    }
+
+    func performReviseUndo() {
+        guard let ticketID = latestReviseUndoTicketID else { return }
+        latestReviseUndoTicketID = nil
+        onReviseUndo?(ticketID)
+    }
+
     func showCancelled() {
+        activityKind = .standard
+        latestReviseUndoTicketID = nil
         feedbackMessage = L("已取消", "Cancelled")
         audioLevel.current = 0
         recordingStartDate = nil

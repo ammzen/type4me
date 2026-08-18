@@ -340,4 +340,96 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertFalse(manager.isHoldActive(for: fnHold.bindingId))
         XCTAssertFalse(manager.isActiveRecordingBinding(fnHold.bindingId))
     }
+
+    func testCrossModeStopWhileInReviseRecording() {
+        let manager = makeManager()
+        let reviseCounters = BindingCounters()
+        let modeCounters = BindingCounters()
+
+        let reviseBinding = ModeBinding(
+            bindingId: UUID(),
+            owner: .globalAction(.revise),
+            keyCode: 15, // R
+            modifiers: [.maskSecondaryFn],
+            style: .toggle,
+            onStart: { reviseCounters.recordStart() },
+            onStop: { reviseCounters.recordStop() }
+        )
+
+        let modeBinding = ModeBinding(
+            bindingId: UUID(),
+            owner: .mode(UUID()),
+            keyCode: 42,
+            modifiers: [],
+            style: .toggle,
+            onStart: { modeCounters.recordStart() },
+            onStop: { modeCounters.recordStop() }
+        )
+
+        manager.registerBindings([reviseBinding, modeBinding])
+
+        // 1. Enter Revise via toggle press
+        manager.simulateBindingEvent(reviseBinding, pressed: true)
+        manager.simulateBindingEvent(reviseBinding, pressed: false)
+        XCTAssertEqual(reviseCounters.startCount, 1)
+        XCTAssertEqual(reviseCounters.stopCount, 0)
+        XCTAssertTrue(manager.isActiveRecordingBinding(reviseBinding.bindingId))
+
+        // 2. Press standard mode hotkey -> should exit/finish revise recording
+        manager.simulateBindingEvent(modeBinding, pressed: true)
+        manager.simulateBindingEvent(modeBinding, pressed: false)
+
+        XCTAssertEqual(reviseCounters.stopCount, 1)
+        XCTAssertFalse(manager.isActiveRecordingBinding(reviseBinding.bindingId))
+    }
+
+    func testFnHoldStopsReviseRecordingAfterModifierPrefixDelay() {
+        let defaults = UserDefaults.standard
+        let key = HotkeyManager.modifierPrefixTriggerDelayKey
+        let priorValue = defaults.object(forKey: key)
+        defaults.set(0.02, forKey: key)
+        defer {
+            if let priorValue {
+                defaults.set(priorValue, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+
+        let manager = makeManager()
+        let reviseCounters = BindingCounters()
+        let fnCounters = BindingCounters()
+        let fnShiftCounters = BindingCounters()
+        let reviseBinding = ModeBinding(
+            bindingId: UUID(),
+            owner: .globalAction(.revise),
+            keyCode: 15,
+            modifiers: [.maskSecondaryFn],
+            style: .toggle,
+            onStart: { reviseCounters.recordStart() },
+            onStop: { reviseCounters.recordStop() }
+        )
+        let fnHold = makeFnBinding(style: .hold, modeId: UUID(), counters: fnCounters)
+        let fnShift = makeFnShiftBinding(modeId: UUID(), counters: fnShiftCounters)
+        manager.registerBindings([reviseBinding, fnHold, fnShift])
+
+        manager.simulateBindingEvent(reviseBinding, pressed: true)
+        manager.simulateBindingEvent(reviseBinding, pressed: false)
+        XCTAssertTrue(manager.isActiveRecordingBinding(reviseBinding.bindingId))
+
+        manager.simulateModifierFlags(.maskSecondaryFn)
+        let delayElapsed = expectation(description: "modifier prefix delay elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+            delayElapsed.fulfill()
+        }
+        wait(for: [delayElapsed], timeout: 0.5)
+
+        XCTAssertEqual(reviseCounters.stopCount, 1)
+        XCTAssertEqual(fnCounters.startCount, 0)
+        XCTAssertFalse(manager.isActiveRecordingBinding(reviseBinding.bindingId))
+
+        manager.simulateModifierFlags([])
+        XCTAssertEqual(reviseCounters.stopCount, 1)
+        XCTAssertEqual(fnCounters.stopCount, 0)
+    }
 }

@@ -132,6 +132,8 @@ final class DemoState {
 extension DemoState: FloatingBarState {
     var pinsTranscriptPopup: Bool { false }
     var isQwen3OnlyMode: Bool { false }
+    var activityKind: RecordingActivityKind { .standard }
+    var latestReviseUndoTicketID: UUID? { nil }
 
     func performRecordingControlAction(_ action: RecordingControlAction) {
         guard barPhase == .preparing || barPhase == .recording else { return }
@@ -143,4 +145,6 @@ extension DemoState: FloatingBarState {
             barPhase = .done
         }
     }
+
+    func performReviseUndo() {}
 }

@@ -161,4 +161,34 @@ final class RecognitionSessionTests: XCTestCase {
         XCTAssertTrue(shouldFallback)
     }
 
+    func testRevisePurposeNeverRunsInputModeLLM() {
+        let prepared = RevisePreparedTarget(
+            transactionID: UUID(),
+            targetID: UUID(),
+            targetGeneration: 0,
+            sourceRecordID: "record-1",
+            currentText: "明天上午 9 点开会",
+            currentFullValue: "明天上午 9 点开会",
+            currentRange: NSRange(location: 0, length: 10),
+            confidence: .exact,
+            controlKind: .multiLine,
+            sourceModeKind: .direct,
+            learningResumePlan: nil,
+            isDeletionTombstone: false
+        )
+
+        XCTAssertFalse(RecognitionSession.shouldRunInputModeLLM(
+            recordingPurpose: .revise(prepared),
+            mode: .intelliSense
+        ))
+        XCTAssertTrue(RecognitionSession.shouldRunInputModeLLM(
+            recordingPurpose: .input(.intelliSense),
+            mode: .intelliSense
+        ))
+        XCTAssertFalse(RecognitionSession.shouldRunInputModeLLM(
+            recordingPurpose: .input(.direct),
+            mode: .direct
+        ))
+    }
+
 }

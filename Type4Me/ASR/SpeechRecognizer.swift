@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import AVFoundation
+import Type4MeReviseCore
 
 struct ASRRequestOptions: Sendable, Equatable {
     var enablePunc: Bool = true
@@ -102,6 +103,11 @@ enum RecognitionEvent: Sendable {
     case selectionAskAnswerDelta(requestID: UUID, delta: String)
     case selectionAskAnswerCompleted(requestID: UUID)
     case selectionAskAnswerFailed(requestID: UUID, message: String)
+    case reviseProcessing
+    case reviseCompleted(text: String, message: String, undoTicketID: UUID?)
+    case reviseFailed(ReviseFailure)
+    case reviseCancelled
+    case reviseUndone(text: String)
 }
 
 struct LLMConfig: Sendable {

@@ -272,12 +272,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.selectionAskController?.showError(requestID: requestID, message: message)
                         self.hotkeyManager.isProcessing = false
                         self.safeResetHotkeyState()
+                    case .reviseProcessing:
+                        appState.showReviseProcessing()
+                        self.hotkeyManager.isProcessing = true
+                    case .reviseCompleted(let text, let message, let undoTicketID):
+                        appState.finalizeRevise(text: text, message: message, undoTicketID: undoTicketID)
+                        self.hotkeyManager.isProcessing = false
+                        self.safeResetHotkeyState()
+                    case .reviseFailed(let failure):
+                        appState.showReviseError(failure)
+                        self.hotkeyManager.isProcessing = false
+                        self.safeResetHotkeyState()
+                    case .reviseCancelled:
+                        appState.cancel()
+                        self.hotkeyManager.isProcessing = false
+                        self.safeResetHotkeyState()
+                    case .reviseUndone(let text):
+                        appState.showReviseUndone(text: text)
+                        self.hotkeyManager.isProcessing = false
+                        self.safeResetHotkeyState()
                     case .error(let error):
                         appState.showError(self.userFacingMessage(for: error))
                         self.selectionAskController?.recordingDidEnd(.cancel)
                         self.hotkeyManager.isProcessing = false
                         self.safeResetHotkeyState()
                     }
+            }
+        }
+
+        appState.onReviseUndo = { [weak self] ticketID in
+            Task {
+                let result = await ReviseCoordinator.shared.undo(ticketID: ticketID)
+                await MainActor.run {
+                    switch result {
+                    case .success(let restoredText):
+                        self?.appState.showReviseUndone(text: restoredText)
+                    case .failure(let err):
+                        self?.appState.showReviseError(err)
+                    }
+                }
             }
         }
 
@@ -291,6 +324,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Re-register when modes change in Settings
         NotificationCenter.default.addObserver(
             forName: .modesDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { [weak self] in
+                self?.refreshModeAvailability()
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .reviseSettingsDidChange,
             object: nil,
             queue: .main
         ) { [weak self] _ in
@@ -446,7 +489,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func registerHotkeys(for provider: ASRProvider) {
         let availableModes = appState.availableModes
         let modes = ASRProviderRegistry.supportedModes(from: availableModes, for: provider)
-        let bindings: [ModeBinding] = modes.flatMap { mode -> [ModeBinding] in
+        var bindings: [ModeBinding] = modes.flatMap { mode -> [ModeBinding] in
             let capturedMode = mode
             let onStart: @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
@@ -590,6 +633,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             }
         }
+
+        let reviseSettings = ReviseSettingsStore.shared.load()
+        if reviseSettings.enabled && ReviseSettingsStore.isRuntimeEnabled,
+           let hk = reviseSettings.hotkey {
+            let reviseOnStart: @Sendable () -> Void = { [weak self] in
+                guard let self else { return }
+                Task {
+                    let prepResult = await ReviseCoordinator.shared.prepareForRecording()
+                    switch prepResult {
+                    case .success(let prepared):
+                        await MainActor.run {
+                            self.appState.startReviseRecording()
+                        }
+                        await self.session.startReviseRecording(prepared)
+                    case .failure(let failure):
+                        await MainActor.run {
+                            SoundFeedback.playError()
+                            self.appState.showReviseError(failure)
+                            self.hotkeyManager.resetActiveState()
+                        }
+                    }
+                }
+            }
+            let reviseOnStop: @Sendable () -> Void = { [weak self] in
+                guard let self else { return }
+                let phase = MainActor.assumeIsolated { self.appState.barPhase }
+                MainActor.assumeIsolated { self.appState.stopRecording() }
+                if phase == .preparing {
+                    Task { await self.session.cancelRecording() }
+                } else {
+                    Task { await self.session.stopRecording() }
+                }
+            }
+            let reviseBinding = ModeBinding(
+                bindingId: hk.id,
+                owner: .globalAction(.revise),
+                keyCode: CGKeyCode(hk.keyCode),
+                modifiers: CGEventFlags(rawValue: hk.modifiers ?? 0),
+                style: hk.style,
+                onStart: reviseOnStart,
+                onStop: reviseOnStop,
+                onBusyConflict: { [weak self] in
+                    Task { @MainActor [weak self] in
+                        SoundFeedback.playError()
+                        self?.appState.showError(L("请先完成当前操作", "Please finish current operation"))
+                    }
+                }
+            )
+            bindings.append(reviseBinding)
+        }
+
         hotkeyManager.registerBindings(bindings)
 
         // Cross-mode finish: user pressed mode B's key while mode A was recording.

@@ -3,7 +3,7 @@ import ApplicationServices
 import Foundation
 import Type4MeIntelliSenseCore
 
-struct CorrectionObservationContext: @unchecked Sendable {
+struct TrackedInjectionContext: @unchecked Sendable {
     let element: AXUIElement
     let processIdentifier: pid_t
     let bundleIdentifier: String
@@ -16,11 +16,56 @@ struct CorrectionObservationContext: @unchecked Sendable {
     let injectedText: String
     let sourceRecordID: String
     let modeID: UUID
+    let createdAt: Date
+
+    init(
+        element: AXUIElement,
+        processIdentifier: pid_t,
+        bundleIdentifier: String,
+        baselineValue: String,
+        injectedRange: NSRange,
+        beforeSelectedRange: NSRange?,
+        afterSelectedRange: NSRange?,
+        placeholderCandidates: [String],
+        sourceText: String,
+        injectedText: String,
+        sourceRecordID: String,
+        modeID: UUID,
+        createdAt: Date = Date()
+    ) {
+        self.element = element
+        self.processIdentifier = processIdentifier
+        self.bundleIdentifier = bundleIdentifier
+        self.baselineValue = baselineValue
+        self.injectedRange = injectedRange
+        self.beforeSelectedRange = beforeSelectedRange
+        self.afterSelectedRange = afterSelectedRange
+        self.placeholderCandidates = placeholderCandidates
+        self.sourceText = sourceText
+        self.injectedText = injectedText
+        self.sourceRecordID = sourceRecordID
+        self.modeID = modeID
+        self.createdAt = createdAt
+    }
 }
+
+typealias CorrectionObservationContext = TrackedInjectionContext
 
 struct TrackedInjectionResult: @unchecked Sendable {
     let outcome: InjectionOutcome
-    let observationContext: CorrectionObservationContext?
+    let context: TrackedInjectionContext?
+
+    var observationContext: TrackedInjectionContext? { context }
+
+    init(outcome: InjectionOutcome, context: TrackedInjectionContext?) {
+        self.outcome = outcome
+        self.context = context
+    }
+
+    init(outcome: InjectionOutcome, observationContext: TrackedInjectionContext?) {
+        self.outcome = outcome
+        self.context = observationContext
+    }
 }
 
 struct CorrectionCandidate: Equatable, Sendable {
@@ -729,6 +774,10 @@ final class PostInjectionLearningCoordinator: NSObject {
 
     func finalizeBeforeNextRecording() {
         finalizeObservation(reason: .nextRecording, hidePanel: true)
+    }
+
+    func finalizeBeforeRevise() {
+        finalizeObservation(reason: .reviseStarted, hidePanel: true)
     }
 
     private func recordUnavailable(context: CorrectionObservationContext) {

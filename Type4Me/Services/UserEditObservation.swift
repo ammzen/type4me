@@ -253,6 +253,8 @@ enum UserEditObservationEndReason: String, Codable, Sendable {
     case settingsDisabled
     case appBlacklisted
     case cancelled
+    case reviseStarted
+    case reviseApplied
 }
 
 enum UserEditObservationStatus: String, Codable, Sendable {
@@ -291,7 +293,7 @@ enum ResolutionConfidence: String, Codable, Sendable {
     case ambiguous
 }
 
-enum InjectedTextResolutionFailure: String, Codable, Sendable {
+enum InjectedTextResolutionFailure: String, Error, Codable, Sendable {
     case invalidRange
     case boundaryConflict
     case insufficientAnchor

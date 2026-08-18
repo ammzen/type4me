@@ -2,6 +2,7 @@ import SwiftUI
 import ServiceManagement
 import AVFoundation
 import ApplicationServices
+import Type4MeReviseCore
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - General Settings Tab
@@ -40,6 +41,10 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     @State private var availableSpeakers: [(uid: String, name: String)] = []
     @State private var showMicrophonePrioritySheet = false
     @State private var draftMicrophonePriorityEntries: [AudioInputDevicePreferenceEntry] = []
+
+    @State private var reviseSettings: ReviseSettings = ReviseSettingsStore.shared.load()
+    @State private var reviseKeyCode: Int? = ReviseSettingsStore.shared.load().hotkey?.keyCode
+    @State private var reviseModifiers: UInt64? = ReviseSettingsStore.shared.load().hotkey?.modifiers
 
     typealias TestStatus = SettingsTestStatus
 
@@ -96,7 +101,23 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
             Spacer().frame(height: 16)
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // CARD 2: 系统集成
+            // CARD: 改口设置
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            settingsGroupCard(L("改口设置", "Revise"), icon: "arrow.triangle.2.circlepath") {
+                reviseToggleRow
+                if reviseSettings.enabled {
+                    SettingsDivider()
+                    reviseHotkeyRow
+                    SettingsDivider()
+                    reviseHotkeyStyleRow
+                }
+            }
+
+            Spacer().frame(height: 16)
+
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // CARD 3: 系统集成
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             settingsGroupCard(L("系统集成", "System Integration"), icon: "gearshape.2") {
@@ -518,6 +539,112 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
             subtitle: L("开启后防止蓝牙麦克风断开", "Prevent Bluetooth microphones from disconnecting"),
             isOn: $micKeepAlive
         )
+    }
+
+    // MARK: - Revise Settings Rows
+
+    private var reviseToggleRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("启用改口功能", "Enable Revise"))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(TF.settingsText)
+                Text(L("在刚输入的内容后按快捷键口述修改要求，直接原地修改", "Revise recent text in-place by speaking instructions with hotkey"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { reviseSettings.enabled },
+                set: { newValue in
+                    reviseSettings.enabled = newValue
+                    _ = try? ReviseSettingsStore.shared.save(reviseSettings)
+                    NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
+    private var reviseHotkeyRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("改口快捷键", "Revise Hotkey"))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(TF.settingsText)
+                Text(L("默认 fn + R", "Default: fn + R"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+            Spacer()
+            HotkeyRecorderView(
+                keyCode: Binding(
+                    get: { reviseKeyCode },
+                    set: { newCode in
+                        reviseKeyCode = newCode
+                        if let code = newCode {
+                            var hk = reviseSettings.hotkey ?? ReviseSettings.defaultHotkey
+                            hk.keyCode = code
+                            hk.modifiers = reviseModifiers
+                            reviseSettings.hotkey = hk
+                            _ = try? ReviseSettingsStore.shared.save(reviseSettings)
+                            NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                        }
+                    }
+                ),
+                modifiers: Binding(
+                    get: { reviseModifiers },
+                    set: { newMods in
+                        reviseModifiers = newMods
+                        if let code = reviseKeyCode {
+                            var hk = reviseSettings.hotkey ?? ReviseSettings.defaultHotkey
+                            hk.keyCode = code
+                            hk.modifiers = newMods
+                            reviseSettings.hotkey = hk
+                            _ = try? ReviseSettingsStore.shared.save(reviseSettings)
+                            NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                        }
+                    }
+                )
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
+    private var reviseHotkeyStyleRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("触发方式", "Trigger Style"))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(TF.settingsText)
+                Text(L("长按松开结束，或单击开始/结束", "Hold to speak, or tap to toggle"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+            Spacer()
+            Picker("", selection: Binding(
+                get: { reviseSettings.hotkey?.style ?? .hold },
+                set: { newStyle in
+                    var hk = reviseSettings.hotkey ?? ReviseSettings.defaultHotkey
+                    hk.style = newStyle
+                    reviseSettings.hotkey = hk
+                    _ = try? ReviseSettingsStore.shared.save(reviseSettings)
+                    NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                }
+            )) {
+                Text(L("长按", "Hold")).tag(HotkeyStyle.hold)
+                Text(L("单击切换", "Toggle")).tag(HotkeyStyle.toggle)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 140)
+            .labelsHidden()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
     }
 
     private var preserveClipboardRow: some View {

@@ -1,6 +1,34 @@
 import Foundation
 
-enum InjectedTextResolver {
+struct LocatedInjectedText: Equatable, Sendable {
+    let text: String
+    let rawText: String
+    let currentRange: NSRange
+    let currentFullValue: String
+    let confidence: ResolutionConfidence
+    let changedInsideInjection: Bool
+    let changedOutsideInjection: Bool
+
+    init(
+        text: String,
+        rawText: String,
+        currentRange: NSRange,
+        currentFullValue: String,
+        confidence: ResolutionConfidence,
+        changedInsideInjection: Bool,
+        changedOutsideInjection: Bool
+    ) {
+        self.text = text
+        self.rawText = rawText
+        self.currentRange = currentRange
+        self.currentFullValue = currentFullValue
+        self.confidence = confidence
+        self.changedInsideInjection = changedInsideInjection
+        self.changedOutsideInjection = changedOutsideInjection
+    }
+}
+
+enum InjectedTextLocator {
     private struct EditHunk {
         var oldStart: Int
         var oldEnd: Int
@@ -11,14 +39,14 @@ enum InjectedTextResolver {
         var newLength: Int { newEnd - newStart }
     }
 
-    static func resolve(
+    static func locate(
         baseline: String,
         injectedRange: NSRange,
         current: String,
         budget: Duration = UserEditObservationTiming.production.resolverBudget
-    ) -> InjectedTextResolution {
+    ) -> Result<LocatedInjectedText, InjectedTextResolutionFailure> {
         guard let baselineRange = Range(injectedRange, in: baseline) else {
-            return .ambiguous(.invalidRange)
+            return .failure(.invalidRange)
         }
 
         let injectedBaseline = String(baseline[baselineRange])
@@ -28,33 +56,37 @@ enum InjectedTextResolver {
             let lower = current.index(current.startIndex, offsetBy: prefix.count)
             let upper = current.index(current.endIndex, offsetBy: -suffix.count)
             if lower <= upper {
-                let resolved = String(current[lower..<upper])
-                return InjectedTextResolution(
-                    text: resolved,
+                let rawResolved = String(current[lower..<upper])
+                let projected = VisibleTextProjection.project(rawResolved).text
+                let currentRange = NSRange(lower..<upper, in: current)
+                return .success(LocatedInjectedText(
+                    text: projected,
+                    rawText: rawResolved,
+                    currentRange: currentRange,
+                    currentFullValue: current,
                     confidence: .exact,
-                    changedInsideInjection: resolved != injectedBaseline,
-                    changedOutsideInjection: false,
-                    failure: nil
-                )
+                    changedInsideInjection: rawResolved != injectedBaseline,
+                    changedOutsideInjection: false
+                ))
             }
         }
 
         let clock = ContinuousClock()
         let startedAt = clock.now
-        guard budget > .zero else { return .ambiguous(.budgetExceeded) }
+        guard budget > .zero else { return .failure(.budgetExceeded) }
 
         let old = Array(baseline)
         let new = Array(current)
         // Avoid starting a potentially expensive global diff when the input is
         // clearly incompatible with the local parsing budget.
         guard old.count + new.count <= 65_536 else {
-            return .ambiguous(.budgetExceeded)
+            return .failure(.budgetExceeded)
         }
         guard let hunks = editHunks(old: old, new: new) else {
-            return .ambiguous(.boundaryConflict)
+            return .failure(.boundaryConflict)
         }
         guard clock.now - startedAt <= budget else {
-            return .ambiguous(.budgetExceeded)
+            return .failure(.budgetExceeded)
         }
 
         let injectionStart = baseline.distance(
@@ -74,7 +106,7 @@ enum InjectedTextResolver {
         for hunk in hunks {
             if hunk.oldStart == hunk.oldEnd,
                hunk.oldStart == injectionStart || hunk.oldStart == injectionEnd {
-                return .ambiguous(.boundaryConflict, changedOutsideInjection: true)
+                return .failure(.boundaryConflict)
             }
             if hunk.oldEnd <= injectionStart {
                 deltaBefore += hunk.newLength - hunk.oldLength
@@ -85,14 +117,14 @@ enum InjectedTextResolver {
                 deltaInside += hunk.newLength - hunk.oldLength
                 changedInside = true
             } else {
-                return .ambiguous(.boundaryConflict, changedOutsideInjection: true)
+                return .failure(.boundaryConflict)
             }
         }
 
         let newStart = injectionStart + deltaBefore
         let newEnd = newStart + (injectionEnd - injectionStart) + deltaInside
         guard newStart >= 0, newEnd >= newStart, newEnd <= new.count else {
-            return .ambiguous(.boundaryConflict, changedOutsideInjection: changedOutside)
+            return .failure(.boundaryConflict)
         }
 
         let leftAnchorLength = min(64, injectionStart)
@@ -108,16 +140,24 @@ enum InjectedTextResolver {
         let hasLeftAnchor = !baselineLeft.isEmpty && baselineLeft == currentLeft
         let hasRightAnchor = !baselineRight.isEmpty && baselineRight == currentRight
         guard hasLeftAnchor || hasRightAnchor else {
-            return .ambiguous(.insufficientAnchor, changedOutsideInjection: changedOutside)
+            return .failure(.insufficientAnchor)
         }
 
-        return InjectedTextResolution(
-            text: String(new[newStart..<newEnd]),
+        let startIdx = current.index(current.startIndex, offsetBy: newStart)
+        let endIdx = current.index(current.startIndex, offsetBy: newEnd)
+        let rawResolved = String(current[startIdx..<endIdx])
+        let projected = VisibleTextProjection.project(rawResolved).text
+        let currentRange = NSRange(startIdx..<endIdx, in: current)
+
+        return .success(LocatedInjectedText(
+            text: projected,
+            rawText: rawResolved,
+            currentRange: currentRange,
+            currentFullValue: current,
             confidence: .anchored,
             changedInsideInjection: changedInside,
-            changedOutsideInjection: changedOutside,
-            failure: nil
-        )
+            changedOutsideInjection: changedOutside
+        ))
     }
 
     private static func editHunks(old: [Character], new: [Character]) -> [EditHunk]? {
@@ -180,5 +220,41 @@ enum InjectedTextResolver {
         }
         flush()
         return hunks
+    }
+}
+
+enum InjectedTextResolver {
+    static func resolve(
+        baseline: String,
+        injectedRange: NSRange,
+        current: String,
+        budget: Duration = UserEditObservationTiming.production.resolverBudget
+    ) -> InjectedTextResolution {
+        let result = InjectedTextLocator.locate(
+            baseline: baseline,
+            injectedRange: injectedRange,
+            current: current,
+            budget: budget
+        )
+        switch result {
+        case .success(let located):
+            return InjectedTextResolution(
+                text: located.text,
+                confidence: located.confidence,
+                changedInsideInjection: located.changedInsideInjection,
+                changedOutsideInjection: located.changedOutsideInjection,
+                failure: nil
+            )
+        case .failure(let failure):
+            var changedOutside = false
+            if let baselineRange = Range(injectedRange, in: baseline) {
+                let prefix = String(baseline[..<baselineRange.lowerBound])
+                let suffix = String(baseline[baselineRange.upperBound...])
+                if !current.hasPrefix(prefix) || !current.hasSuffix(suffix) {
+                    changedOutside = true
+                }
+            }
+            return InjectedTextResolution.ambiguous(failure, changedOutsideInjection: changedOutside)
+        }
     }
 }
