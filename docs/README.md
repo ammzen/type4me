@@ -21,6 +21,8 @@
 
 | 功能 | 文档 | 类型 | 状态 | 设计日期 | 实现基线 |
 |---|---|---|---|---:|---|
+| 改口 | [产品设计](features/revise/product-design.md) | 产品设计 | 设计完成，待实现 | 2026-08-18 | — |
+| 改口 | [开发设计](features/revise/development-design.md) | 开发设计 | 设计完成，待实现 | 2026-08-18 | 当前工作树（待实现） |
 | 运行时性能 | [运行时内存优化二期](features/runtime/runtime-memory-optimization-v2-design.md) | 专项开发设计 | 设计完成，待评审与实现 | 2026-08-15 | 当前工作树（待合并） |
 | Intelli Sense | [用户纠正文本识别](features/intelli-sense/user-correction-text-recognition-design.md) | 专项开发设计 | 已实现，待 Beta 验证 | 2026-08-12 | 当前工作树（待合并） |
 | 翻译模式 | [产品设计](features/translation/product-design.md) | 产品设计 | 已实现，持续验证 | 2026-08-11 | `5076296`，修订至 `0bc9bf8` |
@@ -59,6 +61,7 @@ docs/
 ├── features/                         # 当前功能设计
 │   ├── ask-anything/
 │   ├── intelli-sense/
+│   ├── revise/
 │   └── translation/
 ├── guides/                           # 当前维护与操作指南
 ├── archive/                          # 不再生效的历史材料
