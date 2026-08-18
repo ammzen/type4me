@@ -1,6 +1,17 @@
 {
-  "latest": "2.0.0",
+  "latest": "2.1.0",
   "releases": [
+    {
+      "version": "2.1.0",
+      "date": "2026-08-18",
+      "notes": "- 全面重构设置、历史、词汇与录音浮窗，并支持每个模式配置多个快捷键\n- 新增 Intelli Sense：结合 App、控件和有限上下文进行安全润色，并学习稳定纠错与表达偏好\n- 新增 Ask Anything 会话历史、18 种目标语言统一翻译模式和全局语音改口 Revise\n- 改进最终文本格式化、火山流式修订处理、运行时内存与资源释放",
+      "cloud_dmg_url": "https://github.com/joewongjc/type4me-private/releases/download/v2.1.0-private.1/Type4Me-v2.1.0-cloud.dmg",
+      "cloud_dmg_size": 10362351,
+      "cloud_dmg_sha256": "bb06263120a51190683c848334f446ca1ea7d090958924865f7b49f574c9df1c",
+      "local_dmg_url": "https://github.com/joewongjc/type4me-private/releases/download/v2.1.0-private.1/Type4Me-v2.1.0-local-apple-silicon.dmg",
+      "local_dmg_size": 716584726,
+      "local_dmg_sha256": "53d629d5c98780daba092a6e72330da9eb3b33c77588b9dbfeaad2bf963d8724"
+    },
     {
       "version": "2.0.0",
       "date": "2026-07-17",
