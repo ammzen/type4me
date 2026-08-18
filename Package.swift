@@ -9,11 +9,15 @@ let hasSherpaFramework = FileManager.default.fileExists(
 let hasCloudSubscription = FileManager.default.fileExists(
     atPath: packageDir + "/Type4Me/CloudSubscription/marker"
 )
+let hasCppJiebaBridge = FileManager.default.fileExists(
+    atPath: packageDir + "/CppJiebaBridge/marker"
+)
 let isDevBuild = ProcessInfo.processInfo.environment["TYPE4ME_DEV_BUILD"] == "1"
 
 var swiftDefines: [SwiftSetting] = [.swiftLanguageMode(.v5)]
 if hasSherpaFramework { swiftDefines.append(.define("HAS_SHERPA_ONNX")) }
 if hasCloudSubscription { swiftDefines.append(.define("HAS_CLOUD_SUBSCRIPTION")) }
+if hasCppJiebaBridge { swiftDefines.append(.define("HAS_CPPJIEBA")) }
 if isDevBuild { swiftDefines.append(.define("TYPE4ME_DEV_BUILD")) }
 
 var excludes = ["Resources"]
@@ -26,19 +30,27 @@ var targets: [Target] = [
         swiftSettings: swiftDefines
     ),
     .target(
+        name: "Type4MeReviseCore",
+        path: "Type4MeReviseCore",
+        swiftSettings: swiftDefines
+    ),
+    .target(
         name: "Type4MeUI",
         path: "Type4MeUI",
         swiftSettings: swiftDefines
     ),
     .executableTarget(
         name: "Type4Me",
-        dependencies: ["Type4MeIntelliSenseCore"] + (hasSherpaFramework ? ["SherpaOnnxLib"] : []),
+        dependencies: ["Type4MeIntelliSenseCore", "Type4MeReviseCore"]
+            + (hasSherpaFramework ? ["SherpaOnnxLib"] : [])
+            + (hasCppJiebaBridge ? ["CppJiebaBridge"] : []),
         path: "Type4Me",
         exclude: excludes,
         cSettings: hasSherpaFramework ? [.headerSearchPath("Bridge")] : [],
         swiftSettings: swiftDefines,
-        linkerSettings: (hasSherpaFramework ? [
+        linkerSettings: (hasSherpaFramework || hasCppJiebaBridge ? [
             .linkedLibrary("c++"),
+        ] : []) + (hasSherpaFramework ? [
             .linkedFramework("Accelerate"),
             .linkedFramework("Foundation"),
         ] : []) + [
@@ -47,10 +59,24 @@ var targets: [Target] = [
     ),
     .testTarget(
         name: "Type4MeTests",
-        dependencies: ["Type4Me", "Type4MeIntelliSenseCore"],
-        path: "Type4MeTests"
+        dependencies: ["Type4Me", "Type4MeIntelliSenseCore", "Type4MeReviseCore"],
+        path: "Type4MeTests",
+        swiftSettings: swiftDefines
     ),
 ]
+
+if hasCppJiebaBridge {
+    targets.insert(
+        .target(
+            name: "CppJiebaBridge",
+            path: "CppJiebaBridge",
+            exclude: ["CPPJIEBA_LICENSE", "JIEBA_LICENSE", "PROVENANCE.md", "marker"],
+            publicHeadersPath: "include",
+            cxxSettings: [.headerSearchPath("vendor")]
+        ),
+        at: 0
+    )
+}
 
 if hasSherpaFramework {
     targets.insert(
@@ -66,6 +92,7 @@ let package = Package(
         .executable(name: "Type4Me", targets: ["Type4Me"]),
         .library(name: "Type4MeUI", targets: ["Type4MeUI"]),
         .library(name: "Type4MeIntelliSenseCore", targets: ["Type4MeIntelliSenseCore"]),
+        .library(name: "Type4MeReviseCore", targets: ["Type4MeReviseCore"]),
     ],
     dependencies: [],
     targets: targets

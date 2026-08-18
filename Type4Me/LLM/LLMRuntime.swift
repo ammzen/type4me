@@ -6,15 +6,30 @@ struct ResolvedLLMRuntime: Sendable {
     let config: LLMConfig
 }
 
+struct ResolvedLLMRuntimeCacheEntry: Sendable {
+    let runtime: ResolvedLLMRuntime
+    let reused: Bool
+    let invalidated: (any LLMClient)?
+    let invalidationReasons: [String]
+}
+
 enum LLMRuntime {
-    static func resolve(isCloudMode: Bool = false) -> ResolvedLLMRuntime? {
+    static func resolve(
+        isCloudMode: Bool = false,
+        cache: inout LLMClientCache
+    ) -> ResolvedLLMRuntimeCacheEntry? {
+        let bypassProxy = ProxyBypassMode.current.bypassLLM
         #if HAS_CLOUD_SUBSCRIPTION
         if isCloudMode {
-            return ResolvedLLMRuntime(
+            let config = LLMConfig(apiKey: "", model: "cloud")
+            return resolveCached(
                 providerID: "cloud",
-                client: CloudLLMClient(),
-                config: LLMConfig(apiKey: "", model: "cloud")
-            )
+                config: config,
+                bypassProxy: bypassProxy,
+                cache: &cache
+            ) {
+                CloudLLMClient(bypassProxy: bypassProxy)
+            }
         }
         #endif
 
@@ -22,26 +37,40 @@ enum LLMRuntime {
         guard let config = KeychainService.loadLLMProviderConfig(for: provider)?.toLLMConfig() else {
             return nil
         }
-        return ResolvedLLMRuntime(
+        return resolveCached(
             providerID: provider.rawValue,
-            client: LLMClientFactory.make(for: provider),
-            config: config
+            config: config,
+            bypassProxy: bypassProxy,
+            cache: &cache
+        ) {
+            LLMClientFactory.make(for: provider, bypassProxy: bypassProxy)
+        }
+    }
+
+    static func resolveCached(
+        providerID: String,
+        config: LLMConfig,
+        bypassProxy: Bool,
+        cache: inout LLMClientCache,
+        makeClient: () -> any LLMClient
+    ) -> ResolvedLLMRuntimeCacheEntry {
+        let key = LLMClientCacheKey(
+            providerID: providerID,
+            apiKey: config.apiKey,
+            model: config.model,
+            baseURL: config.baseURL,
+            bypassProxy: bypassProxy
         )
-    }
-
-    static func currentClient(isCloudMode: Bool = false) -> any LLMClient {
-        #if HAS_CLOUD_SUBSCRIPTION
-        if isCloudMode { return CloudLLMClient() }
-        #endif
-
-        return LLMClientFactory.make(for: KeychainService.selectedLLMProvider)
-    }
-
-    static func currentConfig(isCloudMode: Bool = false) -> LLMConfig? {
-        #if HAS_CLOUD_SUBSCRIPTION
-        if isCloudMode { return LLMConfig(apiKey: "", model: "cloud") }
-        #endif
-
-        return KeychainService.loadLLMConfig()
+        let resolution = cache.resolve(key: key, makeClient: makeClient)
+        return ResolvedLLMRuntimeCacheEntry(
+            runtime: ResolvedLLMRuntime(
+                providerID: providerID,
+                client: resolution.client,
+                config: config
+            ),
+            reused: resolution.reused,
+            invalidated: resolution.invalidated,
+            invalidationReasons: resolution.reasons
+        )
     }
 }

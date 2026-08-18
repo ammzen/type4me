@@ -13,6 +13,7 @@ NOTARY_KEYCHAIN="${NOTARY_KEYCHAIN:-}"
 TIMESTAMP_URL="${TIMESTAMP_URL:-http://timestamp.apple.com/ts01}"
 SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
 KEEP_OUT_DIR="${KEEP_OUT_DIR:-0}"
+ENABLE_CPPJIEBA="${ENABLE_CPPJIEBA:-0}"
 
 case "$APP_FLAVOR" in
     public)
@@ -115,6 +116,10 @@ cleanup() {
         mv "$PROJECT_DIR/Type4Me/CloudSubscription/marker.hidden" \
            "$PROJECT_DIR/Type4Me/CloudSubscription/marker"
     fi
+    if [ -f "$PROJECT_DIR/CppJiebaBridge/marker.hidden" ]; then
+        mv "$PROJECT_DIR/CppJiebaBridge/marker.hidden" \
+           "$PROJECT_DIR/CppJiebaBridge/marker"
+    fi
 }
 trap cleanup EXIT
 
@@ -129,7 +134,9 @@ SHERPA_AVAILABLE="no"
 [ -f "$PROJECT_DIR/Frameworks/sherpa-onnx.xcframework/Info.plist" ] && SHERPA_AVAILABLE="yes"
 SUB_AVAILABLE="no"
 [ -f "$PROJECT_DIR/Type4Me/CloudSubscription/marker" ] && SUB_AVAILABLE="yes"
-BUILD_STATE="${VARIANT}-sherpa:${SHERPA_AVAILABLE}-sub:${SUB_AVAILABLE}"
+JIEBA_AVAILABLE="no"
+[ "$ENABLE_CPPJIEBA" = "1" ] && [ -f "$PROJECT_DIR/CppJiebaBridge/marker" ] && JIEBA_AVAILABLE="yes"
+BUILD_STATE="${VARIANT}-sherpa:${SHERPA_AVAILABLE}-sub:${SUB_AVAILABLE}-jieba:${JIEBA_AVAILABLE}"
 LAST_STATE_FILE="$PROJECT_DIR/.build/.variant-state"
 if [ -f "$LAST_STATE_FILE" ] && [ "$(cat "$LAST_STATE_FILE")" != "$BUILD_STATE" ]; then
     echo "Build state changed, cleaning build cache..."
@@ -148,6 +155,12 @@ if [ "$NEEDS_SUBSCRIPTION" = "0" ] && [ -f "$PROJECT_DIR/Type4Me/CloudSubscripti
        "$PROJECT_DIR/Type4Me/CloudSubscription/marker.hidden"
 fi
 
+if [ "$ENABLE_CPPJIEBA" != "1" ] && [ -f "$PROJECT_DIR/CppJiebaBridge/marker" ]; then
+    echo "Hiding optional CppJieba bridge for ${VARIANT} build..."
+    mv "$PROJECT_DIR/CppJiebaBridge/marker" \
+       "$PROJECT_DIR/CppJiebaBridge/marker.hidden"
+fi
+
 cat > "$OUT_DIR/build-info.txt" <<INFO
 app_name=$APP_NAME
 app_bundle_id=$APP_BUNDLE_ID
@@ -155,6 +168,7 @@ url_scheme=$URL_SCHEME
 app_flavor=$APP_FLAVOR
 variant=$VARIANT
 arch=$ARCH
+cppjieba=$JIEBA_AVAILABLE
 notary_profile=$NOTARY_PROFILE
 notary_keychain=$NOTARY_KEYCHAIN
 signing_identity=$SIGNING_IDENTITY

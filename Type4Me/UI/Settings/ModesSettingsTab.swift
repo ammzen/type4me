@@ -40,8 +40,10 @@ private struct RecordingTarget: Identifiable {
 struct ModesSettingsTab: View {
 
     var showsHeader = true
+    let draftCoordinator: SettingsDraftCoordinator
 
     @Environment(AppState.self) private var appState
+    @Environment(AskAnythingCoordinator.self) private var askAnythingCoordinator
     @State private var modes: [ProcessingMode] = ModeStorage().load()
     @State private var selectedModeId: UUID?
     @State private var recordingTarget: RecordingTarget?
@@ -54,6 +56,9 @@ struct ModesSettingsTab: View {
     @State private var draftDirty = false
     @State private var pendingSelection: UUID?
     @State private var selectedASRProvider: ASRProvider = KeychainService.selectedASRProvider
+    @State private var showClearAskAnythingConfirmation = false
+    @State private var askAnythingSettingsError: String?
+    @State private var translationStatusMessage: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -256,6 +261,42 @@ struct ModesSettingsTab: View {
             Text(L("「\(name)」有未保存的更改。切换前要保存吗？",
                    "\"\(name)\" has unsaved changes. Save before switching?"))
         }
+        .alert(
+            L("清空随便问历史", "Clear Ask Anything History"),
+            isPresented: $showClearAskAnythingConfirmation
+        ) {
+            Button(L("取消", "Cancel"), role: .cancel) {}
+            Button(L("全部删除", "Delete All"), role: .destructive) {
+                Task { await clearAskAnythingHistory() }
+            }
+        } message: {
+            Text(L(
+                "所有随便问会话、选中文本、问题和回答都会被永久删除。",
+                "All Ask Anything conversations, selected text, questions, and answers will be permanently deleted."
+            ))
+        }
+        .alert(
+            L("无法更新随便问设置", "Unable to Update Ask Anything Settings"),
+            isPresented: Binding(
+                get: { askAnythingSettingsError != nil },
+                set: { if !$0 { askAnythingSettingsError = nil } }
+            )
+        ) {
+            Button(L("好", "OK"), role: .cancel) { askAnythingSettingsError = nil }
+        } message: {
+            Text(askAnythingSettingsError ?? "")
+        }
+        .onAppear {
+            draftCoordinator.register(
+                .modes,
+                isDirty: { draftDirty },
+                save: saveDraftBeforeLeaving,
+                discard: discardDraftBeforeLeaving
+            )
+        }
+        .onDisappear {
+            draftCoordinator.unregister(.modes)
+        }
     }
 
     // MARK: - Selection with unsaved-changes guard
@@ -292,10 +333,20 @@ struct ModesSettingsTab: View {
             dragDots
                 .opacity(isHovered || isDragging ? 1 : 0)
 
-            Text(mode.name)
-                .font(.system(size: 13, weight: isActive ? .semibold : .medium))
-                .foregroundStyle(TF.settingsText)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(mode.name)
+                    .font(.system(size: 13, weight: isActive ? .semibold : .medium))
+                    .foregroundStyle(TF.settingsText)
+                    .lineLimit(1)
+                if mode.id == ProcessingMode.translationModeId,
+                   let code = mode.translationTargetLanguageCode,
+                   let target = TranslationLanguage(rawValue: code) {
+                    Text(L("目标：\(target.displayName)", "Target: \(target.displayName)"))
+                        .font(.system(size: 9))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                        .lineLimit(1)
+                }
+            }
 
             if mode.isBuiltin {
                 Text(L("内置", "BUILT-IN"))
@@ -371,7 +422,9 @@ struct ModesSettingsTab: View {
 
     @ViewBuilder
     private func modeDetail(_ mode: ProcessingMode) -> some View {
-        if mode.id == ProcessingMode.intelliSenseId {
+        if mode.id == ProcessingMode.translationModeId {
+            translationModeDetail(mode)
+        } else if mode.id == ProcessingMode.intelliSenseId {
             IntelliSenseModeDetail(
                 mode: mode,
                 onEditBinding: { editBinding(mode, $0) },
@@ -475,9 +528,104 @@ struct ModesSettingsTab: View {
     private func builtinIcon(for mode: ProcessingMode) -> String {
         switch mode.id {
         case ProcessingMode.formalWritingId: return "wand.and.stars"
+        case ProcessingMode.translationModeId: return "character.book.closed.fill"
         case ProcessingMode.macActionId: return "command.circle.fill"
         case ProcessingMode.selectionAskId: return "sparkle.magnifyingglass"
         default: return "bolt.fill"
+        }
+    }
+
+    private func translationModeDetail(_ mode: ProcessingMode) -> some View {
+        let currentCode = mode.translationTargetLanguageCode ?? TranslationLanguage.english.rawValue
+        let currentLanguage = TranslationLanguage(rawValue: currentCode)
+
+        return VStack(alignment: .leading, spacing: 18) {
+            builtinModeDetail(mode)
+
+            VStack(alignment: .leading, spacing: 7) {
+                fieldLabel(L("目标语言", "Target language"), L("所有快捷键共用", "Shared by all hotkeys"))
+
+                Picker(
+                    L("目标语言", "Target language"),
+                    selection: Binding(
+                        get: { currentCode },
+                        set: { updateTranslationTarget($0) }
+                    )
+                ) {
+                    if currentLanguage == nil {
+                        Text(L("暂不支持的语言（\(currentCode)）", "Unsupported language (\(currentCode))"))
+                            .tag(currentCode)
+                    }
+                    ForEach(TranslationLanguage.allCases) { language in
+                        Text(language.displayName).tag(language.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: 320, alignment: .leading)
+                .accessibilityLabel(L("翻译目标语言", "Translation target language"))
+                .accessibilityHint(L(
+                    "Type4Me 会自动识别口述语言并翻译为所选语言",
+                    "Type4Me automatically detects the spoken language and translates it to the selected language"
+                ))
+
+                Text(L(
+                    "Type4Me 会自动识别你的口述语言；下一次录音开始时会冻结当前目标语言。",
+                    "Type4Me automatically detects your spoken language. The current target is frozen when the next recording starts."
+                ))
+                .font(.system(size: 10))
+                .foregroundStyle(TF.settingsTextTertiary)
+                .lineSpacing(2)
+
+                if currentLanguage == nil {
+                    Label(
+                        L("这个语言代码来自较新版本。请选择一个当前支持的语言后再使用翻译模式。", "This language code came from a newer version. Select a supported language before using Translation."),
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsAccentAmber)
+                }
+
+                if let translationStatusMessage {
+                    Label(translationStatusMessage, systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(TF.settingsAccentGreen)
+                        .transition(.opacity)
+                }
+            }
+
+            HotkeySectionView(
+                bindings: mode.hotkeyBindings,
+                onEdit: { editBinding(mode, $0) },
+                onDelete: { deleteBinding(mode.id, $0) },
+                onAdd: { addBinding(mode) }
+            )
+
+            Text(L(
+                "翻译模式只翻译口述内容，不回答其中的问题，也不执行其中的命令。代码、路径、链接、数字和标识符会尽量保持原样。",
+                "Translation only translates what you dictate. It does not answer questions or execute commands found in the input. Code, paths, links, numbers, and identifiers are preserved whenever possible."
+            ))
+            .font(.system(size: 11))
+            .foregroundStyle(TF.settingsTextSecondary)
+            .lineSpacing(3)
+        }
+        .padding(.bottom, 8)
+    }
+
+    private func updateTranslationTarget(_ code: String) {
+        guard TranslationLanguage(rawValue: code) != nil,
+              let index = modes.firstIndex(where: { $0.id == ProcessingMode.translationModeId })
+        else { return }
+
+        modes[index].translationTargetLanguageCode = code
+        persistModes()
+        if let language = TranslationLanguage(rawValue: code) {
+            withAnimation(.easeOut(duration: 0.15)) {
+                translationStatusMessage = L(
+                    "目标语言已设为\(language.displayName)",
+                    "Target language set to \(language.displayName)"
+                )
+            }
         }
     }
 
@@ -507,6 +655,85 @@ struct ModesSettingsTab: View {
                     }
                 }
             }
+
+            askAnythingHistorySettings
+        }
+    }
+
+    private var askAnythingHistorySettings: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(L("会话历史", "Conversation History"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(TF.settingsText)
+                .padding(.bottom, 10)
+
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L("保存会话历史", "Save conversation history"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(TF.settingsText)
+                    Text(L(
+                        "关闭后，新会话只在当前运行期间保留；已有历史不会被删除。",
+                        "When off, new conversations last only for this run; existing history is kept."
+                    ))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                }
+                Spacer(minLength: 16)
+                Toggle("", isOn: Binding(
+                    get: { askAnythingCoordinator.historyEnabled },
+                    set: { askAnythingCoordinator.historyEnabled = $0 }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(askAnythingCoordinator.activeBinding != nil
+                          || askAnythingCoordinator.isRecordingFollowUp)
+            }
+            .padding(.bottom, 12)
+
+            Rectangle()
+                .fill(TF.settingsBorder)
+                .frame(height: 1)
+
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L("清空全部历史", "Clear all history"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(TF.settingsText)
+                    Text(L(
+                        "永久删除所有会话、选中文本、问题和回答。",
+                        "Permanently delete all conversations, selected text, questions, and answers."
+                    ))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                }
+                Spacer(minLength: 16)
+                Button(L("清空…", "Clear…"), role: .destructive) {
+                    showClearAskAnythingConfirmation = true
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(TF.settingsAccentRed)
+                .disabled(askAnythingCoordinator.activeBinding != nil
+                          || askAnythingCoordinator.isRecordingFollowUp)
+            }
+            .padding(.top, 12)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(TF.settingsCardAlt)
+        )
+    }
+
+    private func clearAskAnythingHistory() async {
+        do {
+            try await askAnythingCoordinator.clearHistory()
+            askAnythingSettingsError = nil
+        } catch {
+            askAnythingSettingsError = error.localizedDescription
         }
     }
 
@@ -643,12 +870,14 @@ struct ModesSettingsTab: View {
         persistModes()
     }
 
-    private func persistModes() {
+    @discardableResult
+    private func persistModes() -> Bool {
         do {
             try ModeStorage().save(modes)
         } catch {
             NSLog("[Type4Me] Failed to persist mode order/settings: %@", error.localizedDescription)
             DebugFileLogger.log("failed to persist mode order/settings: \(error)")
+            return false
         }
         appState.availableModes = modes
         NotificationCenter.default.post(name: .modesDidChange, object: nil)
@@ -657,6 +886,29 @@ struct ModesSettingsTab: View {
         } else if let fallback = modes.first {
             appState.currentMode = fallback
         }
+        return true
+    }
+
+    private func saveDraftBeforeLeaving() -> Bool {
+        guard draftDirty else { return true }
+        guard let draftMode,
+              let index = modes.firstIndex(where: { $0.id == draftMode.id })
+        else { return false }
+        let previous = modes[index]
+        modes[index] = draftMode
+        guard persistModes() else {
+            modes[index] = previous
+            return false
+        }
+        self.draftMode = nil
+        draftDirty = false
+        return true
+    }
+
+    private func discardDraftBeforeLeaving() {
+        draftMode = nil
+        draftDirty = false
+        pendingSelection = nil
     }
 
     private func deleteMode(_ id: UUID) {

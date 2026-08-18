@@ -3,7 +3,7 @@ import ApplicationServices
 import Foundation
 import Type4MeIntelliSenseCore
 
-struct CorrectionObservationContext: @unchecked Sendable {
+struct TrackedInjectionContext: @unchecked Sendable {
     let element: AXUIElement
     let processIdentifier: pid_t
     let bundleIdentifier: String
@@ -11,14 +11,61 @@ struct CorrectionObservationContext: @unchecked Sendable {
     let injectedRange: NSRange
     let beforeSelectedRange: NSRange?
     let afterSelectedRange: NSRange?
+    let placeholderCandidates: [String]
+    let sourceText: String
     let injectedText: String
     let sourceRecordID: String
     let modeID: UUID
+    let createdAt: Date
+
+    init(
+        element: AXUIElement,
+        processIdentifier: pid_t,
+        bundleIdentifier: String,
+        baselineValue: String,
+        injectedRange: NSRange,
+        beforeSelectedRange: NSRange?,
+        afterSelectedRange: NSRange?,
+        placeholderCandidates: [String],
+        sourceText: String,
+        injectedText: String,
+        sourceRecordID: String,
+        modeID: UUID,
+        createdAt: Date = Date()
+    ) {
+        self.element = element
+        self.processIdentifier = processIdentifier
+        self.bundleIdentifier = bundleIdentifier
+        self.baselineValue = baselineValue
+        self.injectedRange = injectedRange
+        self.beforeSelectedRange = beforeSelectedRange
+        self.afterSelectedRange = afterSelectedRange
+        self.placeholderCandidates = placeholderCandidates
+        self.sourceText = sourceText
+        self.injectedText = injectedText
+        self.sourceRecordID = sourceRecordID
+        self.modeID = modeID
+        self.createdAt = createdAt
+    }
 }
+
+typealias CorrectionObservationContext = TrackedInjectionContext
 
 struct TrackedInjectionResult: @unchecked Sendable {
     let outcome: InjectionOutcome
-    let observationContext: CorrectionObservationContext?
+    let context: TrackedInjectionContext?
+
+    var observationContext: TrackedInjectionContext? { context }
+
+    init(outcome: InjectionOutcome, context: TrackedInjectionContext?) {
+        self.outcome = outcome
+        self.context = context
+    }
+
+    init(outcome: InjectionOutcome, observationContext: TrackedInjectionContext?) {
+        self.outcome = outcome
+        self.context = observationContext
+    }
 }
 
 struct CorrectionCandidate: Equatable, Sendable {
@@ -36,6 +83,7 @@ enum CorrectionDiffRejection: String, Equatable, Sendable {
     case pureInsertionOrDeletion
     case ambiguousCJKReplacement
     case invalidCandidate
+    case lowAffinity
     case sensitiveContent
 }
 
@@ -95,17 +143,21 @@ enum CorrectionDiffAnalyzer {
            !(rawRemoved + rawInserted).contains(where: isLearnableCharacter) {
             return .rejected(.invalidCandidate)
         }
-        if rawRemoved.isEmpty || rawInserted.isEmpty {
-            let changedCharacters = rawRemoved + rawInserted
-            if changedCharacters.contains(where: isLearnableCharacter) {
-                return .rejected(.pureInsertionOrDeletion)
-            }
-        }
-
         let isCJKReplacement = !rawRemoved.isEmpty
             && !rawInserted.isEmpty
             && rawRemoved.allSatisfy(isCJK)
             && rawInserted.allSatisfy(isCJK)
+        let isMixedScriptReplacement = isCJKLatinReplacement(
+            removed: rawRemoved,
+            inserted: rawInserted
+        )
+        if isMixedScriptReplacement {
+            let cjkLength = rawRemoved.allSatisfy(isCJK) ? rawRemoved.count : rawInserted.count
+            let latinLength = rawRemoved.allSatisfy(isCJK) ? rawInserted.count : rawRemoved.count
+            guard cjkLength >= 2, latinLength >= 2 else {
+                return .rejected(.ambiguousCJKReplacement)
+            }
+        }
 
         // A multi-character Chinese replacement already carries a useful word
         // boundary. Expanding it with arbitrary neighboring Han characters is
@@ -117,19 +169,34 @@ enum CorrectionDiffAnalyzer {
                 return .rejected(.ambiguousCJKReplacement)
             }
         } else if rawRemoved.isEmpty || rawInserted.isEmpty {
+            let changedCharacters = rawRemoved + rawInserted
             let neighbors = [
                 adjacentCharacter(in: old, before: hunk.oldStart),
                 adjacentCharacter(in: old, at: hunk.oldEnd),
                 adjacentCharacter(in: new, before: hunk.newStart),
                 adjacentCharacter(in: new, at: hunk.newEnd),
             ].compactMap { $0 }
-            guard neighbors.contains(where: { $0.isLetter || $0.isNumber }),
+            // A one-sided diff is valid only when it edits the interior or edge
+            // of an existing Latin/technical token. Adding/removing a whole
+            // word necessarily includes a hard boundary and stays rejected.
+            let changesTokenInterior = !changedCharacters.isEmpty
+                && changedCharacters.allSatisfy(isTechnicalTokenCharacter)
+                && neighbors.contains(where: isLatinTokenCharacter)
+            let mergesOrSplitsTechnicalToken = !changedCharacters.isEmpty
+                && changedCharacters.allSatisfy(\.isWhitespace)
+                && neighbors.filter(isLatinTokenCharacter).count >= 2
+            guard changesTokenInterior || mergesOrSplitsTechnicalToken,
                   !neighbors.contains(where: isCJK)
-            else { return .rejected(.invalidCandidate) }
+            else { return .rejected(.pureInsertionOrDeletion) }
         }
 
-        let shouldExpandContext = !isCJKReplacement
-        let contextLimit = shouldExpandContext ? 32 : 0
+        // A Han transliteration corrected to a Latin technical/name token (or
+        // the reverse) already has a hard script boundary. Expanding through
+        // Character.isLetter is unsafe because Swift correctly treats Han as
+        // letters too, which previously turned “杰瑞 → Jerry” into a whole-
+        // sentence replacement candidate.
+        let shouldExpandContext = !isCJKReplacement && !isMixedScriptReplacement
+        let contextLimit = shouldExpandContext ? 64 : 0
 
         var leftExpansion = 0
         while hunk.oldStart > injectionStart,
@@ -169,6 +236,23 @@ enum CorrectionDiffAnalyzer {
         }
         guard !isSensitive(wrong), !isSensitive(corrected) else {
             return .rejected(.sensitiveContent)
+        }
+        if wrong.contains(where: isLatinTokenCharacter)
+            || corrected.contains(where: isLatinTokenCharacter) {
+            guard TechnicalTokenBoundaryResolver.isSingleStableToken(wrong),
+                  TechnicalTokenBoundaryResolver.isSingleStableToken(corrected)
+            else { return .rejected(.invalidCandidate) }
+        }
+        // Edit distance is not meaningful across writing systems: every
+        // character in “杰瑞 → Jerry” differs even though it is a compact
+        // lexical correction. ImmediateCorrectionAnalyzer separately verifies
+        // the Han token boundary with the hybrid segmenter.
+        if !isMixedScriptReplacement {
+            let maximumLength = max(wrong.count, corrected.count)
+            let maximumDistance = max(3, Int(ceil(Double(maximumLength) * 0.4)))
+            guard editDistance(wrong, corrected) <= maximumDistance else {
+                return .rejected(.invalidCandidate)
+            }
         }
         return .candidate(wrongText: wrong, correctedText: corrected)
     }
@@ -276,6 +360,31 @@ enum CorrectionDiffAnalyzer {
         character.isLetter || character.isNumber || isCJK(character)
     }
 
+    private static func isTechnicalTokenCharacter(_ character: Character) -> Bool {
+        isLatinTokenCharacter(character) || ".-_+#".contains(character)
+    }
+
+    private static func isLatinTokenCharacter(_ character: Character) -> Bool {
+        character.isNumber || character.unicodeScalars.allSatisfy { scalar in
+            scalar.value < 128 && CharacterSet.letters.contains(scalar)
+        }
+    }
+
+    private static func isCJKLatinReplacement(
+        removed: [Character],
+        inserted: [Character]
+    ) -> Bool {
+        guard !removed.isEmpty, !inserted.isEmpty else { return false }
+        let removedIsCJK = removed.allSatisfy(isCJK)
+        let insertedIsCJK = inserted.allSatisfy(isCJK)
+        let removedIsLatin = removed.allSatisfy(isTechnicalTokenCharacter)
+            && removed.contains(where: isLatinTokenCharacter)
+        let insertedIsLatin = inserted.allSatisfy(isTechnicalTokenCharacter)
+            && inserted.contains(where: isLatinTokenCharacter)
+        return (removedIsCJK && insertedIsLatin)
+            || (removedIsLatin && insertedIsCJK)
+    }
+
     private static func isCJK(_ character: Character) -> Bool {
         character.unicodeScalars.contains { scalar in
             switch scalar.value {
@@ -289,7 +398,7 @@ enum CorrectionDiffAnalyzer {
 
     private static func isValidCandidate(_ text: String) -> Bool {
         guard !text.contains("\n"), !text.contains("\r") else { return false }
-        guard (2...32).contains(text.count) else { return false }
+        guard (2...64).contains(text.count) else { return false }
         guard text.split(whereSeparator: { $0.isWhitespace }).count <= 5 else { return false }
         return text.contains(where: isLearnableCharacter)
     }
@@ -340,6 +449,27 @@ enum CorrectionDiffAnalyzer {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         return regex.firstMatch(in: text, range: range) != nil
+    }
+
+    private static func editDistance(_ lhs: String, _ rhs: String) -> Int {
+        let left = Array(lhs.precomposedStringWithCanonicalMapping)
+        let right = Array(rhs.precomposedStringWithCanonicalMapping)
+        var previous = Array(0...right.count)
+        for (leftIndex, leftCharacter) in left.enumerated() {
+            var current = Array(repeating: 0, count: right.count + 1)
+            current[0] = leftIndex + 1
+            for (rightIndex, rightCharacter) in right.enumerated() {
+                let substitution = previous[rightIndex]
+                    + (leftCharacter == rightCharacter ? 0 : 1)
+                current[rightIndex + 1] = min(
+                    previous[rightIndex + 1] + 1,
+                    current[rightIndex] + 1,
+                    substitution
+                )
+            }
+            previous = current
+        }
+        return previous[right.count]
     }
 }
 
@@ -461,28 +591,51 @@ final class PostInjectionLearningCoordinator: NSObject {
     static let shared = PostInjectionLearningCoordinator()
 
     nonisolated static let enabledDefaultsKey = "tf_autoCorrectionLearningEnabled"
-    nonisolated static let observationDuration: Duration = .seconds(60)
-    nonisolated static let debounceDuration: Duration = .seconds(4)
 
     private struct ActiveObservation {
         let context: CorrectionObservationContext
         let observer: AXObserver
         let observesElementDestruction: Bool
         var options: PostInjectionLearningOptions
+        let startedAt: Date
+        let baselineVisibleValue: String
+        let visibleInjectedRange: NSRange
+        let visibleInjectedText: String
+        var lastRawFullValue: String
+        var lastVisibleFullValue: String
+        var lastReliableVisibleInjectedText: String
+        var lastReliableObservedAt: Date
+        var latestResolution: InjectedTextResolution
+        var hasObservedVisibleChanges: Bool
+        var lastSelectedRange: NSRange?
+    }
+
+    private struct PendingCorrectionCandidate {
+        let candidate: CorrectionCandidate
+        let observedText: String
     }
 
     private var active: ActiveObservation?
     private var timeoutTask: Task<Void, Never>?
-    private var debounceTask: Task<Void, Never>?
-    private var latestObservedValue: String?
+    private var stableWindowTask: Task<Void, Never>?
+    private var readRetryTask: Task<Void, Never>?
+    private var candidatePresentationTask: Task<Void, Never>?
+    private var pendingCorrectionCandidate: PendingCorrectionCandidate?
     private var handledCorrectionCandidate: CorrectionCandidate?
     /// Keep the panel truly lazy. `cancelObservation()` runs at the start of
     /// every recording, including when correction learning is disabled; using
     /// a Swift `lazy` property there would still instantiate its NSHostingView.
     private var panelController: CorrectionLearningPanelController?
     private let learningStore = CorrectionLearningStore()
+    private let historyStore: HistoryStore
+    private let timing: UserEditObservationTiming
 
-    override init() {
+    init(
+        historyStore: HistoryStore = HistoryStore(),
+        timing: UserEditObservationTiming = .production
+    ) {
+        self.historyStore = historyStore
+        self.timing = timing
         super.init()
         NotificationCenter.default.addObserver(
             self,
@@ -490,10 +643,17 @@ final class PostInjectionLearningCoordinator: NSObject {
             name: .intelliSenseSettingsDidChange,
             object: nil
         )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(applicationDidTerminate(_:)),
+            name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil
+        )
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
     var isPanelControllerLoaded: Bool { panelController != nil }
@@ -510,15 +670,25 @@ final class PostInjectionLearningCoordinator: NSObject {
         _ context: CorrectionObservationContext,
         options: PostInjectionLearningOptions
     ) {
-        cancelObservation()
+        finalizeObservation(reason: .cancelled, hidePanel: true)
         guard Self.supports(modeID: context.modeID),
               options.correctionEnabled || options.expressionLearningEnabled
         else { return }
+
+        let baselineProjection = VisibleTextProjection.project(context.baselineValue)
+        guard let visibleInjectedRange = baselineProjection.projectedRange(
+            from: context.injectedRange
+        ) else {
+            recordUnavailable(context: context)
+            return
+        }
+        let visibleInjectedText = VisibleTextProjection.project(context.injectedText).text
 
         var observer: AXObserver?
         let createStatus = AXObserverCreate(context.processIdentifier, correctionAXObserverCallback, &observer)
         guard createStatus == .success, let observer else {
             DebugFileLogger.log("correction observer skipped: create status=\(createStatus.rawValue) bundle=\(context.bundleIdentifier)")
+            recordUnavailable(context: context)
             return
         }
 
@@ -531,6 +701,7 @@ final class PostInjectionLearningCoordinator: NSObject {
         )
         guard addStatus == .success else {
             DebugFileLogger.log("correction observer skipped: add status=\(addStatus.rawValue) bundle=\(context.bundleIdentifier)")
+            recordUnavailable(context: context)
             return
         }
 
@@ -550,16 +721,38 @@ final class PostInjectionLearningCoordinator: NSObject {
             context: context,
             observer: observer,
             observesElementDestruction: destructionStatus == .success,
-            options: options
+            options: options,
+            startedAt: Date(),
+            baselineVisibleValue: baselineProjection.text,
+            visibleInjectedRange: visibleInjectedRange,
+            visibleInjectedText: visibleInjectedText,
+            lastRawFullValue: context.baselineValue,
+            lastVisibleFullValue: baselineProjection.text,
+            lastReliableVisibleInjectedText: visibleInjectedText,
+            lastReliableObservedAt: Date(),
+            latestResolution: InjectedTextResolution(
+                text: visibleInjectedText,
+                confidence: .exact,
+                changedInsideInjection: false,
+                changedOutsideInjection: false,
+                failure: nil
+            ),
+            hasObservedVisibleChanges: false,
+            lastSelectedRange: context.afterSelectedRange
         )
-        latestObservedValue = context.baselineValue
         handledCorrectionCandidate = nil
+        pendingCorrectionCandidate = nil
         DebugFileLogger.log("correction observer started: bundle=\(context.bundleIdentifier) injectedLength=\(context.injectedText.count)")
+        Task { await UserEditObservationMetrics.shared.record(.observationStarted) }
 
         timeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.observationDuration)
+            guard let self else { return }
+            try? await Task.sleep(for: self.timing.observationTimeout)
             guard !Task.isCancelled else { return }
-            self?.finishObservation(hidePanel: self?.handledCorrectionCandidate == nil)
+            self.finalizeObservation(
+                reason: .timeout,
+                hidePanel: self.handledCorrectionCandidate == nil
+            )
         }
     }
 
@@ -576,57 +769,108 @@ final class PostInjectionLearningCoordinator: NSObject {
     }
 
     func cancelObservation() {
-        finishObservation(hidePanel: true)
+        finalizeObservation(reason: .cancelled, hidePanel: true)
     }
 
-    private func finishObservation(hidePanel: Bool) {
-        timeoutTask?.cancel()
-        debounceTask?.cancel()
-        timeoutTask = nil
-        debounceTask = nil
-        if let active {
-            AXObserverRemoveNotification(
-                active.observer,
-                active.context.element,
-                kAXValueChangedNotification as CFString
-            )
-            if active.observesElementDestruction {
-                AXObserverRemoveNotification(
-                    active.observer,
-                    active.context.element,
-                    kAXUIElementDestroyedNotification as CFString
-                )
-            }
-            CFRunLoopRemoveSource(
-                CFRunLoopGetMain(),
-                AXObserverGetRunLoopSource(active.observer),
-                CFRunLoopMode.commonModes
+    func finalizeBeforeNextRecording() {
+        finalizeObservation(reason: .nextRecording, hidePanel: true)
+    }
+
+    func finalizeBeforeRevise() {
+        finalizeObservation(reason: .reviseStarted, hidePanel: true)
+    }
+
+    private func recordUnavailable(context: CorrectionObservationContext) {
+        Task {
+            _ = await historyStore.updateUserEditObservation(
+                recordID: context.sourceRecordID,
+                text: nil,
+                status: .unavailable,
+                observedAt: nil
             )
         }
-        if let active,
-           active.options.expressionLearningEnabled,
-           let latestObservedValue {
-            recordExpressionSample(active: active, finalValue: latestObservedValue)
+    }
+
+    private func finalizeObservation(
+        reason: UserEditObservationEndReason,
+        hidePanel: Bool
+    ) {
+        guard var observation = active else {
+            if hidePanel { panelController?.hide() }
+            return
         }
+        // Clear active first. All callbacks run on MainActor, so this is the
+        // single atomic finalization gate for every end path.
         active = nil
-        latestObservedValue = nil
+        timeoutTask?.cancel()
+        stableWindowTask?.cancel()
+        readRetryTask?.cancel()
+        candidatePresentationTask?.cancel()
+        timeoutTask = nil
+        stableWindowTask = nil
+        readRetryTask = nil
+        candidatePresentationTask = nil
+        pendingCorrectionCandidate = nil
+
+        var effectiveReason = reason
+        if reason != .valueCleared,
+           reason != .structureChanged,
+           let currentSnapshot = copyObservedContentSnapshot(
+               for: observation
+           ) {
+            switch visibleTransition(currentSnapshot, observation: observation) {
+            case .valueCleared:
+                effectiveReason = .valueCleared
+            case .structureChanged:
+                effectiveReason = .structureChanged
+            case .changed:
+                applyResolution(
+                    rawValue: currentSnapshot.rawValue,
+                    visibleValue: currentSnapshot.visibleValue,
+                    to: &observation
+                )
+            case .unchanged:
+                break
+            }
+        }
+
+        AXObserverRemoveNotification(
+            observation.observer,
+            observation.context.element,
+            kAXValueChangedNotification as CFString
+        )
+        if observation.observesElementDestruction {
+            AXObserverRemoveNotification(
+                observation.observer,
+                observation.context.element,
+                kAXUIElementDestroyedNotification as CFString
+            )
+        }
+        CFRunLoopRemoveSource(
+            CFRunLoopGetMain(),
+            AXObserverGetRunLoopSource(observation.observer),
+            CFRunLoopMode.commonModes
+        )
+
+        settleHistoryAndExpression(observation: observation, reason: effectiveReason)
+        Task {
+            await UserEditObservationMetrics.shared.record(
+                .observationFinalized,
+                reason: effectiveReason.rawValue
+            )
+        }
         handledCorrectionCandidate = nil
         if hidePanel { panelController?.hide() }
     }
 
     fileprivate func accessibilityValueDidChange(element: AXUIElement) {
         guard let active, CFEqual(active.context.element, element) else { return }
-        debounceTask?.cancel()
-        debounceTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.debounceDuration)
-            guard !Task.isCancelled else { return }
-            self?.analyzeCurrentValue()
-        }
+        captureCurrentValue(isRetry: false)
     }
 
     fileprivate func accessibilityElementWasDestroyed(element: AXUIElement) {
         guard let active, CFEqual(active.context.element, element) else { return }
-        finishObservation(hidePanel: true)
+        finalizeObservation(reason: .elementDestroyed, hidePanel: true)
     }
 
     @objc private func settingsDidChange() {
@@ -635,7 +879,7 @@ final class PostInjectionLearningCoordinator: NSObject {
             let settings = await IntelliSenseSettingsStore.shared.load()
             guard var active = self.active else { return }
             if settings.isBlacklisted(bundleIdentifier: active.context.bundleIdentifier) {
-                self.finishObservation(hidePanel: true)
+                self.finalizeObservation(reason: .appBlacklisted, hidePanel: true)
                 return
             }
             active.options.correctionEnabled = active.options.correctionEnabled
@@ -643,56 +887,287 @@ final class PostInjectionLearningCoordinator: NSObject {
             active.options.expressionLearningEnabled = active.options.expressionLearningEnabled
                 && settings.expressionLearningEnabled
             guard active.options.correctionEnabled || active.options.expressionLearningEnabled else {
-                self.finishObservation(hidePanel: true)
+                self.finalizeObservation(reason: .settingsDisabled, hidePanel: true)
                 return
             }
             self.active = active
         }
     }
 
-    private func analyzeCurrentValue() {
-        guard let active else { return }
-        guard let currentValue = copyStringAttribute(kAXValueAttribute as CFString, from: active.context.element) else {
-            DebugFileLogger.log("correction observer stopped: unreadable value bundle=\(active.context.bundleIdentifier)")
-            cancelObservation()
+    @objc private func applicationDidTerminate(_ notification: Notification) {
+        guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
+            as? NSRunningApplication,
+              application.processIdentifier == active?.context.processIdentifier
+        else { return }
+        finalizeObservation(reason: .appTerminated, hidePanel: true)
+    }
+
+    private func captureCurrentValue(isRetry: Bool) {
+        guard var observation = active else { return }
+        guard let currentSnapshot = copyObservedContentSnapshot(for: observation) else {
+            if !isRetry {
+                readRetryTask?.cancel()
+                readRetryTask = Task { [weak self] in
+                    guard let self else { return }
+                    try? await Task.sleep(for: self.timing.readRetryDelay)
+                    guard !Task.isCancelled else { return }
+                    self.captureCurrentValue(isRetry: true)
+                }
+            } else {
+                DebugFileLogger.log(
+                    "user edit observation finalized: reason=readFailure "
+                        + "bundle=\(observation.context.bundleIdentifier)"
+                )
+                finalizeObservation(reason: .readFailure, hidePanel: true)
+            }
             return
         }
-        guard !currentValue.isEmpty else {
-            cancelObservation()
+        readRetryTask?.cancel()
+        readRetryTask = nil
+        switch visibleTransition(currentSnapshot, observation: observation) {
+        case .valueCleared:
+            finalizeObservation(reason: .valueCleared, hidePanel: true)
             return
+        case .structureChanged:
+            finalizeObservation(reason: .structureChanged, hidePanel: true)
+            return
+        case .unchanged:
+            observation.lastRawFullValue = currentSnapshot.rawValue
+            observation.lastSelectedRange = currentSnapshot.selectedRange
+            active = observation
+            return
+        case .changed:
+            break
         }
-        latestObservedValue = currentValue
 
-        guard active.options.correctionEnabled, handledCorrectionCandidate == nil else { return }
+        observation.lastRawFullValue = currentSnapshot.rawValue
+        observation.lastSelectedRange = currentSnapshot.selectedRange
+        applyResolution(
+            rawValue: currentSnapshot.rawValue,
+            visibleValue: currentSnapshot.visibleValue,
+            to: &observation
+        )
+        active = observation
 
-        switch CorrectionDiffAnalyzer.analyze(
-            baseline: active.context.baselineValue,
-            injectedRange: active.context.injectedRange,
-            current: currentValue
-        ) {
+        candidatePresentationTask?.cancel()
+        candidatePresentationTask = nil
+        pendingCorrectionCandidate = nil
+        if observation.latestResolution.confidence != .ambiguous,
+           observation.lastReliableVisibleInjectedText != observation.visibleInjectedText {
+            let expectedText = observation.lastReliableVisibleInjectedText
+            candidatePresentationTask = Task { [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(for: self.timing.candidatePresentationDelay)
+                guard !Task.isCancelled else { return }
+                self.presentPendingCandidate(expectedText: expectedText)
+            }
+        }
+
+        stableWindowTask?.cancel()
+        stableWindowTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: self.timing.stableWindow)
+            guard !Task.isCancelled, let active = self.active else { return }
+            guard let current = self.copyObservedContentSnapshot(for: active) else {
+                self.captureCurrentValue(isRetry: false)
+                return
+            }
+            guard !current.isPlaceholder,
+                  current.visibleValue == active.lastVisibleFullValue
+            else {
+                self.captureCurrentValue(isRetry: false)
+                return
+            }
+            self.analyzeStableValue()
+        }
+    }
+
+    private func applyResolution(
+        rawValue: String,
+        visibleValue: String,
+        to observation: inout ActiveObservation
+    ) {
+        observation.lastRawFullValue = rawValue
+        observation.lastVisibleFullValue = visibleValue
+        observation.hasObservedVisibleChanges = true
+        let resolution = InjectedTextResolver.resolve(
+            baseline: observation.baselineVisibleValue,
+            injectedRange: observation.visibleInjectedRange,
+            current: visibleValue,
+            budget: timing.resolverBudget
+        )
+        observation.latestResolution = resolution
+        let resolutionConfidence = resolution.confidence
+        let resolutionFailure = resolution.failure?.rawValue
+        Task {
+            let event: UserEditObservationMetrics.Event
+            switch resolutionConfidence {
+            case .exact: event = .snapshotExact
+            case .anchored: event = .snapshotAnchored
+            case .ambiguous: event = .snapshotAmbiguous
+            }
+            await UserEditObservationMetrics.shared.record(
+                event,
+                reason: resolutionFailure
+            )
+        }
+        guard resolution.confidence != .ambiguous,
+              let resolvedText = resolution.text,
+              !resolvedText.isEmpty
+        else { return }
+        observation.lastReliableVisibleInjectedText = resolvedText
+        observation.lastReliableObservedAt = Date()
+    }
+
+    private func visibleTransition(
+        _ snapshot: ObservedContentSnapshot,
+        observation: ActiveObservation
+    ) -> UserEditVisibleTransition {
+        UserEditVisibleStateMachine.classify(
+            currentVisibleValue: snapshot.visibleValue,
+            isPlaceholder: snapshot.isPlaceholder,
+            baselineVisibleValue: observation.baselineVisibleValue,
+            visibleInjectedRange: observation.visibleInjectedRange,
+            visibleInjectedText: observation.visibleInjectedText,
+            lastReliableVisibleInjectedText: observation.lastReliableVisibleInjectedText,
+            previousVisibleFullValue: observation.lastVisibleFullValue
+        )
+    }
+
+    private func analyzeStableValue() {
+        guard let observation = active,
+              observation.options.correctionEnabled,
+              handledCorrectionCandidate == nil,
+              observation.lastReliableVisibleInjectedText != observation.visibleInjectedText
+        else { return }
+        let sourceRecordID = observation.context.sourceRecordID
+        let original = observation.visibleInjectedText
+        let edited = observation.lastReliableVisibleInjectedText
+        Task { [weak self] in
+            let result = await ImmediateCorrectionAnalyzer.analyze(
+                original: original,
+                edited: edited
+            )
+            guard let self,
+                  self.active?.context.sourceRecordID == sourceRecordID,
+                  self.active?.lastReliableVisibleInjectedText == edited
+            else { return }
+            self.stageCandidateResult(
+                result,
+                observation: observation,
+                observedText: edited
+            )
+        }
+    }
+
+    private func stageCandidateResult(
+        _ result: CorrectionDiffResult,
+        observation: ActiveObservation,
+        observedText: String
+    ) {
+        guard handledCorrectionCandidate == nil else { return }
+        switch result {
         case .candidate(let wrongText, let correctedText):
             let candidate = CorrectionCandidate(
                 wrongText: wrongText,
                 correctedText: correctedText,
-                sourceRecordID: active.context.sourceRecordID,
-                bundleIdentifier: active.context.bundleIdentifier
+                sourceRecordID: observation.context.sourceRecordID,
+                bundleIdentifier: observation.context.bundleIdentifier
             )
-            handledCorrectionCandidate = candidate
-            let panelController = panelController ?? CorrectionLearningPanelController()
-            self.panelController = panelController
-            panelController.show(
+            pendingCorrectionCandidate = PendingCorrectionCandidate(
                 candidate: candidate,
-                onLearn: { [weak self] in self?.learn(candidate) },
-                onIgnore: { [weak self] in self?.panelController?.hide() }
+                observedText: observedText
             )
         case .rejected(let reason):
-            DebugFileLogger.log("correction candidate rejected: reason=\(reason.rawValue) bundle=\(active.context.bundleIdentifier)")
+            DebugFileLogger.log("correction candidate rejected: reason=\(reason.rawValue) bundle=\(observation.context.bundleIdentifier)")
+            Task {
+                await UserEditObservationMetrics.shared.record(
+                    .candidateRejected,
+                    reason: reason.rawValue
+                )
+            }
         }
+    }
+
+    private func presentPendingCandidate(expectedText: String) {
+        candidatePresentationTask = nil
+        guard handledCorrectionCandidate == nil,
+              let active,
+              active.lastReliableVisibleInjectedText == expectedText,
+              let pending = pendingCorrectionCandidate,
+              pending.observedText == expectedText
+        else { return }
+
+        let candidate = pending.candidate
+        pendingCorrectionCandidate = nil
+        handledCorrectionCandidate = candidate
+        Task { await UserEditObservationMetrics.shared.record(.candidateDetected) }
+        let panelController = panelController ?? CorrectionLearningPanelController()
+        self.panelController = panelController
+        panelController.show(
+            candidate: candidate,
+            onLearn: { [weak self] in self?.learn(candidate) },
+            onIgnore: { [weak self] in
+                Task { await UserEditObservationMetrics.shared.record(.candidateIgnored) }
+                self?.panelController?.hide()
+            }
+        )
+    }
+
+    private func settleHistoryAndExpression(
+        observation: ActiveObservation,
+        reason: UserEditObservationEndReason
+    ) {
+        let settlement = UserEditObservationSettlement.resolve(
+            original: observation.visibleInjectedText,
+            lastReliableText: observation.lastReliableVisibleInjectedText,
+            latestResolutionConfidence: observation.latestResolution.confidence,
+            hasObservedExternalChanges: observation.hasObservedVisibleChanges,
+            endReason: reason
+        )
+        let recordID = observation.context.sourceRecordID
+        let observedAt = observation.lastReliableObservedAt
+
+        Task {
+            let updated = await historyStore.updateUserEditObservation(
+                recordID: recordID,
+                text: settlement.text,
+                status: settlement.status,
+                observedAt: observedAt
+            )
+            if !updated {
+                await UserEditObservationMetrics.shared.record(.historyUpdateFailed)
+                DebugFileLogger.log(
+                    "user edit observation history update failed: status=\(settlement.status.rawValue)"
+                )
+            } else {
+                await UserEditObservationMetrics.shared.record(.historyUpdateSucceeded)
+                await BatchCorrectionInferenceCoordinator.shared.schedule(
+                    historyStore: historyStore
+                )
+            }
+        }
+
+        guard observation.options.expressionLearningEnabled,
+              settlement.text != nil,
+              settlement.classification == .expressionEdit
+                || settlement.classification == .mixedEdit
+        else { return }
+        recordExpressionSample(
+            active: observation,
+            finalValue: observation.lastVisibleFullValue
+        )
     }
 
     private func learn(_ candidate: CorrectionCandidate) {
         do {
             try learningStore.learn(candidate)
+            Task { await UserEditObservationMetrics.shared.record(.candidateAccepted) }
+            Task {
+                await HybridChineseWordSegmenter.shared.insertConfirmedUserWord(
+                    candidate.correctedText
+                )
+            }
             panelController?.showLearned()
         } catch {
             DebugFileLogger.log("correction learning save failed: bundle=\(candidate.bundleIdentifier) error=\(error.localizedDescription)")
@@ -702,7 +1177,9 @@ final class PostInjectionLearningCoordinator: NSObject {
 
     private func recordExpressionSample(active: ActiveObservation, finalValue: String) {
         guard var styleValue = observedInjectedText(
-            context: active.context,
+            baselineValue: active.baselineVisibleValue,
+            injectedRange: active.visibleInjectedRange,
+            injectedText: active.visibleInjectedText,
             currentValue: finalValue
         ) else { return }
         if let candidate = handledCorrectionCandidate,
@@ -714,20 +1191,22 @@ final class PostInjectionLearningCoordinator: NSObject {
             createdAt: Date(),
             appBundleIdentifier: active.context.bundleIdentifier,
             appCategory: active.options.appCategory,
-            injectedText: active.context.injectedText,
+            sourceText: active.context.sourceText,
+            injectedText: active.visibleInjectedText,
             finalObservedText: styleValue,
             correctionCandidateRange: nil
         )
+        let bundleIdentifier = active.context.bundleIdentifier
         Task {
             do {
                 let settings = await IntelliSenseSettingsStore.shared.load()
                 guard settings.expressionLearningEnabled,
-                      !settings.isBlacklisted(bundleIdentifier: active.context.bundleIdentifier)
+                      !settings.isBlacklisted(bundleIdentifier: bundleIdentifier)
                 else { return }
                 try await ExpressionProfileStore.shared.record(observation)
             } catch {
                 DebugFileLogger.log(
-                    "expression profile save failed bundle=\(active.context.bundleIdentifier) "
+                    "expression profile save failed bundle=\(bundleIdentifier) "
                         + "error=\(error.localizedDescription)"
                 )
             }
@@ -735,17 +1214,19 @@ final class PostInjectionLearningCoordinator: NSObject {
     }
 
     private func observedInjectedText(
-        context: CorrectionObservationContext,
+        baselineValue: String,
+        injectedRange: NSRange,
+        injectedText: String,
         currentValue: String
     ) -> String? {
-        let baseline = context.baselineValue as NSString
-        guard context.injectedRange.location >= 0,
-              NSMaxRange(context.injectedRange) <= baseline.length
+        let baseline = baselineValue as NSString
+        guard injectedRange.location >= 0,
+              NSMaxRange(injectedRange) <= baseline.length
         else { return nil }
-        let prefix = baseline.substring(to: context.injectedRange.location)
-        let suffix = baseline.substring(from: NSMaxRange(context.injectedRange))
+        let prefix = baseline.substring(to: injectedRange.location)
+        let suffix = baseline.substring(from: NSMaxRange(injectedRange))
         guard currentValue.hasPrefix(prefix), currentValue.hasSuffix(suffix) else {
-            return currentValue == context.baselineValue ? context.injectedText : nil
+            return currentValue == baselineValue ? injectedText : nil
         }
         let start = currentValue.index(currentValue.startIndex, offsetBy: prefix.count)
         let end = currentValue.index(currentValue.endIndex, offsetBy: -suffix.count)
@@ -753,37 +1234,61 @@ final class PostInjectionLearningCoordinator: NSObject {
         return String(currentValue[start..<end])
     }
 
-    private func stopObservingWithoutHidingPanel() {
-        timeoutTask?.cancel()
-        debounceTask?.cancel()
-        timeoutTask = nil
-        debounceTask = nil
-        if let active {
-            AXObserverRemoveNotification(
-                active.observer,
-                active.context.element,
-                kAXValueChangedNotification as CFString
-            )
-            if active.observesElementDestruction {
-                AXObserverRemoveNotification(
-                    active.observer,
-                    active.context.element,
-                    kAXUIElementDestroyedNotification as CFString
-                )
-            }
-            CFRunLoopRemoveSource(
-                CFRunLoopGetMain(),
-                AXObserverGetRunLoopSource(active.observer),
-                CFRunLoopMode.commonModes
-            )
-        }
-        active = nil
-    }
-
     private func copyStringAttribute(_ attribute: CFString, from element: AXUIElement) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
         return value as? String
+    }
+
+    private struct ObservedContentSnapshot {
+        let rawValue: String
+        let visibleValue: String
+        let isPlaceholder: Bool
+        let selectedRange: NSRange?
+    }
+
+    private func copyObservedContentSnapshot(
+        for observation: ActiveObservation
+    ) -> ObservedContentSnapshot? {
+        let element = observation.context.element
+        guard let rawValue = copyStringAttribute(kAXValueAttribute as CFString, from: element) else {
+            return nil
+        }
+        let selectedRange = copyRangeAttribute(
+            kAXSelectedTextRangeAttribute as CFString,
+            from: element
+        )
+        let contentValue = UserEditObservedValueSanitizer.contentValue(
+            rawValue,
+            placeholderCandidates: observation.context.placeholderCandidates.map(Optional.some) + [
+                copyStringAttribute(kAXPlaceholderValueAttribute as CFString, from: element),
+                copyStringAttribute(kAXDescriptionAttribute as CFString, from: element),
+            ]
+        )
+        let isPlaceholder = contentValue.isEmpty && !rawValue.isEmpty
+        return ObservedContentSnapshot(
+            rawValue: rawValue,
+            visibleValue: isPlaceholder
+                ? ""
+                : VisibleTextProjection.project(contentValue).text,
+            isPlaceholder: isPlaceholder,
+            selectedRange: selectedRange
+        )
+    }
+
+    private func copyRangeAttribute(_ attribute: CFString, from element: AXUIElement) -> NSRange? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
+              let value,
+              CFGetTypeID(value) == AXValueGetTypeID()
+        else { return nil }
+        let axValue = unsafeDowncast(value, to: AXValue.self)
+        guard AXValueGetType(axValue) == .cfRange else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(axValue, .cfRange, &range), range.location >= 0, range.length >= 0 else {
+            return nil
+        }
+        return NSRange(location: range.location, length: range.length)
     }
 }
 

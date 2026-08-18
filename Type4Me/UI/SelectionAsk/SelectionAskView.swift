@@ -6,8 +6,11 @@ struct SelectionAskView: View {
     let onClose: () -> Void
     let onFollowUp: () -> Void
     let onCancelFollowUp: () -> Void
+    let onOpenInType4Me: () -> Void
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isFollowUpHovered = false
+    @State private var isOpenInType4MeHovered = false
     private let bottomAnchorID = "selectionAskBottomAnchor"
 
     var body: some View {
@@ -60,6 +63,16 @@ struct SelectionAskView: View {
             }
         }
         .padding(8)
+        .overlay(alignment: .topTrailing) {
+            if isOpenInType4MeHovered {
+                SettingsTooltipBubble(text: L("在 Type4Me 中打开", "Open in Type4Me"))
+                    .padding(.top, 58)
+                    .padding(.trailing, 50)
+                    .transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topTrailing)))
+                    .zIndex(100)
+            }
+        }
+        .animation(.easeOut(duration: 0.08), value: isOpenInType4MeHovered)
         .id(language)
     }
 
@@ -71,12 +84,34 @@ struct SelectionAskView: View {
                     Text(L("随便问", "Ask Anything"))
                         .font(.system(size: 20, weight: .bold, design: .rounded))
                         .foregroundStyle(TF.settingsText)
-                    Text(L("语音提问，流式回答", "Voice questions, streamed answers"))
+                    Text(state.isHistoryEnabled
+                         ? L("语音提问，流式回答", "Voice questions, streamed answers")
+                         : L("本次会话不会保存", "This conversation won't be saved"))
                         .font(.system(size: 12))
-                        .foregroundStyle(TF.settingsTextSecondary)
+                        .foregroundStyle(state.isHistoryEnabled ? TF.settingsTextSecondary : TF.settingsAccentAmber)
                 }
             }
             Spacer()
+            Button(action: onOpenInType4Me) {
+                Image(nsImage: Type4MeWordmarkAsset.image(for: colorScheme))
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 58, height: 22)
+                    .padding(.horizontal, 14)
+                    .frame(height: 36)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(isOpenInType4MeHovered ? TF.settingsSidebarHover : TF.settingsCardAlt)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .stroke(TF.settingsBorder, lineWidth: 1)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .onHover { isOpenInType4MeHovered = $0 }
+            .accessibilityLabel(L("在 Type4Me 中打开", "Open in Type4Me"))
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 12, weight: .semibold))
@@ -341,6 +376,34 @@ struct SelectionAskView: View {
         }
         .buttonStyle(.plain)
         .settingsTooltip(L("复制", "Copy"))
+    }
+}
+
+private enum Type4MeWordmarkAsset {
+    private static let light = load("type4me-wordmark-light")
+    private static let dark = load("type4me-wordmark-dark")
+
+    static func image(for colorScheme: ColorScheme) -> NSImage {
+        colorScheme == .dark ? dark : light
+    }
+
+    private static func load(_ name: String) -> NSImage {
+        let installedURL = Bundle.main.url(
+            forResource: name,
+            withExtension: "svg",
+            subdirectory: "Assets"
+        )
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources/Assets/\(name).svg")
+        if let url = installedURL ?? (FileManager.default.fileExists(atPath: sourceURL.path) ? sourceURL : nil),
+           let image = NSImage(contentsOf: url) {
+            return image
+        }
+        return NSImage(systemSymbolName: "arrow.up.forward.app", accessibilityDescription: nil)
+            ?? NSImage(size: NSSize(width: 66, height: 25))
     }
 }
 

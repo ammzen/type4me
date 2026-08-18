@@ -3,6 +3,7 @@ import SwiftUI
 struct ModelSettingsTab: View, SettingsCardHelpers {
 
     var showsHeader = true
+    let draftCoordinator: SettingsDraftCoordinator
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -14,11 +15,11 @@ struct ModelSettingsTab: View, SettingsCardHelpers {
                 )
             }
 
-            ASRSettingsCard()
+            ASRSettingsCard(draftCoordinator: draftCoordinator)
 
             Spacer().frame(height: 16)
 
-            LLMSettingsCard()
+            LLMSettingsCard(draftCoordinator: draftCoordinator)
         }
     }
 }

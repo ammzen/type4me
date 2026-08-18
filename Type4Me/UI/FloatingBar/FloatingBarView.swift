@@ -26,7 +26,10 @@ protocol FloatingBarState: AnyObject, Observable {
     /// True when recording without SenseVoice streaming (Qwen3-only).
     var isQwen3OnlyMode: Bool { get }
     var effectiveProcessingLabel: String { get }
+    var activityKind: RecordingActivityKind { get }
+    var latestReviseUndoTicketID: UUID? { get }
     func performRecordingControlAction(_ action: RecordingControlAction)
+    func performReviseUndo()
 }
 
 /// Dark-themed floating transcription bar.
@@ -105,9 +108,13 @@ struct FloatingBarView<S: FloatingBarState>: View {
     private var capsuleWidth: CGFloat {
         switch state.barPhase {
         case .preparing:
-            return TF.barWidthCompact
+            let defaultWidth = measureText(recordingDisplayText) + TF.recordingChromeWidth
+            return max(TF.barWidthCompact, defaultWidth)
         case .recording:
-            guard showLiveTranscript, !state.segments.isEmpty else { return TF.barWidthCompact }
+            guard showLiveTranscript, !state.segments.isEmpty else {
+                let defaultWidth = measureText(recordingDisplayText) + TF.recordingChromeWidth
+                return max(TF.barWidthCompact, defaultWidth)
+            }
             return recordingPeakWidth
         case .processing:
             return min(TF.barWidth, max(110, measureText(state.effectiveProcessingLabel) + 66.0))
@@ -239,7 +246,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var recordingDisplayText: String {
         guard showLiveTranscript, !state.segments.isEmpty else {
-            return L("倾听中", "Listening")
+            return state.activityKind == .revise ? L("说说你想怎么改", "Say how to revise") : L("倾听中", "Listening")
         }
         return state.transcriptionText
     }
@@ -315,7 +322,31 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var doneContent: some View {
         Group {
-            if let icon = feedbackIcon {
+            if state.activityKind == .revise && state.latestReviseUndoTicketID != nil {
+                HStack(spacing: 8) {
+                    Text(state.feedbackMessage)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Button(action: {
+                        state.performReviseUndo()
+                    }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "arrow.uturn.backward")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(L("撤销", "Undo"))
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .foregroundStyle(TF.floatingBackground)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(TF.floatingControlLight)
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+            } else if let icon = feedbackIcon {
                 HStack(spacing: 10) {
                     Image(systemName: icon.symbol)
                         .font(.system(size: 16, weight: .semibold))
@@ -442,12 +473,17 @@ struct FloatingBarView<S: FloatingBarState>: View {
         }
         switch phase {
         case .preparing:
-            recordingPeakWidth = TF.barWidthCompact
+            let defaultWidth = max(TF.barWidthCompact, measureText(recordingDisplayText) + TF.recordingChromeWidth)
+            recordingPeakWidth = defaultWidth
             processingStartDate = nil
             doneStartDate = nil
             recordingActionLocked = false
             showModeHint()
         case .recording:
+            let defaultWidth = max(TF.barWidthCompact, measureText(recordingDisplayText) + TF.recordingChromeWidth)
+            if recordingPeakWidth < defaultWidth {
+                recordingPeakWidth = defaultWidth
+            }
             recordingActionLocked = false
         case .processing:
             dismissModeHint()
@@ -468,6 +504,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private func feedbackWidth(for message: String) -> CGFloat {
+        if state.activityKind == .revise && state.latestReviseUndoTicketID != nil {
+            let undoWidth = measureText(L("撤销", "Undo")) + 38.0
+            return min(TF.barWidth, max(140, measureText(message) + undoWidth + 50.0))
+        }
         // Reserve extra room when an SF Symbol icon is shown (icon + spacing).
         let iconExtra: CGFloat = feedbackIcon == nil ? 0 : 26
         return min(TF.barWidth, max(110, measureText(message) + 66.0 + iconExtra))

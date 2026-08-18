@@ -4,6 +4,7 @@ import SwiftUI
 
 enum SettingsTab: String, CaseIterable, Identifiable {
     case general
+    case askAnything
     case models
     case vocabulary
     case modes
@@ -21,9 +22,9 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     static func tabs(for edition: AppEdition?) -> [SettingsTab] {
         switch edition {
         case .member:
-            return [.general, .modes, .vocabulary, .history, .preferences, .about]
+            return [.general, .askAnything, .modes, .vocabulary, .history, .preferences, .about]
         case .byoKey, .none:
-            return [.general, .models, .vocabulary, .modes, .history, .preferences, .about]
+            return [.general, .askAnything, .models, .vocabulary, .modes, .history, .preferences, .about]
         }
     }
     #endif
@@ -31,6 +32,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .general:     return L("首页", "Home")
+        case .askAnything: return L("随便问", "Ask Anything")
         case .models:      return L("模型", "Models")
         case .vocabulary:  return L("词汇", "Vocabulary")
         case .modes:       return L("模式", "Modes")
@@ -47,6 +49,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .general:    return L("模式与使用概览", "Modes & usage overview")
+        case .askAnything: return L("历史问答与持续追问", "Past questions & follow-ups")
         case .models:      return L("语音识别与 LLM 引擎", "ASR & LLM engines")
         case .vocabulary:  return L("热词与片段替换", "Hotwords & snippets")
         case .modes:       return L("推理与默认行为", "Processing & defaults")
@@ -63,6 +66,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .general:     return "house"
+        case .askAnything: return "text.bubble"
         case .models:      return "cpu"
         case .vocabulary:  return "book.closed"
         case .modes:       return "slider.horizontal.3"
@@ -77,14 +81,31 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+@MainActor
+@Observable
+final class AppNavigationModel {
+    var selectedTab: SettingsTab = .general
+    var pendingAskAnythingSessionID: UUID?
+}
+
 // MARK: - Settings View
 
 struct SettingsView: View {
 
+    private enum PendingTransition {
+        case navigate(SettingsTab, afterCommit: (() -> Void)? = nil)
+        case closeWindow
+    }
+
     @Environment(AppState.self) private var appState
-    @State private var selectedTab: SettingsTab = .general
+    @Environment(AppNavigationModel.self) private var navigationModel
     @State private var hoveredTab: SettingsTab?
     @State private var hoveredSettingsTab: SettingsTab?
+    @State private var draftCoordinator = SettingsDraftCoordinator()
+    @State private var windowBox = WeakSettingsWindowBox()
+    @State private var pendingTransition: PendingTransition?
+    @State private var isContentMounted = false
+    @State private var bypassNextCloseGuard = false
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
     @AppStorage(DebugSettingsAvailability.defaultsKey)
     private var debugPanelEnabled = DebugSettingsAvailability.defaultEnabled
@@ -94,83 +115,123 @@ struct SettingsView: View {
     private var edition: AppEdition? { editionRaw.flatMap { AppEdition(rawValue: $0) } }
     #endif
 
+    private var selectedTab: SettingsTab {
+        get { navigationModel.selectedTab }
+        nonmutating set { navigationModel.selectedTab = newValue }
+    }
+
     var body: some View {
         ZStack {
             TF.settingsWindowBackground
                 .ignoresSafeArea()
 
-            HStack(spacing: 0) {
-                sidebar
-                    .overlay(alignment: .topLeading) {
-                        // Fresh standard window buttons placed exactly 25pt from
-                        // the window's top/left (15pt inside the 10pt-inset card),
-                        // wired to performClose/Miniaturize/Zoom. Living in the
-                        // content layer keeps clicks/hover reliable; the native
-                        // traffic lights are hidden by the cluster.
-                        WindowControlsCluster()
-                            .frame(width: 54, height: 14)
-                            .padding(.leading, 15)
-                            .padding(.top, 15)
-                    }
-                    .padding(.leading, 10)
-                    .padding(.vertical, 10)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
-                content
+            if isContentMounted {
+                HStack(spacing: 0) {
+                    sidebar
+                        .overlay(alignment: .topLeading) {
+                            WindowControlsCluster()
+                                .frame(width: 54, height: 14)
+                                .padding(.leading, 15)
+                                .padding(.top, 15)
+                        }
+                        .padding(.leading, 10)
+                        .padding(.vertical, 10)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(1)
+                    content
+                }
+                .ignoresSafeArea(.container, edges: .top)
             }
-            .ignoresSafeArea(.container, edges: .top)
         }
         .id(language)
         .frame(minWidth: 900, minHeight: 600)
-        .background(SettingsWindowConfigurator())
+        .background(SettingsWindowConfigurator(
+            windowBox: windowBox,
+            onVisibilityChanged: { isVisible in
+                isContentMounted = isVisible
+            },
+            onShouldClose: shouldCloseWindow
+        ))
         .preferredColorScheme(.light)
+        .alert(
+            L("未保存的更改", "Unsaved Changes"),
+            isPresented: Binding(
+                get: { pendingTransition != nil },
+                set: { if !$0 { pendingTransition = nil } }
+            )
+        ) {
+            Button(L("保存", "Save")) {
+                guard draftCoordinator.saveAll() else {
+                    let transition = pendingTransition
+                    pendingTransition = nil
+                    DispatchQueue.main.async { pendingTransition = transition }
+                    return
+                }
+                commitPendingTransition()
+            }
+            Button(L("放弃更改", "Discard"), role: .destructive) {
+                draftCoordinator.discardAll()
+                commitPendingTransition()
+            }
+            Button(L("取消", "Cancel"), role: .cancel) {
+                pendingTransition = nil
+            }
+        } message: {
+            Text(L("当前页面有未保存的更改。离开前要保存吗？",
+                   "This page has unsaved changes. Save before leaving?"))
+        }
         .onAppear {
             if VocabularyNavigationCenter.shared.hasPendingSettingsNavigation {
-                selectedTab = .vocabulary
-                VocabularyNavigationCenter.shared.consumeSettingsNavigation()
+                requestNavigation(to: .vocabulary) {
+                    VocabularyNavigationCenter.shared.consumeSettingsNavigation()
+                }
             }
         }
         #if HAS_CLOUD_SUBSCRIPTION
         .onAppear {
             if (selectedTab == .models && edition == .member) ||
                (selectedTab == .account && edition != .member) {
-                selectedTab = .preferences
+                requestNavigation(to: .preferences)
             }
         }
         .onChange(of: editionRaw) { _, _ in
             if (selectedTab == .models && edition == .member) ||
                (selectedTab == .account && edition != .member) {
-                selectedTab = .preferences
+                requestNavigation(to: .preferences)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .cloudDeviceConflict)) { _ in
             showDeviceConflict = true
         }
         .alert(L("设备冲突", "Device Conflict"), isPresented: $showDeviceConflict) {
-            Button(L("确定", "OK")) { if edition == .member { selectedTab = .account } }
+            Button(L("确定", "OK")) {
+                if edition == .member { requestNavigation(to: .account) }
+            }
         } message: {
             Text(L("你的账户已在其他设备登录，当前设备已自动登出。",
                     "Your account has been logged in on another device. This device has been signed out."))
         }
         #endif
         .onReceive(NotificationCenter.default.publisher(for: .navigateToMode)) { note in
-            selectedTab = .modes
-            if let modeId = note.object as? UUID {
-                NotificationCenter.default.post(name: .selectMode, object: modeId)
+            requestNavigation(to: .modes) {
+                if let modeId = note.object as? UUID {
+                    NotificationCenter.default.post(name: .selectMode, object: modeId)
+                }
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToHistory)) { _ in
-            selectedTab = .history
+            requestNavigation(to: .history)
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToVocabulary)) { note in
-            selectedTab = .vocabulary
-            if note.object is VocabularyNavigationRequest {
-                VocabularyNavigationCenter.shared.consumeSettingsNavigation()
+            requestNavigation(to: .vocabulary) {
+                if note.object is VocabularyNavigationRequest {
+                    VocabularyNavigationCenter.shared.consumeSettingsNavigation()
+                }
             }
         }
         .onChange(of: debugPanelEnabled) { _, isEnabled in
             if !isEnabled && selectedTab == .debug {
-                selectedTab = .preferences
+                requestNavigation(to: .preferences)
             }
         }
     }
@@ -196,7 +257,7 @@ struct SettingsView: View {
 
             // Nav items
             VStack(spacing: 4) {
-                ForEach([SettingsTab.general, .vocabulary, .history]) { tab in
+                ForEach([SettingsTab.general, .askAnything, .vocabulary, .history]) { tab in
                     navItem(tab)
                 }
             }
@@ -237,7 +298,7 @@ struct SettingsView: View {
             : selectedTab == tab
         let showBadge = tab == .preferences && appState.hasUnseenUpdate
         return Button {
-            selectedTab = tab
+            requestNavigation(to: tab)
         } label: {
             HStack(spacing: 13) {
                 Image(systemName: tab.icon)
@@ -307,10 +368,7 @@ struct SettingsView: View {
 
         return Button {
             withAnimation(.easeInOut(duration: 0.16)) {
-                selectedTab = tab
-            }
-            if tab == .about {
-                UpdateChecker.shared.markAsSeen(appState: appState)
+                requestNavigation(to: tab)
             }
         } label: {
             HStack(spacing: 6) {
@@ -362,44 +420,62 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder
     private var content: some View {
-        ZStack {
-            HomeDottedWaveBackground()
-                .opacity(selectedTab == .general ? 1 : 0)
-
-            tabPage(.general) {
+        switch selectedTab {
+        case .general:
+            ZStack {
+                HomeDottedWaveBackground()
+                tabPage {
                 HomeDashboardView(isActive: selectedTab == .general) {
-                    selectedTab = .modes
+                        requestNavigation(to: .modes)
+                    }
                 }
             }
-            fixedPage(.vocabulary) { VocabularyTab() }
-            fixedPage(.history)  { HistoryTab(isActive: selectedTab == .history) }
-
-            settingsTabPage(.preferences) { GeneralSettingsTab(showsHeader: false) }
+        case .askAnything:
+            fixedPage {
+                AskAnythingPage(isActive: selectedTab == .askAnything)
+            }
+        case .vocabulary:
+            fixedPage { VocabularyTab() }
+        case .history:
+            fixedPage { HistoryTab(isActive: selectedTab == .history) }
+        case .preferences:
+            settingsTabPage { GeneralSettingsTab(showsHeader: false) }
+        case .models:
             #if HAS_CLOUD_SUBSCRIPTION
             if edition != .member {
-                settingsTabPage(.models) { ModelSettingsTab(showsHeader: false) }
+                settingsTabPage {
+                    ModelSettingsTab(showsHeader: false, draftCoordinator: draftCoordinator)
+                }
+            } else {
+                settingsTabPage { GeneralSettingsTab(showsHeader: false) }
             }
             #else
-            settingsTabPage(.models) { ModelSettingsTab(showsHeader: false) }
-            #endif
-            settingsFixedPage(.modes) { ModesSettingsTab(showsHeader: false) }
-            settingsTabPage(.about) { AboutTab(showsHeader: false) }
-            #if HAS_CLOUD_SUBSCRIPTION
-            if edition == .member {
-                tabPage(.account) { AccountTab() }
+            settingsTabPage {
+                ModelSettingsTab(showsHeader: false, draftCoordinator: draftCoordinator)
             }
             #endif
+        case .modes:
+            settingsFixedPage {
+                ModesSettingsTab(showsHeader: false, draftCoordinator: draftCoordinator)
+            }
+        case .about:
+            settingsTabPage { AboutTab(showsHeader: false) }
+        case .debug:
             if debugPanelEnabled {
-                tabPage(.debug) { DebugSettingsTab() }
+                tabPage { DebugSettingsTab() }
+            } else {
+                settingsTabPage { GeneralSettingsTab(showsHeader: false) }
             }
+            #if HAS_CLOUD_SUBSCRIPTION
+        case .account:
+            tabPage { AccountTab() }
+            #endif
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TF.settingsWindowBackground)
     }
 
     private func settingsTabPage<V: View>(
-        _ tab: SettingsTab,
         @ViewBuilder content: () -> V
     ) -> some View {
         ScrollView(.vertical, showsIndicators: true) {
@@ -412,12 +488,11 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .opacity(selectedTab == tab ? 1 : 0)
-        .allowsHitTesting(selectedTab == tab)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(TF.settingsWindowBackground)
     }
 
     private func settingsFixedPage<V: View>(
-        _ tab: SettingsTab,
         @ViewBuilder content: () -> V
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -427,12 +502,11 @@ struct SettingsView: View {
         .padding(.horizontal, 38)
         .padding(.vertical, 34)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .opacity(selectedTab == tab ? 1 : 0)
-        .allowsHitTesting(selectedTab == tab)
+        .background(TF.settingsWindowBackground)
     }
 
     /// Scrollable tab page (most tabs).
-    private func tabPage<V: View>(_ tab: SettingsTab, @ViewBuilder content: () -> V) -> some View {
+    private func tabPage<V: View>(@ViewBuilder content: () -> V) -> some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 0) {
                 content()
@@ -442,20 +516,71 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollBounceBehavior(.basedOnSize)
-        .opacity(selectedTab == tab ? 1 : 0)
-        .allowsHitTesting(selectedTab == tab)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(TF.settingsWindowBackground)
     }
 
     /// Fixed-height tab page (no outer scroll, content manages its own scroll).
-    private func fixedPage<V: View>(_ tab: SettingsTab, @ViewBuilder content: () -> V) -> some View {
+    private func fixedPage<V: View>(@ViewBuilder content: () -> V) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             content()
         }
         .padding(.horizontal, 38)
         .padding(.vertical, 34)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .opacity(selectedTab == tab ? 1 : 0)
-        .allowsHitTesting(selectedTab == tab)
+        .background(TF.settingsWindowBackground)
+    }
+
+    private func requestNavigation(
+        to tab: SettingsTab,
+        afterCommit: (() -> Void)? = nil
+    ) {
+        guard tab != selectedTab else {
+            afterCommit?()
+            return
+        }
+        guard draftCoordinator.hasUnsavedChanges else {
+            commitNavigation(to: tab, afterCommit: afterCommit)
+            return
+        }
+        pendingTransition = .navigate(tab, afterCommit: afterCommit)
+    }
+
+    private func commitNavigation(to tab: SettingsTab, afterCommit: (() -> Void)?) {
+        selectedTab = tab
+        if tab == .about {
+            UpdateChecker.shared.markAsSeen(appState: appState)
+        }
+        if let afterCommit {
+            DispatchQueue.main.async(execute: afterCommit)
+        }
+    }
+
+    private func shouldCloseWindow() -> Bool {
+        if bypassNextCloseGuard {
+            bypassNextCloseGuard = false
+            isContentMounted = false
+            return true
+        }
+        guard draftCoordinator.hasUnsavedChanges else {
+            isContentMounted = false
+            return true
+        }
+        pendingTransition = .closeWindow
+        return false
+    }
+
+    private func commitPendingTransition() {
+        guard let transition = pendingTransition else { return }
+        pendingTransition = nil
+        switch transition {
+        case .navigate(let tab, let afterCommit):
+            commitNavigation(to: tab, afterCommit: afterCommit)
+        case .closeWindow:
+            bypassNextCloseGuard = true
+            isContentMounted = false
+            windowBox.window?.performClose(nil)
+        }
     }
 }
 
@@ -465,19 +590,38 @@ struct SettingsView: View {
 /// and positions the real macOS controls within the inset sidebar card. Keeping
 /// the native zoom button preserves macOS's hover tiling/full-screen menu.
 private struct SettingsWindowConfigurator: NSViewRepresentable {
+    let windowBox: WeakSettingsWindowBox
+    let onVisibilityChanged: @MainActor (Bool) -> Void
+    let onShouldClose: @MainActor () -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(
+            windowBox: windowBox,
+            onVisibilityChanged: onVisibilityChanged,
+            onShouldClose: onShouldClose
+        )
+    }
+
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        configureWhenAttached(view)
+        configureWhenAttached(view, coordinator: context.coordinator)
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        configureWhenAttached(nsView)
+        context.coordinator.onVisibilityChanged = onVisibilityChanged
+        context.coordinator.onShouldClose = onShouldClose
+        configureWhenAttached(nsView, coordinator: context.coordinator)
     }
 
-    private func configureWhenAttached(_ view: NSView) {
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    private func configureWhenAttached(_ view: NSView, coordinator: Coordinator) {
         DispatchQueue.main.async {
             guard let window = view.window else { return }
+            coordinator.attach(to: window)
             window.isOpaque = true
             window.backgroundColor = NSColor(
                 srgbRed: 1,
@@ -494,6 +638,103 @@ private struct SettingsWindowConfigurator: NSViewRepresentable {
             // The native traffic lights are hidden by `WindowControlsCluster`,
             // which draws fresh standard buttons at the desired inset inside
             // the sidebar card (see SettingsView body).
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSWindowDelegate {
+        let windowBox: WeakSettingsWindowBox
+        var onVisibilityChanged: @MainActor (Bool) -> Void
+        var onShouldClose: @MainActor () -> Bool
+        private weak var previousDelegate: NSWindowDelegate?
+        private weak var attachedWindow: NSWindow?
+        private var observers: [NSObjectProtocol] = []
+
+        init(
+            windowBox: WeakSettingsWindowBox,
+            onVisibilityChanged: @escaping @MainActor (Bool) -> Void,
+            onShouldClose: @escaping @MainActor () -> Bool
+        ) {
+            self.windowBox = windowBox
+            self.onVisibilityChanged = onVisibilityChanged
+            self.onShouldClose = onShouldClose
+        }
+
+        deinit {
+            observers.forEach(NotificationCenter.default.removeObserver)
+        }
+
+        func attach(to window: NSWindow) {
+            windowBox.window = window
+            guard attachedWindow !== window else {
+                if window.delegate !== self {
+                    previousDelegate = window.delegate
+                    window.delegate = self
+                }
+                if window.isVisible { onVisibilityChanged(true) }
+                return
+            }
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+            attachedWindow = window
+            if window.delegate !== self {
+                previousDelegate = window.delegate
+                window.delegate = self
+            }
+            let center = NotificationCenter.default
+            observers.append(center.addObserver(
+                forName: NSWindow.didBecomeKeyNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onVisibilityChanged(true) }
+            })
+            observers.append(center.addObserver(
+                forName: NSWindow.didMiniaturizeNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onVisibilityChanged(false) }
+            })
+            observers.append(center.addObserver(
+                forName: NSWindow.didDeminiaturizeNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onVisibilityChanged(true) }
+            })
+            if window.isVisible { onVisibilityChanged(true) }
+        }
+
+        func detach() {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+            if let attachedWindow, attachedWindow.delegate === self {
+                attachedWindow.delegate = previousDelegate
+            }
+            attachedWindow = nil
+            windowBox.window = nil
+        }
+
+        func windowShouldClose(_ sender: NSWindow) -> Bool {
+            if previousDelegate?.windowShouldClose?(sender) == false { return false }
+            return onShouldClose()
+        }
+
+        func windowWillClose(_ notification: Notification) {
+            onVisibilityChanged(false)
+            previousDelegate?.windowWillClose?(notification)
+        }
+
+        override func responds(to selector: Selector!) -> Bool {
+            super.responds(to: selector) || previousDelegate?.responds(to: selector) == true
+        }
+
+        override func forwardingTarget(for selector: Selector!) -> Any? {
+            if previousDelegate?.responds(to: selector) == true {
+                return previousDelegate
+            }
+            return super.forwardingTarget(for: selector)
         }
     }
 

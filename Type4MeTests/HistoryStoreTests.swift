@@ -200,6 +200,79 @@ final class HistoryStoreTests: XCTestCase {
         await fulfillment(of: [notification], timeout: 1.0)
     }
 
+    func testUserEditObservationPersistsAndUsesDataFormatVersion() async {
+        let recordID = "user-edit"
+        await store.insert(HistoryRecord(
+            id: recordID, createdAt: Date(), durationSeconds: 1,
+            rawText: "ghosty", processingMode: "智能感知", processedText: "ghosty",
+            finalText: "ghosty", status: "completed", characterCount: 6, asrProvider: nil
+        ))
+        let observedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let updated = await store.updateUserEditObservation(
+            recordID: recordID,
+            text: "Ghostty",
+            status: .edited,
+            observedAt: observedAt
+        )
+
+        XCTAssertTrue(updated)
+        let fetched = await store.fetchAll().first
+        XCTAssertEqual(fetched?.userEditedText, "Ghostty")
+        XCTAssertEqual(fetched?.userEditStatus, .edited)
+        XCTAssertEqual(fetched?.userEditObservedAt, observedAt)
+        XCTAssertEqual(fetched?.userEditVersion, UserEditObservationFormat.currentVersion)
+    }
+
+    func testOlderOrLowerInformationObservationCannotOverwriteReliableEdit() async {
+        let recordID = "ordered-user-edit"
+        await store.insert(HistoryRecord(
+            id: recordID, createdAt: Date(), durationSeconds: 1,
+            rawText: "ghosty", processingMode: "智能感知", processedText: "ghosty",
+            finalText: "ghosty", status: "completed", characterCount: 6, asrProvider: nil
+        ))
+        let observedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let initialUpdate = await store.updateUserEditObservation(
+            recordID: recordID,
+            text: "Ghostty",
+            status: .edited,
+            observedAt: observedAt
+        )
+        let equalTimeLowerQualityUpdate = await store.updateUserEditObservation(
+            recordID: recordID,
+            text: nil,
+            status: .ambiguous,
+            observedAt: observedAt
+        )
+        let olderUpdate = await store.updateUserEditObservation(
+            recordID: recordID,
+            text: nil,
+            status: .unavailable,
+            observedAt: observedAt.addingTimeInterval(-1)
+        )
+
+        XCTAssertTrue(initialUpdate)
+        XCTAssertTrue(equalTimeLowerQualityUpdate)
+        XCTAssertTrue(olderUpdate)
+
+        let fetched = await store.fetchAll().first
+        XCTAssertEqual(fetched?.userEditedText, "Ghostty")
+        XCTAssertEqual(fetched?.userEditStatus, .edited)
+    }
+
+    func testUserEditObservationDoesNotCreateOrphanHistoryRow() async {
+        let updated = await store.updateUserEditObservation(
+            recordID: "missing",
+            text: "Ghostty",
+            status: .edited,
+            observedAt: Date()
+        )
+
+        XCTAssertFalse(updated)
+        let fetched = await store.fetchAll()
+        XCTAssertTrue(fetched.isEmpty)
+    }
+
     func testUsageBreakdownGroupsByProviderAndPeriods() async {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let records: [HistoryRecord] = [
@@ -267,5 +340,18 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(byModel["ElevenLabs"]?.allTimeDuration ?? 0, 120, accuracy: 0.01)
         XCTAssertEqual(rows.last?.modelName, L("未知", "Unknown"))
         XCTAssertEqual(rows.dropLast().map(\.allTimeDuration), rows.dropLast().map(\.allTimeDuration).sorted(by: >))
+    }
+
+    func testShrinkMemoryDoesNotThrowOrCorrupt() async {
+        let record = HistoryRecord(
+            id: UUID().uuidString, createdAt: Date(), durationSeconds: 1.0,
+            rawText: "shrink test", processingMode: nil, processedText: nil,
+            finalText: "shrink test", status: "completed", characterCount: 11, asrProvider: nil
+        )
+        await store.insert(record)
+        await store.shrinkMemory()
+        let fetched = await store.fetchAll()
+        XCTAssertEqual(fetched.count, 1)
+        XCTAssertEqual(fetched.first?.rawText, "shrink test")
     }
 }

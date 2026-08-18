@@ -11,6 +11,8 @@ final class TextInjectionEngine: @unchecked Sendable {
         let role: String?
         let subrole: String?
         let value: String?
+        let placeholder: String?
+        let accessibilityDescription: String?
         let selectedRange: NSRange?
         let isEditable: Bool
         /// true when AX successfully found a focused UI element; false when
@@ -18,62 +20,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         let hasFocusedElement: Bool
     }
 
-    private struct ClipboardSnapshot {
-        /// Only safe, non-blocking text types are captured.
-        /// Binary types (images, RTF, file promises) are skipped because
-        /// reading them can trigger lazy data providers in other apps,
-        /// blocking the calling thread indefinitely.
-        private static let safeTypes: [NSPasteboard.PasteboardType] = [
-            .string,
-            .URL,
-            .html,
-            NSPasteboard.PasteboardType("public.utf8-plain-text"),
-            NSPasteboard.PasteboardType("public.utf16-plain-text"),
-            NSPasteboard.PasteboardType("public.url"),
-        ]
-
-        struct Item {
-            let types: [NSPasteboard.PasteboardType]
-            let data: [NSPasteboard.PasteboardType: Data]
-        }
-        let items: [Item]
-        let changeCount: Int
-
-        static func capture() -> ClipboardSnapshot {
-            let pb = NSPasteboard.general
-            let changeCount = pb.changeCount
-            let safeSet = Set(safeTypes.map(\.rawValue))
-            var items: [Item] = []
-            for pbItem in pb.pasteboardItems ?? [] {
-                let textTypes = pbItem.types.filter { safeSet.contains($0.rawValue) }
-                guard !textTypes.isEmpty else { continue }
-                var dataMap: [NSPasteboard.PasteboardType: Data] = [:]
-                for type in textTypes {
-                    if let data = pbItem.data(forType: type) {
-                        dataMap[type] = data
-                    }
-                }
-                items.append(Item(types: textTypes, data: dataMap))
-            }
-            return ClipboardSnapshot(items: items, changeCount: changeCount)
-        }
-
-        func restore(expectedChangeCount: Int) {
-            let pb = NSPasteboard.general
-            guard !items.isEmpty else { return }
-            guard pb.changeCount == expectedChangeCount else { return }
-            pb.clearContents()
-            for item in items {
-                let pbItem = NSPasteboardItem()
-                for type in item.types {
-                    if let data = item.data[type] {
-                        pbItem.setData(data, forType: type)
-                    }
-                }
-                pb.writeObjects([pbItem])
-            }
-        }
-    }
+    typealias ClipboardSnapshot = Type4Me.ClipboardSnapshot
 
     // MARK: - Public
 
@@ -92,13 +39,22 @@ final class TextInjectionEngine: @unchecked Sendable {
 
     /// Inject text while capturing enough Accessibility context to observe a
     /// later correction in the exact field Type4Me wrote into.
-    func injectTracked(_ text: String, sourceRecordID: String, modeID: UUID) -> TrackedInjectionResult {
+    func injectTracked(
+        _ text: String,
+        sourceText: String,
+        sourceRecordID: String,
+        modeID: UUID
+    ) -> TrackedInjectionResult {
         guard !text.isEmpty else {
             return TrackedInjectionResult(outcome: .inserted, observationContext: nil)
         }
         return injectViaClipboard(
             text,
-            trackingMetadata: (sourceRecordID: sourceRecordID, modeID: modeID)
+            trackingMetadata: (
+                sourceText: sourceText,
+                sourceRecordID: sourceRecordID,
+                modeID: modeID
+            )
         )
     }
 
@@ -120,7 +76,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         pb.clearContents()
         pb.setString(text, forType: .string)
         if transient {
-            pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+            pb.setData(Data(), forType: PasteboardHistoryPolicy.transientType)
         }
     }
 
@@ -135,7 +91,7 @@ final class TextInjectionEngine: @unchecked Sendable {
 
     private func injectViaClipboard(
         _ text: String,
-        trackingMetadata: (sourceRecordID: String, modeID: UUID)?
+        trackingMetadata: (sourceText: String, sourceRecordID: String, modeID: UUID)?
     ) -> TrackedInjectionResult {
         let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture() : nil
 
@@ -172,6 +128,7 @@ final class TextInjectionEngine: @unchecked Sendable {
                 before: before,
                 after: after,
                 pastedText: text,
+                sourceText: metadata.sourceText,
                 sourceRecordID: metadata.sourceRecordID,
                 modeID: metadata.modeID,
                 outcome: outcome
@@ -225,6 +182,8 @@ final class TextInjectionEngine: @unchecked Sendable {
                 role: nil,
                 subrole: nil,
                 value: nil,
+                placeholder: nil,
+                accessibilityDescription: nil,
                 selectedRange: nil,
                 isEditable: false,
                 hasFocusedElement: false
@@ -264,6 +223,8 @@ final class TextInjectionEngine: @unchecked Sendable {
                 role: nil,
                 subrole: nil,
                 value: nil,
+                placeholder: nil,
+                accessibilityDescription: nil,
                 selectedRange: nil,
                 isEditable: false,
                 hasFocusedElement: false
@@ -279,6 +240,8 @@ final class TextInjectionEngine: @unchecked Sendable {
         let role = copyStringAttribute(kAXRoleAttribute as CFString, from: element)
         let subrole = copyStringAttribute(kAXSubroleAttribute as CFString, from: element)
         let value = copyStringAttribute(kAXValueAttribute as CFString, from: element)
+        let placeholder = copyStringAttribute(kAXPlaceholderValueAttribute as CFString, from: element)
+        let accessibilityDescription = copyStringAttribute(kAXDescriptionAttribute as CFString, from: element)
         let selectedRange = copyRangeAttribute(kAXSelectedTextRangeAttribute as CFString, from: element)
         var processIdentifier: pid_t = 0
         let pidStatus = AXUIElementGetPid(element, &processIdentifier)
@@ -299,6 +262,8 @@ final class TextInjectionEngine: @unchecked Sendable {
             role: role,
             subrole: subrole,
             value: value,
+            placeholder: placeholder,
+            accessibilityDescription: accessibilityDescription,
             selectedRange: selectedRange,
             isEditable: isEditable,
             hasFocusedElement: true
@@ -387,6 +352,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         before: FocusedElementSnapshot?,
         after: FocusedElementSnapshot?,
         pastedText: String,
+        sourceText: String,
         sourceRecordID: String,
         modeID: UUID,
         outcome: InjectionOutcome
@@ -422,6 +388,13 @@ final class TextInjectionEngine: @unchecked Sendable {
             injectedRange: insertedRange,
             beforeSelectedRange: before.selectedRange,
             afterSelectedRange: after.selectedRange,
+            placeholderCandidates: [
+                before.placeholder,
+                after.placeholder,
+                before.accessibilityDescription,
+                after.accessibilityDescription,
+            ].compactMap { $0 },
+            sourceText: sourceText,
             injectedText: pastedText,
             sourceRecordID: sourceRecordID,
             modeID: modeID

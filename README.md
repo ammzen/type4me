@@ -17,6 +17,7 @@
 
 - **语音识别**：内置本地识别引擎、媲美云端引擎准确率；支持多家云端引擎厂商；支持流式识别、边说边出字，说完无需等待、快速输入；
 - **文本处理**：内置润色、Prompt优化、翻译功能，可自定义添加任意处理模版（比如改人设、改语气、小语种翻译等等）；
+- **语音改口**：刚打出的文字有误或想换个说法？按下快捷键直接语音说出修改指令，精准替换、局部微调、支持一键撤销；
 - **模型接入**：支持主流厂商API接入；文本处理支持使用Ollama接本地模型；
 - **词汇管理**：支持热词、映射词，2种模式。热词用于校正语音识别引擎，映射词可作为兜底或个性化场景使用（如 Web coding -> Vibe Coding, "我的邮箱地址" -> xxx@gmail.com）；
 - **历史记录**：存储所有历史识别记录，包括原始文本和处理后文本，支持导出CSV；
@@ -107,6 +108,18 @@ Prompt 模板支持三种变量，让语音输入从"听写"升级为"语音命�
 - **ASR 热词**：添加专有名词（如 `Claude`、`Kubernetes`），提升识别准确率
 - **片段替换**：语音说「我的邮箱」，自动替换为实际邮箱地址
 
+### 语音改口（Revise）
+
+刚输入的内容有错字、想换个时间或调整语气？无需手动选中文本，按下改口快捷键（默认 `Fn + R`），直接说出你想怎么改。
+
+<p align="center">
+  <img src="docs/screenshots/prototype-revise.png" width="480" alt="Type4Me 语音改口" />
+</p>
+
+- **智能槽位定位**：说「改成下午 2 点」、「不是 Jerry 是 Tom」，系统自动匹配修改目标并精准替换，其余内容保持不变；
+- **安全保护与强防篡改**：严格保护未授权的数字、金额、日期等事实，避免大模型幻觉篡改原文事实；
+- **一键撤销**：修改后浮条展示「撤销」胶囊按钮，或再次语音说「撤销」/「恢复上一版」，秒回原文字。
+
 
 ## 架构概览
 
@@ -129,6 +142,8 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 ## 参与贡献
 
 欢迎提交 PR/Issue，这个项目是我全部自己用 Claude Code 写的。
+
+开发与设计文档统一从 [`docs/README.md`](docs/README.md) 进入；历史方案已单独归档，避免误用旧文档。
 
 对于 PR，即便有 bug/代码质量不好，我最常跟 Claude 说的一句话就是不要漏了人家的贡献。你大不了合完再改。
 
@@ -165,6 +180,7 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 
 - **Speech Recognition**: Built-in local recognition engine with accuracy rivaling cloud engines; supports multiple cloud ASR providers; real-time streaming recognition with instant text output;
 - **Text Processing**: Built-in voice polish, prompt optimization, and translation; add any custom processing templates (persona, tone, minority language translation, etc.);
+- **Voice Revise**: Made a typo or want to rephrase? Press a hotkey to speak revisions directly—precision replacement, local slot targeting, and one-click undo;
 - **Model Integration**: Supports mainstream provider APIs; text processing works with Ollama local models;
 - **Vocabulary Management**: Two modes: hotwords and snippet replacements. Hotwords improve ASR accuracy for proper nouns; snippets enable personalized substitutions (e.g., "Web coding" -> "Vibe Coding", "my email" -> xxx@gmail.com);
 - **History**: Stores all recognition records including raw and processed text, with CSV export;
@@ -277,6 +293,18 @@ Prompt templates support three variables, upgrading voice input from "dictation"
 - **ASR Hotwords**: Add proper nouns (e.g., `Claude`, `Kubernetes`) to improve recognition accuracy
 - **Snippet Replacement**: Say "my email" and it auto-replaces with your actual email address
 
+### Voice Revise
+
+Made a typo, want to reschedule, or tweak your phrasing? No need to select text manually—press the Revise hotkey (default `Fn + R`) and simply say what you want to change.
+
+<p align="center">
+  <img src="docs/screenshots/prototype-revise.png" width="480" alt="Type4Me Voice Revise" />
+</p>
+
+- **Smart Slot Targeting**: Say "change it to 2 PM" or "Tom instead of Jerry"—the engine automatically targets and replaces only the intended slot while preserving the rest of your text;
+- **Fact Protection Guard**: Enforces strict protection on unauthorized numbers, amounts, and dates to prevent LLM hallucinations from modifying unmentioned facts;
+- **One-Click & Voice Undo**: After revising, a floating "Undo" capsule appears; you can also simply say "undo" or "revert" by voice to restore the original text instantly.
+
 
 ## Architecture Overview
 
@@ -297,6 +325,8 @@ The ASR provider architecture is fully pluggable: implement `ASRProviderConfig` 
 
 
 ## Contributing
+
+Start with the [`docs/README.md`](docs/README.md) documentation index. Historical plans and reviews are archived separately from current specifications.
 
 PRs and Issues are welcome. This entire project was built by the author using Claude Code.
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import Type4MeIntelliSenseCore
+import Type4MeReviseCore
 
 // MARK: - Floating Bar Phase
 
@@ -11,6 +12,11 @@ enum FloatingBarPhase: Equatable {
     case recovering
     case done
     case error
+}
+
+enum RecordingActivityKind: Equatable, Sendable {
+    case standard
+    case revise
 }
 
 enum RecordingControlAction: Equatable {
@@ -177,6 +183,9 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     /// than this many characters, LLM post-processing is skipped. 0 disables it.
     var shortTextExemption: Int
     var executionKind: ExecutionKind
+    /// BCP 47 target code used only by the built-in Translation mode. Keeping
+    /// this as a String preserves future codes written by newer app versions.
+    var translationTargetLanguageCode: String?
 
     enum HotkeyStyle: String, Codable, CaseIterable {
         case hold    // press and hold to record
@@ -211,7 +220,8 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         processingLabel: String = L("处理中", "Processing"),
         hotkeyBindings: [HotkeyBinding] = [],
         shortTextExemption: Int = 0,
-        executionKind: ExecutionKind = .recording
+        executionKind: ExecutionKind = .recording,
+        translationTargetLanguageCode: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -222,11 +232,12 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         self.hotkeyBindings = hotkeyBindings
         self.shortTextExemption = shortTextExemption
         self.executionKind = executionKind
+        self.translationTargetLanguageCode = translationTargetLanguageCode
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, prompt, isBuiltin, processingLabel
-        case hotkeyBindings, shortTextExemption, executionKind
+        case hotkeyBindings, shortTextExemption, executionKind, translationTargetLanguageCode
         // Legacy single-hotkey keys, decoded for backward compatibility only.
         case hotkeyCode, hotkeyModifiers, hotkeyStyle
     }
@@ -256,6 +267,10 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         }
 
         executionKind = try container.decodeIfPresent(ExecutionKind.self, forKey: .executionKind) ?? .recording
+        translationTargetLanguageCode = try container.decodeIfPresent(
+            String.self,
+            forKey: .translationTargetLanguageCode
+        )
     }
 
     func encode(to encoder: Encoder) throws {
@@ -270,6 +285,10 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         // Only the new array format is written; legacy keys are intentionally omitted.
         try container.encode(hotkeyBindings, forKey: .hotkeyBindings)
         try container.encode(executionKind, forKey: .executionKind)
+        try container.encodeIfPresent(
+            translationTargetLanguageCode,
+            forKey: .translationTargetLanguageCode
+        )
     }
 
     // MARK: - Built-in Mode IDs (stable, never change)
@@ -278,6 +297,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     static let translateId = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
     static let macActionId = UUID(uuidString: "00000000-0000-0000-0000-000000000008")!
     static let intelliSenseId = UUID(uuidString: "00000000-0000-0000-0000-00000000000A")!
+    static let translationModeId = UUID(uuidString: "00000000-0000-0000-0000-00000000000B")!
 
     // MARK: - Built-in default hotkey binding IDs (stable seeds)
     // Deterministic so the computed `builtins`/`defaults` seeds don't churn on
@@ -289,6 +309,11 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     private static let agentModeBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000005")!
     private static let macActionBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000006")!
     private static let selectionAskBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000007")!
+    private static let translationModeBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000008")!
+    private static let intelliSenseFnControlBindingId = UUID(uuidString: "10000000-0000-0000-0000-000000000009")!
+    private static let intelliSenseOption1BindingId = UUID(uuidString: "10000000-0000-0000-0000-00000000000A")!
+    private static let translationFnShiftBindingId = UUID(uuidString: "10000000-0000-0000-0000-00000000000B")!
+    private static let selectionAskFnSpaceBindingId = UUID(uuidString: "10000000-0000-0000-0000-00000000000C")!
 
     /// Descriptions for records written before the `description` field existed.
     /// Stable IDs let official modes migrate without deriving UI copy from prompts.
@@ -309,6 +334,11 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             return L("将口述需求优化成结构清晰的 Prompt", "Turn spoken requests into structured prompts")
         case defaultTranslateId, translateId:
             return L("将中文口述自然翻译为英文", "Translate spoken Chinese into natural English")
+        case translationModeId:
+            return L(
+                "自动识别口述语言并翻译为目标语言",
+                "Automatically detect spoken language and translate it to your target language"
+            )
         case commandModeId:
             return L("根据口述指令处理选中文本或剪贴板内容", "Transform selected or clipboard text with spoken commands")
         case agentModeId:
@@ -327,7 +357,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             name: L("快速模式", "Quick Mode"),
             description: defaultDescription(for: directId),
             prompt: "", isBuiltin: true,
-            hotkeyBindings: [HotkeyBinding(id: directBindingId, keyCode: 62, modifiers: 0, style: .toggle)]
+            hotkeyBindings: [HotkeyBinding(id: directBindingId, keyCode: 63, modifiers: 0, style: .toggle)]
         )
     }
 
@@ -338,7 +368,21 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             description: defaultDescription(for: intelliSenseId),
             prompt: IntelliSensePromptBuilder.baseTemplate,
             isBuiltin: true,
-            processingLabel: L("整理中", "Polishing")
+            processingLabel: L("整理中", "Polishing"),
+            hotkeyBindings: [
+                HotkeyBinding(
+                    id: intelliSenseFnControlBindingId,
+                    keyCode: 59,
+                    modifiers: 8388608,
+                    style: .toggle
+                ),
+                HotkeyBinding(
+                    id: intelliSenseOption1BindingId,
+                    keyCode: 18,
+                    modifiers: 524288,
+                    style: .toggle
+                ),
+            ]
         )
     }
 
@@ -596,7 +640,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: formalWritingPromptTemplate,
             isBuiltin: true,
             processingLabel: L("润色中", "Polishing"),
-            hotkeyBindings: [HotkeyBinding(id: formalWritingBindingId, keyCode: 18, modifiers: 524288, style: .toggle)]
+            hotkeyBindings: [HotkeyBinding(id: formalWritingBindingId, keyCode: 23, modifiers: 524288, style: .toggle)]
         )
     }
 
@@ -705,7 +749,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             """#,
             isBuiltin: false,
             processingLabel: L("优化中", "Optimizing"),
-            hotkeyBindings: [HotkeyBinding(id: promptOptimizeBindingId, keyCode: 19, modifiers: 524288, style: .toggle)]
+            hotkeyBindings: []
         )
     }
 
@@ -731,6 +775,53 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             hotkeyBindings: []
         )
     }
+
+    /// Canonical built-in Translation mode used when upgrading an existing
+    /// modes file. It intentionally has no hotkey so it cannot steal the
+    /// legacy English Translation mode's Option+3 binding.
+    static func translation(
+        target: TranslationLanguage = .english,
+        hotkeyBindings: [HotkeyBinding] = []
+    ) -> ProcessingMode {
+        ProcessingMode(
+            id: translationModeId,
+            name: L("翻译模式", "Translation Mode"),
+            description: defaultDescription(for: translationModeId),
+            prompt: TranslationPromptBuilder.baseTemplate,
+            isBuiltin: true,
+            processingLabel: L("翻译中", "Translating"),
+            hotkeyBindings: hotkeyBindings,
+            shortTextExemption: 0,
+            executionKind: .recording,
+            translationTargetLanguageCode: target.rawValue
+        )
+    }
+
+    static var translationForFreshInstall: ProcessingMode {
+        translation(
+            target: .english,
+            hotkeyBindings: [
+                HotkeyBinding(
+                    id: translationFnShiftBindingId,
+                    keyCode: 56,
+                    modifiers: 8388608,
+                    style: .toggle
+                ),
+                HotkeyBinding(
+                    id: translationModeBindingId,
+                    keyCode: 19,
+                    modifiers: 524288,
+                    style: .toggle
+                ),
+            ]
+        )
+    }
+
+    static let legacyTranslationModeIDs: Set<UUID> = [
+        translateId,
+        defaultTranslateId,
+        translateToChineseId,
+    ]
 
     static var commandMode: ProcessingMode {
         ProcessingMode(
@@ -829,7 +920,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: macActionPromptTemplate,
             isBuiltin: true,
             processingLabel: L("执行中", "Executing"),
-            hotkeyBindings: [HotkeyBinding(id: macActionBindingId, keyCode: 23, modifiers: 524288, style: .toggle)]
+            hotkeyBindings: [HotkeyBinding(id: macActionBindingId, keyCode: 21, modifiers: 524288, style: .toggle)]
         )
     }
 
@@ -870,7 +961,20 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: selectionAskPromptTemplate,
             isBuiltin: true,
             processingLabel: L("思考中", "Thinking"),
-            hotkeyBindings: [HotkeyBinding(id: selectionAskBindingId, keyCode: 22, modifiers: 524288, style: .toggle)],
+            hotkeyBindings: [
+                HotkeyBinding(
+                    id: selectionAskFnSpaceBindingId,
+                    keyCode: 49,
+                    modifiers: 8388608,
+                    style: .toggle
+                ),
+                HotkeyBinding(
+                    id: selectionAskBindingId,
+                    keyCode: 20,
+                    modifiers: 524288,
+                    style: .toggle
+                ),
+            ],
             shortTextExemption: 0,
             executionKind: .selectionAsk
         )
@@ -1023,13 +1127,24 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             prompt: agentModePromptTemplate,
             isBuiltin: false,
             processingLabel: L("处理中", "Handling"),
-            hotkeyBindings: [HotkeyBinding(id: agentModeBindingId, keyCode: 21, modifiers: 524288, style: .toggle)]
+            hotkeyBindings: []
         )
     }
 
-    static var builtins: [ProcessingMode] { [.direct, .intelliSense, .formalWriting, .macAction, .selectionAsk] }
+    static var builtins: [ProcessingMode] {
+        [.direct, .intelliSense, .translation(), .selectionAsk, .macAction, .formalWriting]
+    }
     static var defaults: [ProcessingMode] {
-        [.direct, .intelliSense, .formalWriting, .promptOptimize, .translate, .translateToChinese, .agentMode, .commandMode, .macAction, .selectionAsk]
+        [
+            .direct,
+            .intelliSense,
+            .translationForFreshInstall,
+            .selectionAsk,
+            .macAction,
+            .formalWriting,
+            .promptOptimize,
+            .agentMode,
+        ]
     }
 }
 
@@ -1062,6 +1177,8 @@ final class AppState {
     var processingLabelOverride: String?
     var processingFinishTime: Date?
     var pinsTranscriptPopup = false
+    var activityKind: RecordingActivityKind = .standard
+    var latestReviseUndoTicketID: UUID? = nil
     var isQwen3OnlyMode: Bool {
         // SenseVoice (sherpa) provides real-time partials even when Qwen3 also runs for calibration
         guard KeychainService.selectedASRProvider != .sherpa else { return false }
@@ -1076,6 +1193,7 @@ final class AppState {
     @ObservationIgnored var onShowPanel: (() -> Void)?
     @ObservationIgnored var onHidePanel: (() -> Void)?
     @ObservationIgnored var onRecordingControlAction: ((RecordingControlAction) -> Void)?
+    @ObservationIgnored var onReviseUndo: ((UUID) -> Void)?
 
     // MARK: Update Check
 
@@ -1113,6 +1231,8 @@ final class AppState {
     // MARK: Actions
 
     func startRecording() {
+        activityKind = .standard
+        latestReviseUndoTicketID = nil
         segments = []
         audioLevel.current = 0
         recordingStartDate = nil
@@ -1124,6 +1244,20 @@ final class AppState {
         // Keep the transparent panel alive for every style so a live settings
         // change from `.hidden` can reveal the indicator immediately. The view
         // itself is responsible for rendering nothing for `.hidden`.
+        onShowPanel?()
+    }
+
+    func startReviseRecording() {
+        activityKind = .revise
+        latestReviseUndoTicketID = nil
+        segments = []
+        audioLevel.current = 0
+        recordingStartDate = nil
+        feedbackMessage = L("已改好", "Revised")
+        feedbackKind = .standard
+        processingLabelOverride = nil
+        pinsTranscriptPopup = false
+        barPhase = .preparing
         onShowPanel?()
     }
 
@@ -1245,6 +1379,8 @@ final class AppState {
     }
 
     func cancel() {
+        activityKind = .standard
+        latestReviseUndoTicketID = nil
         barPhase = .hidden
         segments = []
         audioLevel.current = 0
@@ -1252,7 +1388,90 @@ final class AppState {
         onHidePanel?()
     }
 
+    func showReviseProcessing() {
+        processingFinishTime = nil
+        processingLabelOverride = L("正在改口…", "Revising…")
+        barPhase = .processing
+        onShowPanel?()
+    }
+
+    func finalizeRevise(text: String, message: String, undoTicketID: UUID?) {
+        guard barPhase == .processing else { return }
+        activityKind = .revise
+        latestReviseUndoTicketID = undoTicketID
+        segments = [TranscriptionSegment(text: text, isConfirmed: true)]
+        showDone(message: message, delay: .seconds(2.5))
+    }
+
+    func showReviseUndone(text: String) {
+        activityKind = .revise
+        latestReviseUndoTicketID = nil
+        segments = [TranscriptionSegment(text: text, isConfirmed: true)]
+        showDone(message: L("已撤销", "Undone"), delay: .seconds(2.0))
+    }
+
+    func showReviseError(_ failure: ReviseFailure) {
+        activityKind = .standard
+        latestReviseUndoTicketID = nil
+        let msg: String
+        switch failure {
+        case .noTarget, .targetMissing:
+            msg = L("没找到可改口的内容", "No content to revise")
+        case .expired:
+            msg = L("上一轮输出已过期", "Previous output has expired")
+        case .instructionEmpty:
+            msg = L("未听清修改指令", "Instruction not clear")
+        case .nothingToUndo:
+            msg = L("已撤销过，没有可撤销的修改", "Nothing to undo")
+        case .noEditableTarget:
+            msg = L("只支持撤销操作", "Only undo is supported")
+        case .targetTooLong, .instructionTooLong:
+            msg = L("内容太长，单次最多支持 1,500 字", "Content too long")
+        case .sensitive:
+            msg = L("包含密码或敏感信息，已停止改口", "Sensitive content detected")
+        case .llmUnavailable:
+            msg = L("无法连接大模型服务，请检查配置", "LLM service unavailable")
+        case .providerFailure:
+            msg = L("改口服务暂时不可用，请稍后重试", "Revise service temporarily unavailable, please retry")
+        case .targetAmbiguous:
+            msg = L("未找到唯一匹配的内容", "Target text is ambiguous")
+        case .instructionAmbiguous:
+            msg = L("修改指令不够明确", "Instruction is ambiguous")
+        case .implicitReplacementAmbiguous:
+            msg = L("找到多个可修改位置，请说清楚要改哪一个", "Found multiple editable locations, please specify which one")
+        case .protectedFactConflict:
+            msg = L("修改涉及未授权内容，已保留原文", "Modification involves unauthorized content, original kept")
+        case .malformedModelResponse:
+            msg = L("模型返回格式异常，请重试", "Model response format invalid, please retry")
+        case .unsupportedInstruction:
+            msg = L("暂不支持该修改指令", "Instruction not supported")
+        case .responseTooLarge, .diffBudgetExceeded:
+            msg = L("改动量过大，已保留原文本", "Change too large, original kept")
+        case .appChanged, .controlChanged:
+            msg = L("目标输入框已失焦", "Target control lost focus")
+        case .targetChangedDuringProcessing:
+            msg = L("目标文本已被修改", "Target text changed")
+        case .partialFailure, .replacementFailed:
+            msg = L("修改失败，已保留原文本", "Revision failed, original kept")
+        case .disabled, .excludedApp:
+            msg = L("改口功能已在此应用停用", "Revise is disabled for this app")
+        case .busy, .staleTransaction:
+            msg = L("请先完成当前操作", "Please finish current operation")
+        default:
+            msg = L("修改失败，已保留原文本", "Revision failed, original kept")
+        }
+        showError(msg)
+    }
+
+    func performReviseUndo() {
+        guard let ticketID = latestReviseUndoTicketID else { return }
+        latestReviseUndoTicketID = nil
+        onReviseUndo?(ticketID)
+    }
+
     func showCancelled() {
+        activityKind = .standard
+        latestReviseUndoTicketID = nil
         feedbackMessage = L("已取消", "Cancelled")
         audioLevel.current = 0
         recordingStartDate = nil

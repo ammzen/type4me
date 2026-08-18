@@ -21,6 +21,10 @@ struct HistoryRecord: Identifiable, Hashable {
     let llmDurationSeconds: Double?
     /// Versioned, privacy-safe JSON. Decoded only when an Intelli Sense row is expanded.
     let intelliSenseTraceJSON: String?
+    let userEditedText: String?
+    let userEditStatus: UserEditObservationStatus?
+    let userEditObservedAt: Date?
+    let userEditVersion: Int?
 
     init(
         id: String,
@@ -38,7 +42,11 @@ struct HistoryRecord: Identifiable, Hashable {
         llmModel: String? = nil,
         asrDurationSeconds: Double? = nil,
         llmDurationSeconds: Double? = nil,
-        intelliSenseTraceJSON: String? = nil
+        intelliSenseTraceJSON: String? = nil,
+        userEditedText: String? = nil,
+        userEditStatus: UserEditObservationStatus? = nil,
+        userEditObservedAt: Date? = nil,
+        userEditVersion: Int? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -56,6 +64,10 @@ struct HistoryRecord: Identifiable, Hashable {
         self.asrDurationSeconds = asrDurationSeconds
         self.llmDurationSeconds = llmDurationSeconds
         self.intelliSenseTraceJSON = intelliSenseTraceJSON
+        self.userEditedText = userEditedText
+        self.userEditStatus = userEditStatus
+        self.userEditObservedAt = userEditObservedAt
+        self.userEditVersion = userEditVersion
     }
 }
 
@@ -925,13 +937,25 @@ struct HistoryTab: View {
         }
         guard !toExport.isEmpty else { return }
 
-        let header = L("时间,时长(秒),处理模式,原始文本,最终文本", "Time,Duration(s),Mode,Raw Text,Final Text")
+        let header = L(
+            "时间,时长(秒),处理模式,原始文本,最终文本,用户修改后（本地观察）,观察状态,编辑数据格式版本",
+            "Time,Duration(s),Mode,Raw Text,Final Text,After User Edits (Locally Observed),Observation Status,Edit Data Format Version"
+        )
         let dateFormatter = ISO8601DateFormatter()
         let rows = toExport.map { r in
             let time = dateFormatter.string(from: r.createdAt)
             let duration = String(format: "%.1f", r.durationSeconds)
             let mode = r.processingMode ?? ""
-            return [time, duration, mode, r.rawText, r.finalText]
+            return [
+                time,
+                duration,
+                mode,
+                r.rawText,
+                r.finalText,
+                r.userEditedText ?? "",
+                r.userEditStatus?.rawValue ?? "",
+                r.userEditVersion.map(String.init) ?? "",
+            ]
                 .map { csvEscape($0) }
                 .joined(separator: ",")
         }
@@ -1141,6 +1165,28 @@ struct HistoryTab: View {
                 intelliSenseTraceDetails(trace)
             }
 
+            if let userEditedText = record.userEditedText {
+                VStack(alignment: .leading, spacing: 6) {
+                    historyTextDetail(
+                        title: L("Type4Me 输出", "Type4Me output"),
+                        text: record.finalText
+                    )
+                    historyTextDetail(
+                        title: L("用户修改后", "After user edits"),
+                        text: userEditedText
+                    )
+                    if record.userEditStatus == .clearedAfterEdit {
+                        Text(L("输入区域随后被清空", "The input area was cleared afterward"))
+                            .font(.system(size: 9))
+                            .foregroundStyle(TF.settingsTextTertiary)
+                    }
+                }
+            } else if record.userEditStatus == .sensitiveRedacted {
+                Text(L("修改结果未保存", "Edited text was not saved"))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+
             HStack(spacing: 12) {
                 if let asr = historyASRDescription(record) {
                     Label(asr, systemImage: "mic")
@@ -1154,6 +1200,18 @@ struct HistoryTab: View {
             }
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(TF.settingsTextTertiary)
+        }
+    }
+
+    private func historyTextDetail(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(TF.settingsTextTertiary)
+            Text(text)
+                .font(.system(size: 11))
+                .foregroundStyle(TF.settingsTextSecondary)
+                .textSelection(.enabled)
         }
     }
 
@@ -1307,6 +1365,7 @@ struct HistoryTab: View {
         case .chatToneAdapted: return L("调整为自然短句", "Adapted to a natural short message")
         case .emailToneAdapted: return L("调整为完整礼貌表达", "Adapted to complete, polite wording")
         case .documentStructured: return L("整理段落或结构", "Organized paragraph structure")
+        case .listStructured: return L("按多要点列表整理", "Structured as a multi-point list")
         case .technicalSyntaxPreserved: return L("保留技术语法和标识符", "Preserved technical syntax and identifiers")
         case .explicitCorrectionApplied: return L("采用最终改口内容", "Applied the final self-correction")
         case .contextTermAdopted: return L("沿用上下文中的术语写法", "Adopted terminology from nearby text")

@@ -53,8 +53,8 @@ struct IntelliSenseModeDetail: View, SettingsCardHelpers {
                 awarenessToggle(
                     L("表达习惯感知", "Expression Learning"),
                     subtitle: L(
-                        "在本地后台学习稳定的表达习惯，不展示或保存自然语言画像。",
-                        "Learn stable expression habits locally without exposing or storing a natural-language profile."
+                        "在本地短暂观察智能感知输出后的修改，并可把最后修改结果保存到对应历史；只学习抽象表达特征，不保存自然语言画像。",
+                        "Locally observe edits after Intelli Sense output and save the last edit with its history record; only abstract style features are learned, never a natural-language profile."
                     ),
                     keyPath: \.expressionLearningEnabled
                 )
@@ -62,8 +62,8 @@ struct IntelliSenseModeDetail: View, SettingsCardHelpers {
                 awarenessToggle(
                     L("纠错词检测（Beta）", "Correction Detection (Beta)"),
                     subtitle: L(
-                        "仅观察智能感知输出后的词汇修改；确认后加入全局生词表并在所有模式生效。",
-                        "Observe vocabulary edits only after Intelli Sense output. Confirmed terms join the global vocabulary for every mode."
+                        "在本地短暂观察智能感知输出后的修改，最后修改结果可保存到历史；纠错词经你确认后才加入全局生词表。",
+                        "Locally observe edits after Intelli Sense output and save the last edit with its history record; a correction joins global vocabulary only after you confirm it."
                     ),
                     keyPath: \.correctionDetectionEnabled
                 )
@@ -192,8 +192,8 @@ struct IntelliSenseModeDetail: View, SettingsCardHelpers {
             settingsOptionRow(
                 L("清除表达习惯数据", "Clear Expression Data"),
                 subtitle: L(
-                    "只清除后台表达模型，不删除已经确认的全局生词。",
-                    "Clear only the background expression model, not confirmed global vocabulary."
+                    "清除后台表达模型并记录重算水位；不删除历史记录或已经确认的全局生词。",
+                    "Clear the background expression model and set its rebuild watermark; history and confirmed global vocabulary remain."
                 ),
                 controlWidth: 120
             ) {

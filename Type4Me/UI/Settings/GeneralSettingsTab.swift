@@ -2,6 +2,7 @@ import SwiftUI
 import ServiceManagement
 import AVFoundation
 import ApplicationServices
+import Type4MeReviseCore
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // MARK: - General Settings Tab
@@ -22,7 +23,8 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     @AppStorage("tf_showDockIcon") private var showDockIcon = true
     @AppStorage("tf_bypassProxy") private var bypassProxy = "off"
     @AppStorage("tf_stripTrailingPunctuation") private var stripTrailingPunctuation = "off"
-    @AppStorage("tf_preserveCJKLatinSpacing") private var preserveCJKLatinSpacing = true
+    @AppStorage(CJKSpacingMode.storageKey) private var cjkSpacingMode = CJKSpacingMode.defaultValue
+    @AppStorage(CornerQuotePreference.storageKey) private var useCornerQuotes = CornerQuotePreference.defaultValue
     @AppStorage(LiveTranscriptDisplayPreference.storageKey) private var showLiveTranscript = LiveTranscriptDisplayPreference.defaultValue
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
     @AppStorage("tf_micKeepAlive") private var micKeepAlive = false
@@ -39,6 +41,10 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     @State private var availableSpeakers: [(uid: String, name: String)] = []
     @State private var showMicrophonePrioritySheet = false
     @State private var draftMicrophonePriorityEntries: [AudioInputDevicePreferenceEntry] = []
+
+    @State private var reviseSettings: ReviseSettings = ReviseSettingsStore.shared.load()
+    @State private var reviseKeyCode: Int? = ReviseSettingsStore.shared.load().hotkey?.keyCode
+    @State private var reviseModifiers: UInt64? = ReviseSettingsStore.shared.load().hotkey?.modifiers
 
     typealias TestStatus = SettingsTestStatus
 
@@ -87,13 +93,31 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
                 SettingsDivider()
                 stripPunctuationRow
                 SettingsDivider()
-                cjkLatinSpacingRow
+                panguSpacingRow
+                SettingsDivider()
+                cornerQuotesRow
             }
 
             Spacer().frame(height: 16)
 
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // CARD 2: 系统集成
+            // CARD: 改口设置
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            settingsGroupCard(L("改口设置", "Revise"), icon: "arrow.triangle.2.circlepath") {
+                reviseToggleRow
+                if reviseSettings.enabled {
+                    SettingsDivider()
+                    reviseHotkeyRow
+                    SettingsDivider()
+                    reviseHotkeyStyleRow
+                }
+            }
+
+            Spacer().frame(height: 16)
+
+            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            // CARD 3: 系统集成
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             settingsGroupCard(L("系统集成", "System Integration"), icon: "gearshape.2") {
@@ -254,9 +278,15 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     }
 
     private var launchAtLoginRow: some View {
-        settingsToggleRow(
+        let isSupported = LoginItemRegistrationPolicy.supportsCurrentProcess
+        return settingsToggleRow(
             L("开机自动启动", "Launch at Startup"),
-            isOn: $launchAtLogin
+            subtitle: isSupported ? nil : L(
+                "仅在 Type4Me 以 App 形式运行时可用",
+                "Available only when Type4Me runs as an app"
+            ),
+            isOn: $launchAtLogin,
+            isEnabled: isSupported
         )
     }
 
@@ -293,10 +323,30 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
         }
     }
 
-    private var cjkLatinSpacingRow: some View {
+    private var panguSpacingRow: some View {
+        settingsOptionRow(
+            L("盘古之白", "Pangu Spacing"),
+            subtitle: L(
+                "自动在中文与英文、数字和半角符号之间添加空格",
+                "Automatically add spaces between CJK text and half-width letters, numbers, and symbols"
+            )
+        ) {
+            settingsDropdown(
+                selection: $cjkSpacingMode,
+                options: [
+                    (CJKSpacingMode.pangu.rawValue, L("开启", "On")),
+                    (CJKSpacingMode.off.rawValue, L("关闭", "Off")),
+                    (CJKSpacingMode.remove.rawValue, L("移除空格", "Remove Spaces")),
+                ]
+            )
+        }
+    }
+
+    private var cornerQuotesRow: some View {
         settingsToggleRow(
-            L("保留中英文空格", "Keep CJK-Latin Spacing"),
-            isOn: $preserveCJKLatinSpacing
+            L("使用直角引号「」代替引号“”", "Use Corner Quotes 「」 Instead of Curly Quotes “”"),
+            subtitle: L("同时使用『』代替‘’", "Also use 『』 instead of ‘’"),
+            isOn: $useCornerQuotes
         )
     }
 
@@ -491,6 +541,112 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
         )
     }
 
+    // MARK: - Revise Settings Rows
+
+    private var reviseToggleRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("启用改口功能", "Enable Revise"))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(TF.settingsText)
+                Text(L("在刚输入的内容后按快捷键口述修改要求，直接原地修改", "Revise recent text in-place by speaking instructions with hotkey"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { reviseSettings.enabled },
+                set: { newValue in
+                    reviseSettings.enabled = newValue
+                    _ = try? ReviseSettingsStore.shared.save(reviseSettings)
+                    NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
+    private var reviseHotkeyRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("改口快捷键", "Revise Hotkey"))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(TF.settingsText)
+                Text(L("默认 fn + R", "Default: fn + R"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+            Spacer()
+            HotkeyRecorderView(
+                keyCode: Binding(
+                    get: { reviseKeyCode },
+                    set: { newCode in
+                        reviseKeyCode = newCode
+                        if let code = newCode {
+                            var hk = reviseSettings.hotkey ?? ReviseSettings.defaultHotkey
+                            hk.keyCode = code
+                            hk.modifiers = reviseModifiers
+                            reviseSettings.hotkey = hk
+                            _ = try? ReviseSettingsStore.shared.save(reviseSettings)
+                            NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                        }
+                    }
+                ),
+                modifiers: Binding(
+                    get: { reviseModifiers },
+                    set: { newMods in
+                        reviseModifiers = newMods
+                        if let code = reviseKeyCode {
+                            var hk = reviseSettings.hotkey ?? ReviseSettings.defaultHotkey
+                            hk.keyCode = code
+                            hk.modifiers = newMods
+                            reviseSettings.hotkey = hk
+                            _ = try? ReviseSettingsStore.shared.save(reviseSettings)
+                            NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                        }
+                    }
+                )
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
+    private var reviseHotkeyStyleRow: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L("触发方式", "Trigger Style"))
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(TF.settingsText)
+                Text(L("长按松开结束，或单击开始/结束", "Hold to speak, or tap to toggle"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TF.settingsTextTertiary)
+            }
+            Spacer()
+            Picker("", selection: Binding(
+                get: { reviseSettings.hotkey?.style ?? .hold },
+                set: { newStyle in
+                    var hk = reviseSettings.hotkey ?? ReviseSettings.defaultHotkey
+                    hk.style = newStyle
+                    reviseSettings.hotkey = hk
+                    _ = try? ReviseSettingsStore.shared.save(reviseSettings)
+                    NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                }
+            )) {
+                Text(L("长按", "Hold")).tag(HotkeyStyle.hold)
+                Text(L("单击切换", "Toggle")).tag(HotkeyStyle.toggle)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 140)
+            .labelsHidden()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
     private var preserveClipboardRow: some View {
         settingsToggleRow(
             L("注入剪贴板", "Copy to Clipboard"),
@@ -564,6 +720,10 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     // MARK: - Login Item
 
     private func setLoginItem(enabled: Bool) {
+        guard LoginItemRegistrationPolicy.supportsCurrentProcess else {
+            launchAtLogin = false
+            return
+        }
         do {
             if enabled {
                 try SMAppService.mainApp.register()
@@ -576,6 +736,10 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     }
 
     private func syncLoginItemState() {
+        guard LoginItemRegistrationPolicy.supportsCurrentProcess else {
+            launchAtLogin = false
+            return
+        }
         let status = SMAppService.mainApp.status
         if status == .notRegistered, !UserDefaults.standard.bool(forKey: "tf_didInitialLoginItemSetup") {
             // First launch: register login item by default

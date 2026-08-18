@@ -2,11 +2,11 @@ import Foundation
 
 public enum FixtureLoader {
     public static let expectedSuiteCounts: [String: Int] = [
-        "core-polish": 40,
+        "core-polish": 44,
         "boundary-fidelity": 20,
         "application": 20,
         "context": 20,
-        "expression": 12,
+        "expression": 14,
         "privacy-fallback": 8,
     ]
 
@@ -43,7 +43,8 @@ public enum FixtureLoader {
         let ids = cases.map(\.id)
         guard Set(ids).count == ids.count else { throw EvaluationError.fixture("duplicate case IDs") }
         guard cases.count == expectedSuiteCounts.values.reduce(0, +) else {
-            throw EvaluationError.fixture("expected 120 cases, found \(cases.count)")
+            let expected = expectedSuiteCounts.values.reduce(0, +)
+            throw EvaluationError.fixture("expected \(expected) cases, found \(cases.count)")
         }
         for (suite, expected) in expectedSuiteCounts {
             let actual = cases.filter { $0.suite == suite }.count
@@ -51,11 +52,11 @@ public enum FixtureLoader {
                 throw EvaluationError.fixture("suite \(suite) expected \(expected), found \(actual)")
             }
         }
-        guard cases.filter(\.smoke).count == 24 else {
-            throw EvaluationError.fixture("smoke subset must contain exactly 24 cases")
+        guard cases.filter(\.smoke).count == 28 else {
+            throw EvaluationError.fixture("smoke subset must contain exactly 28 cases")
         }
-        guard cases.filter(\.critical).count == 12 else {
-            throw EvaluationError.fixture("critical subset must contain exactly 12 cases")
+        guard cases.filter(\.critical).count == 16 else {
+            throw EvaluationError.fixture("critical subset must contain exactly 16 cases")
         }
         for item in cases {
             guard !item.id.isEmpty, !item.inputText.isEmpty, !item.intentSummary.isEmpty else {

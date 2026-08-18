@@ -26,6 +26,8 @@ struct LocalASREngineSelection: Equatable {
 
 struct ASRSettingsCard: View, SettingsCardHelpers {
 
+    let draftCoordinator: SettingsDraftCoordinator
+
     @State private var selectedASRProvider: ASRProvider = .volcano
     @State private var asrCredentialValues: [String: String] = [:]
     @State private var savedASRValues: [String: String] = [:]
@@ -270,6 +272,17 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         .task {
             loadASRCredentials()
             refreshModelStatus()
+        }
+        .onAppear {
+            draftCoordinator.register(
+                .asrCredentials,
+                isDirty: { !editedFields.isEmpty },
+                save: saveASRCredentials,
+                discard: loadASRCredentials
+            )
+        }
+        .onDisappear {
+            draftCoordinator.unregister(.asrCredentials)
         }
     }
 
@@ -699,7 +712,12 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         }
     }
 
-    private func saveASRCredentials() {
+    @discardableResult
+    private func saveASRCredentials() -> Bool {
+        guard hasASRCredentials else {
+            asrTestStatus = .failed(L("配置无效", "Invalid config"))
+            return false
+        }
         let values = effectiveASRValues
         do {
             try KeychainService.saveASRCredentials(for: selectedASRProvider, values: values)
@@ -710,8 +728,10 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             hasStoredASR = true
             isEditingASR = false
             asrTestStatus = .saved
+            return true
         } catch {
             asrTestStatus = .failed(L("保存失败", "Save failed"))
+            return false
         }
     }
 

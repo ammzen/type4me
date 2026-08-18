@@ -150,6 +150,35 @@ final class IntelliSenseHistoryTraceTests: XCTestCase {
         XCTAssertEqual(trace.guardOutcome, .unavailable)
     }
 
+    func testBrowserListRestructureGetsGenericHistoryEffect() {
+        var settings = IntelliSenseSettings()
+        settings.applicationAwarenessEnabled = true
+        let context = snapshot(
+            appName: "Dia",
+            category: .browser,
+            control: .multiLine,
+            availability: .appAndControl
+        )
+        let input = "报价分为三块。第一块是 License，第二块是 Studios，第三块是 FDE。"
+        let output = "报价分为三块：\n1. License；\n2. Studios；\n3. FDE。"
+        let result = IntelliSenseOutputValidator.process(
+            input: input,
+            candidate: output,
+            context: context
+        )
+        let trace = IntelliSenseHistoryTraceBuilder.build(
+            input: input,
+            finalText: output,
+            promptInput: .init(context: context, settings: settings, expressionProfile: nil),
+            processingResult: result,
+            processingFailed: false
+        )
+
+        XCTAssertEqual(trace.scene, .browser)
+        XCTAssertTrue(trace.effects.contains(.listStructured))
+        XCTAssertFalse(trace.effects.contains(.generalPolish))
+    }
+
     private func snapshot(
         appName: String,
         category: ApplicationCategory,

@@ -6,6 +6,8 @@ import SwiftUI
 
 struct LLMSettingsCard: View, SettingsCardHelpers {
 
+    let draftCoordinator: SettingsDraftCoordinator
+
     @State private var selectedLLMProvider: LLMProvider = .doubao
     @State private var llmCredentialValues: [String: String] = [:]
     @State private var savedLLMValues: [String: String] = [:]
@@ -124,6 +126,17 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
         }
         .task {
             loadLLMCredentials()
+        }
+        .onAppear {
+            draftCoordinator.register(
+                .llmCredentials,
+                isDirty: { !editedFields.isEmpty },
+                save: saveLLMCredentials,
+                discard: loadLLMCredentials
+            )
+        }
+        .onDisappear {
+            draftCoordinator.unregister(.llmCredentials)
         }
     }
 
@@ -425,7 +438,12 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
         syncCustomModeFields()
     }
 
-    private func saveLLMCredentials() {
+    @discardableResult
+    private func saveLLMCredentials() -> Bool {
+        guard hasLLMCredentials else {
+            llmTestStatus = .failed(L("配置无效", "Invalid config"))
+            return false
+        }
         let values = effectiveLLMValues
         do {
             try KeychainService.saveLLMCredentials(for: selectedLLMProvider, values: values)
@@ -436,8 +454,10 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
             hasStoredLLM = true
             isEditingLLM = false
             llmTestStatus = .saved
+            return true
         } catch {
             llmTestStatus = .failed(L("保存失败", "Save failed"))
+            return false
         }
     }
 

@@ -3,14 +3,70 @@ import MediaPlayer
 
 typealias HotkeyStyle = ProcessingMode.HotkeyStyle
 
-struct ModeBinding {
+enum GlobalHotkeyAction: String, Codable, Sendable {
+    case revise
+}
+
+enum HotkeyOwner: Hashable, Sendable {
+    case mode(UUID)
+    case globalAction(GlobalHotkeyAction)
+}
+
+struct ModeBinding: Sendable {
     let bindingId: UUID
-    let modeId: UUID
+    let owner: HotkeyOwner
+    var modeId: UUID {
+        if case .mode(let id) = owner { return id }
+        return UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    }
     let keyCode: CGKeyCode
     let modifiers: CGEventFlags  // .maskCommand etc. Use [] for no modifiers
     let style: HotkeyStyle
     let onStart: @Sendable () -> Void
     let onStop: @Sendable () -> Void
+    var onBusyConflict: (@Sendable () -> Void)? = nil
+
+    init(
+        bindingId: UUID,
+        owner: HotkeyOwner,
+        keyCode: CGKeyCode,
+        modifiers: CGEventFlags,
+        style: HotkeyStyle,
+        onStart: @escaping @Sendable () -> Void,
+        onStop: @escaping @Sendable () -> Void,
+        onBusyConflict: (@Sendable () -> Void)? = nil
+    ) {
+        self.bindingId = bindingId
+        self.owner = owner
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        self.style = style
+        self.onStart = onStart
+        self.onStop = onStop
+        self.onBusyConflict = onBusyConflict
+    }
+
+    init(
+        bindingId: UUID,
+        modeId: UUID,
+        keyCode: CGKeyCode,
+        modifiers: CGEventFlags,
+        style: HotkeyStyle,
+        onStart: @escaping @Sendable () -> Void,
+        onStop: @escaping @Sendable () -> Void,
+        onBusyConflict: (@Sendable () -> Void)? = nil
+    ) {
+        self.init(
+            bindingId: bindingId,
+            owner: .mode(modeId),
+            keyCode: keyCode,
+            modifiers: modifiers,
+            style: style,
+            onStart: onStart,
+            onStop: onStop,
+            onBusyConflict: onBusyConflict
+        )
+    }
 
     /// Whether this binding is for a mouse button (encoded with high-bit keyCode).
     var isMouseButton: Bool { ModeBinding.isMouseKeyCode(Int(keyCode)) }
@@ -170,6 +226,14 @@ final class HotkeyManager: NSObject {
 
     // MARK: - Configuration
 
+    /// Global keyboard shortcuts must be observed before app-level consumers such as
+    /// Feishu/Lark can consume a bare Fn event. Always prefer the HID tap and retain the
+    /// session tap as a compatibility fallback when HID access is unavailable.
+    internal static let tapLocationPriority: [CGEventTapLocation] = [
+        .cghidEventTap,
+        .cgSessionEventTap,
+    ]
+
     private var bindings: [ModeBinding] = []
     /// Per-binding state, all keyed by `HotkeyBinding.id` so multiple bindings of the
     /// same mode never collide.
@@ -182,6 +246,8 @@ final class HotkeyManager: NSObject {
     /// The mode owning the active recording binding. Used to distinguish same-mode
     /// (stop) from cross-mode (switch) presses.
     private var activeRecordingModeId: UUID?
+    private var activeRecordingOwner: HotkeyOwner?
+    var onBusyConflict: (() -> Void)?
     private struct PendingModifierTrigger {
         let binding: ModeBinding
         let token: UUID
@@ -287,39 +353,30 @@ final class HotkeyManager: NSObject {
 
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
 
-        let tap: CFMachPort?
-        if hasMediaKeyBindings {
-            // Try cghidEventTap first for more reliable interception of media/headphone keys.
-            // If unavailable (e.g. insufficient permissions), fall back to cgSessionEventTap.
+        var tap: CFMachPort?
+        var selectedTapLocation: CGEventTapLocation?
+        for location in Self.tapLocationPriority where tap == nil {
             tap = CGEvent.tapCreate(
-                tap: .cghidEventTap,
-                place: .headInsertEventTap,
-                options: .defaultTap,
-                eventsOfInterest: eventMask,
-                callback: hotkeyCallback,
-                userInfo: userInfo
-            ) ?? CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
+                tap: location,
                 place: .headInsertEventTap,
                 options: .defaultTap,
                 eventsOfInterest: eventMask,
                 callback: hotkeyCallback,
                 userInfo: userInfo
             )
-        } else {
-            tap = CGEvent.tapCreate(
-                tap: .cgSessionEventTap,
-                place: .headInsertEventTap,
-                options: .defaultTap,
-                eventsOfInterest: eventMask,
-                callback: hotkeyCallback,
-                userInfo: userInfo
-            )
+            if tap != nil {
+                selectedTapLocation = location
+            }
         }
 
         guard let tap = tap else {
             return false
         }
+
+        let locationName = selectedTapLocation == .cghidEventTap ? "hid" : "session"
+        DebugFileLogger.log(
+            "hotkey event tap installed location=\(locationName) mediaBindings=\(hasMediaKeyBindings)"
+        )
 
         eventTap = tap
         lastEventTime = nil
@@ -400,6 +457,9 @@ final class HotkeyManager: NSObject {
         // When macOS disables the tap (main thread blocked >1s), keyUp events are lost.
         // We must check if held keys are still physically down; if not, fire onStop.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            DebugFileLogger.log(
+                "hotkey event tap disabled type=\(type.rawValue) recording=\(activeRecordingBindingId != nil)"
+            )
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
@@ -489,6 +549,11 @@ final class HotkeyManager: NSObject {
         // flags exactly match a registered combo, swallow the event so the modifier
         // doesn't also trigger its own system behavior.
         if type == .flagsChanged {
+            if activeRecordingBindingId != nil {
+                DebugFileLogger.log(
+                    "hotkey flagsChanged keyCode=\(keyCode) rawFlags=\(normalizedModifierFlags(event.flags).rawValue) previousFlags=\(previousModifierFlags.rawValue)"
+                )
+            }
             let matchedCombo = evaluateModifierBindings(currentFlags: event.flags)
             return matchedCombo ? nil : Unmanaged.passUnretained(event)
         }
@@ -573,17 +638,27 @@ final class HotkeyManager: NSObject {
         }
     }
 
-    /// A toggle binding was pressed. Start when idle, stop when the same mode is recording,
+    /// A toggle binding was pressed. Start when idle, stop when the same owner is recording,
     /// or hand off to cross-mode switching when a different mode is recording.
     private func handleTogglePress(binding: ModeBinding) {
+        if isProcessing {
+            binding.onBusyConflict?() ?? onBusyConflict?()
+            return
+        }
         if activeRecordingBindingId != nil {
-            if activeRecordingModeId == binding.modeId {
-                // Same mode (same binding = toggle off, or a sibling binding): stop.
+            if activeRecordingOwner == binding.owner {
+                // Same owner (same binding = toggle off, or a sibling binding): stop.
                 stopActiveRecording()
-            } else {
+            } else if case .mode = activeRecordingOwner, case .mode(let targetModeId) = binding.owner {
                 // Different mode: finish the current recording through the app's policy.
                 clearActiveRecordingState()
-                onCrossModeFinish?(binding.modeId)
+                onCrossModeFinish?(targetModeId)
+            } else if case .globalAction(.revise) = activeRecordingOwner, case .mode = binding.owner {
+                // Cross-mode finish for revise: pressing any mode key stops the revise recording.
+                stopActiveRecording()
+            } else {
+                // Cross-task collision (e.g. revise while voice input active): reject!
+                binding.onBusyConflict?() ?? onBusyConflict?()
             }
         } else {
             startRecording(with: binding)
@@ -592,19 +667,29 @@ final class HotkeyManager: NSObject {
 
     /// A hold binding went down.
     private func handleHoldPress(binding: ModeBinding) {
+        if isProcessing {
+            binding.onBusyConflict?() ?? onBusyConflict?()
+            return
+        }
         let bindingId = binding.bindingId
         // Ignore repeated down while already holding this binding.
         guard holdState[bindingId] != true else { return }
 
         if activeRecordingBindingId != nil {
-            if activeRecordingModeId == binding.modeId {
-                // Same mode recording via another binding: this press just stops it.
+            if activeRecordingOwner == binding.owner {
+                // Same owner recording via another binding: this press just stops it.
                 // Do not begin a hold recording, so the eventual release is a no-op.
                 stopActiveRecording()
-            } else {
+            } else if case .mode = activeRecordingOwner, case .mode(let targetModeId) = binding.owner {
                 // Different mode: finish the current recording through the app's policy.
                 clearActiveRecordingState()
-                onCrossModeFinish?(binding.modeId)
+                onCrossModeFinish?(targetModeId)
+            } else if case .globalAction(.revise) = activeRecordingOwner, case .mode = binding.owner {
+                // Cross-mode finish for revise: pressing any mode key stops the revise recording.
+                stopActiveRecording()
+            } else {
+                // Cross-task collision: reject!
+                binding.onBusyConflict?() ?? onBusyConflict?()
             }
             return
         }
@@ -619,11 +704,16 @@ final class HotkeyManager: NSObject {
     private func handleHoldRelease(binding: ModeBinding) {
         let bindingId = binding.bindingId
         guard holdState[bindingId] == true else { return }
+        guard activeRecordingBindingId == bindingId else {
+            // Held binding was interrupted/stopped earlier by another event.
+            // Consume the release and cancel its timer without firing onStop.
+            holdState[bindingId] = false
+            cancelSafetyTimer(for: bindingId)
+            return
+        }
         holdState[bindingId] = false
         cancelSafetyTimer(for: bindingId)
-        if activeRecordingBindingId == bindingId {
-            stopActiveRecording()
-        }
+        stopActiveRecording()
     }
 
     // MARK: - Active recording lifecycle
@@ -631,6 +721,7 @@ final class HotkeyManager: NSObject {
     private func startRecording(with binding: ModeBinding) {
         activeRecordingBindingId = binding.bindingId
         activeRecordingModeId = binding.modeId
+        activeRecordingOwner = binding.owner
         binding.onStart()
     }
 
@@ -650,15 +741,6 @@ final class HotkeyManager: NSObject {
     /// `onStop` a second time on an already-stopped session ("ghost stop"). On the timer
     /// self-fire path the hold state is already cleared by `handleHoldSafetyTimer`, so
     /// clearing here is a safe no-op.
-    /// Clear all active-recording bookkeeping. This is the single point where an in-flight
-    /// recording is torn down, regardless of the trigger (same-mode second binding,
-    /// cross-mode toggle/hold, ESC, safety timer, reset, …). Before dropping the active
-    /// binding id we clear its hold-side state (`holdState` + safety timer), so a hold
-    /// binding that is interrupted mid-recording by another binding/mode cannot leave a
-    /// dangling 120s safety timer that later fires `handleHoldSafetyTimer` and invokes
-    /// `onStop` a second time on an already-stopped session ("ghost stop"). On the timer
-    /// self-fire path the hold state is already cleared by `handleHoldSafetyTimer`, so
-    /// clearing here is a safe no-op.
     private func clearActiveRecordingState() {
         if let activeId = activeRecordingBindingId {
             holdState[activeId] = false
@@ -666,6 +748,7 @@ final class HotkeyManager: NSObject {
         }
         activeRecordingBindingId = nil
         activeRecordingModeId = nil
+        activeRecordingOwner = nil
     }
 
     private func activeRecordingBinding() -> ModeBinding? {

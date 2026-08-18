@@ -3,6 +3,8 @@ import XCTest
 @testable import Type4MeIntelliSenseCore
 
 final class IntelliSensePromptTests: XCTestCase {
+    private let pricingInput = "目前报价模式分为三块。第一块是 Casual Platform 的 license。第二块是不同业务 scenario 的 studios。第三部分是前置设计、讨论和优化工作，包装为 FDE。"
+
     func testScenePolicyGoldenMapping() {
         let expected: [ApplicationCategory: ScenePolicy] = [
             .messaging: .init(compactness: .high, formality: .low, structure: .low, preserveTechnicalTokens: false, preserveCommandSyntax: false),
@@ -95,6 +97,16 @@ final class IntelliSensePromptTests: XCTestCase {
         XCTAssertTrue(prompt.contains("1. 登录错误提示不清楚"))
     }
 
+    func testBasePromptDistinguishesResponseMarkersFromFillers() {
+        let prompt = IntelliSensePromptBuilder.baseTemplate
+
+        XCTAssertTrue(prompt.contains("不得按词表机械删除"))
+        XCTAssertTrue(prompt.contains("如果在表达同意、确认、理解、惊讶、转折"))
+        XCTAssertTrue(prompt.contains("输入：嗯，可以，那我们明天下午 3 点见。"))
+        XCTAssertTrue(prompt.contains("输入：OK，那就按这个版本发布。"))
+        XCTAssertTrue(prompt.contains("输入：好的，你再修改一下"))
+    }
+
     func testCompactMessagingSceneCannotSuppressExplicitMultiPointLists() {
         var settings = IntelliSenseSettings()
         settings.applicationAwarenessEnabled = true
@@ -152,6 +164,43 @@ final class IntelliSensePromptTests: XCTestCase {
         XCTAssertTrue(prompt.contains("不能覆盖口述事实、自我修正结果、明确多要点的列表化规则"))
     }
 
+    func testStrongOrderedIntentAddsRequestSpecificContractAndFiltersNegativePreference() {
+        var settings = IntelliSenseSettings()
+        settings.applicationAwarenessEnabled = true
+        settings.expressionLearningEnabled = true
+        let prompt = IntelliSensePromptBuilder.build(request: IntelliSenseRequest(
+            text: pricingInput,
+            context: snapshot(category: .browser, control: .multiLine),
+            settings: settings,
+            expressionProfile: EffectiveExpressionProfile(directives: [
+                "倾向连续自然段，减少列表。",
+                "中文与英文之间倾向保留空格。",
+            ])
+        ))
+
+        XCTAssertTrue(prompt.contains("本次口述明确包含 3 个有顺序的实质要点"))
+        XCTAssertTrue(prompt.contains("恰好 3 项编号列表"))
+        XCTAssertFalse(prompt.contains("倾向连续自然段，减少列表"))
+        XCTAssertTrue(prompt.contains("中文与英文之间倾向保留空格"))
+    }
+
+    func testSingleLineScenesDoNotReceiveRequestSpecificListContract() {
+        var settings = IntelliSenseSettings()
+        settings.applicationAwarenessEnabled = true
+        for context in [
+            snapshot(category: .browser, control: .search),
+            snapshot(category: .document, control: .title),
+            snapshot(category: .terminal, control: .terminal),
+        ] {
+            let prompt = IntelliSensePromptBuilder.build(request: IntelliSenseRequest(
+                text: pricingInput,
+                context: context,
+                settings: settings
+            ))
+            XCTAssertFalse(prompt.contains("# 本次结构要求"))
+        }
+    }
+
     func testBlacklistedAppDisablesEveryEnhancedLayer() {
         var settings = IntelliSenseSettings()
         settings.applicationAwarenessEnabled = true
@@ -190,6 +239,64 @@ final class IntelliSensePromptTests: XCTestCase {
 }
 
 final class IntelliSenseOutputGuardTests: XCTestCase {
+    func testAllowsAnswerLikePrefixWhenItCameFromUser() {
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "好的你再修改一下然后给我几个实际用例",
+                output: "好的，你再修改一下，然后给我几个实际用例。"
+            ),
+            .accept
+        )
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "当然可以，我们明天下午继续。",
+                output: "当然可以，我们明天下午继续。"
+            ),
+            .accept
+        )
+    }
+
+    func testStillRejectsNewAnswerFramingAddedByModel() {
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "怎么部署这个项目",
+                output: "好的，先运行构建命令"
+            ),
+            .reject(.answerOrExplanation)
+        )
+    }
+
+    func testProtectsHighConfidenceLeadingResponseMarkers() {
+        for (input, output) in [
+            ("嗯，可以，那我们明天下午 3 点见。", "可以，那我们明天下午 3 点见。"),
+            ("哦，原来是这样，那就继续。", "原来是这样，那就继续。"),
+            ("OK，那就按这个版本发布。", "那就按这个版本发布。"),
+        ] {
+            XCTAssertEqual(
+                IntelliSenseOutputGuard.evaluate(input: input, output: output),
+                .reject(.responseMarkerChanged),
+                "failed case \(input)"
+            )
+        }
+    }
+
+    func testFillerAndCorrectionMarkersRemainRemovable() {
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "嗯那个我们明天下午开会。",
+                output: "我们明天下午开会。"
+            ),
+            .accept
+        )
+        XCTAssertEqual(
+            IntelliSenseOutputGuard.evaluate(
+                input: "哦，不对，应该是周四上线。",
+                output: "应该是周四上线。"
+            ),
+            .accept
+        )
+    }
+
     func testAcceptsConservativePolishAndMixedEnglishToken() {
         XCTAssertEqual(
             IntelliSenseOutputGuard.evaluate(
@@ -267,7 +374,7 @@ final class IntelliSenseOutputGuardTests: XCTestCase {
         )
         XCTAssertEqual(
             IntelliSenseOutputGuard.evaluate(input: "- 第一项\n- 第二项", output: "第一项和第二项"),
-            .acceptWithWarnings([.listStructureChanged])
+            .acceptWithWarnings([.listStructureChanged, .expectedListStructureMissing])
         )
         XCTAssertEqual(
             IntelliSenseOutputGuard.evaluate(input: "这是一个需要保持中文输出的完整句子", output: "This sentence was replaced entirely in English"),
@@ -411,5 +518,56 @@ final class IntelliSenseOutputGuardTests: XCTestCase {
             availability: .full,
             wasTruncated: false
         )
+    }
+
+
+    func testMissingExpectedListIsDiagnosticOnly() {
+        let input = "方案分为三块。第一块是平台授权，第二块是场景 Studio，第三块是 FDE 服务。"
+        let output = "方案分为三块：第一块是平台授权；第二块是场景 Studio；第三块是 FDE 服务。"
+        let result = IntelliSenseOutputValidator.process(input: input, candidate: output)
+
+        guard case .acceptWithWarnings(let warnings) = result.decision else {
+            return XCTFail("Expected diagnostic acceptance, got \(result.decision)")
+        }
+        XCTAssertTrue(warnings.contains(.expectedListStructureMissing))
+        XCTAssertEqual(result.finalText, output)
+    }
+}
+
+final class ListStructureIntentAnalyzerTests: XCTestCase {
+    func testRecognizesOrderedChineseEnglishAndTransitionSequences() {
+        XCTAssertEqual(
+            ListStructureIntentAnalyzer.analyze("分为三块，第一块是 A，第二块是 B，第三部分是 C"),
+            .ordered(expectedItems: 3)
+        )
+        XCTAssertEqual(
+            ListStructureIntentAnalyzer.analyze("首先确认需求，其次完成开发，最后发布"),
+            .ordered(expectedItems: 3)
+        )
+        XCTAssertEqual(
+            ListStructureIntentAnalyzer.analyze("一是确认需求，二是完成开发，三是发布"),
+            .ordered(expectedItems: 3)
+        )
+        XCTAssertEqual(
+            ListStructureIntentAnalyzer.analyze("First, confirm scope. Second, build it. Third, ship it."),
+            .ordered(expectedItems: 3)
+        )
+    }
+
+    func testRecognizesExplicitUnorderedCountAndExistingBullets() {
+        XCTAssertEqual(
+            ListStructureIntentAnalyzer.analyze("这次有三个问题需要解决"),
+            .unordered(minimumItems: 3)
+        )
+        XCTAssertEqual(
+            ListStructureIntentAnalyzer.analyze("需要处理：\n- 登录问题\n- 支付问题\n- 通知问题"),
+            .unordered(minimumItems: 3)
+        )
+    }
+
+    func testRejectsIncidentalOrSingleOrdinals() {
+        for text in ["这是第一版方案", "我们第二天再讨论", "第一我们只做一件事"] {
+            XCTAssertEqual(ListStructureIntentAnalyzer.analyze(text), .none, text)
+        }
     }
 }

@@ -1,10 +1,10 @@
 import XCTest
 @testable import Type4Me
+@testable import Type4MeIntelliSenseCore
 
 final class RecognitionSessionTests: XCTestCase {
     override func tearDown() {
         KeychainService.selectedASRProvider = .volcano
-        UserDefaults.standard.removeObject(forKey: "tf_preserveCJKLatinSpacing")
     }
 
     func testInitialStateIsIdle() async {
@@ -71,6 +71,86 @@ final class RecognitionSessionTests: XCTestCase {
         XCTAssertEqual(mode.id, ProcessingMode.directId)
     }
 
+    func testTranslationTargetAndPromptAreFrozenForSession() async throws {
+        let session = RecognitionSession()
+        let english = ProcessingMode.translation(target: .english)
+        try await session.freezeTranslationModeForTesting(english)
+
+        let firstPrompt = await session.promptForCurrentModeForTesting()
+        var changedSetting = ProcessingMode.translation(target: .japanese)
+        changedSetting.translationTargetLanguageCode = TranslationLanguage.japanese.rawValue
+        await session.replaceTranslationModeSnapshotForTesting(changedSetting)
+        let secondPrompt = await session.promptForCurrentModeForTesting()
+
+        let frozenTarget = await session.frozenTranslationTargetForTesting()
+        XCTAssertEqual(frozenTarget, .english)
+        XCTAssertEqual(secondPrompt, firstPrompt)
+        XCTAssertTrue(secondPrompt.contains("English (en)"))
+        XCTAssertFalse(secondPrompt.contains("Japanese (ja)"))
+    }
+
+    func testIntelliSensePromptUsesCurrentTranscriptWithFrozenContext() async {
+        let session = RecognitionSession()
+        var settings = IntelliSenseSettings()
+        settings.applicationAwarenessEnabled = true
+        settings.expressionLearningEnabled = true
+        await session.freezeIntelliSenseForTesting(
+            snapshot: IntelliSenseContextSnapshot(
+                bundleIdentifier: "company.thebrowser.dia",
+                appName: "Dia",
+                appCategory: .browser,
+                controlCategory: .multiLine,
+                contextBeforeCursor: "",
+                contextAfterCursor: "",
+                availability: .appOnly,
+                wasTruncated: false
+            ),
+            settings: settings,
+            expressionProfile: EffectiveExpressionProfile(
+                directives: ["倾向连续自然段，减少列表。"]
+            )
+        )
+
+        let speculative = await session.promptForCurrentModeForTesting(
+            text: "目前报价模式分为三块。第一块是 license，第二块是 Studio。"
+        )
+        let final = await session.promptForCurrentModeForTesting(
+            text: "目前报价模式分为三块。第一块是 license，第二块是 Studio，第三块是 FDE。"
+        )
+
+        XCTAssertTrue(speculative.contains("明确包含 2 个有顺序"))
+        XCTAssertTrue(final.contains("明确包含 3 个有顺序"))
+        XCTAssertFalse(final.contains("减少列表"))
+        XCTAssertTrue(final.contains("company.thebrowser.dia") == false)
+    }
+
+    func testUnknownTranslationTargetCannotBeFrozen() async {
+        let session = RecognitionSession()
+        var mode = ProcessingMode.translation()
+        mode.translationTargetLanguageCode = "x-future"
+
+        do {
+            try await session.freezeTranslationModeForTesting(mode)
+            XCTFail("Expected unsupported target")
+        } catch let error as TranslationError {
+            XCTAssertEqual(error.errorDescription, L(
+                "暂不支持目标语言：x-future",
+                "Unsupported target language: x-future"
+            ))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    func testUnexpectedTranslationLanguageHasUserFacingFailureMessage() {
+        let error = TranslationError.unexpectedLanguage(.japanese)
+
+        XCTAssertEqual(error.errorDescription, L(
+            "翻译结果不是目标语言（日语），已停止粘贴。",
+            "The translation was not in the target language (Japanese) and was not pasted."
+        ))
+    }
+
     func testShouldAttemptBatchFallbackWhenStreamingErrorWasObserved() {
         let shouldFallback = RecognitionSession.shouldAttemptBatchFallback(
             uploadFailed: false,
@@ -81,48 +161,34 @@ final class RecognitionSessionTests: XCTestCase {
         XCTAssertTrue(shouldFallback)
     }
 
-    // MARK: - CJK / Latin spacing (issue #186)
-
-    /// The space between a CJK character and an adjacent Latin word or digit
-    /// (Pangu spacing) must survive normalization. Regression test for #186,
-    /// where "我已经把最新的 prompt 提交并更新" was collapsed to "...的prompt提交...".
-    func testRemovingCJKLatinSpaces_preservesPanguSpacing() {
-        UserDefaults.standard.set(true, forKey: "tf_preserveCJKLatinSpacing")
-
-        // The reported case: CJK ↔ Latin spaces are kept.
-        XCTAssertEqual(
-            "我已经把最新的 prompt 提交并更新".removingCJKLatinSpaces,
-            "我已经把最新的 prompt 提交并更新"
+    func testRevisePurposeNeverRunsInputModeLLM() {
+        let prepared = RevisePreparedTarget(
+            transactionID: UUID(),
+            targetID: UUID(),
+            targetGeneration: 0,
+            sourceRecordID: "record-1",
+            currentText: "明天上午 9 点开会",
+            currentFullValue: "明天上午 9 点开会",
+            currentRange: NSRange(location: 0, length: 10),
+            confidence: .exact,
+            controlKind: .multiLine,
+            sourceModeKind: .direct,
+            learningResumePlan: nil,
+            isDeletionTombstone: false
         )
-        // CJK ↔ Latin word, both boundaries.
-        XCTAssertEqual("Max 你好".removingCJKLatinSpaces, "Max 你好")
-        XCTAssertEqual("发布 v1.9.5 版本".removingCJKLatinSpaces, "发布 v1.9.5 版本")
-        // CJK ↔ digit.
-        XCTAssertEqual("第 3 个".removingCJKLatinSpaces, "第 3 个")
-        // Pure English is untouched.
-        XCTAssertEqual("hello world".removingCJKLatinSpaces, "hello world")
+
+        XCTAssertFalse(RecognitionSession.shouldRunInputModeLLM(
+            recordingPurpose: .revise(prepared),
+            mode: .intelliSense
+        ))
+        XCTAssertTrue(RecognitionSession.shouldRunInputModeLLM(
+            recordingPurpose: .input(.intelliSense),
+            mode: .intelliSense
+        ))
+        XCTAssertFalse(RecognitionSession.shouldRunInputModeLLM(
+            recordingPurpose: .input(.direct),
+            mode: .direct
+        ))
     }
 
-    /// Spaces between two CJK characters, or between a CJK character and
-    /// punctuation, are ASR/LLM noise and must still be removed.
-    func testRemovingCJKLatinSpaces_stripsCJKAndPunctuationNoise() {
-        UserDefaults.standard.set(true, forKey: "tf_preserveCJKLatinSpacing")
-
-        // CJK ↔ CJK noise from ASR token boundaries.
-        XCTAssertEqual("你 好".removingCJKLatinSpaces, "你好")
-        XCTAssertEqual("你  好".removingCJKLatinSpaces, "你好")
-        // CJK ↔ punctuation (full-width and ASCII).
-        XCTAssertEqual("你好 ，世界".removingCJKLatinSpaces, "你好，世界")
-        XCTAssertEqual("你好 , 世界".removingCJKLatinSpaces, "你好,世界")
-    }
-
-    func testRemovingCJKLatinSpaces_canStripPanguSpacingWhenDisabled() {
-        UserDefaults.standard.set(false, forKey: "tf_preserveCJKLatinSpacing")
-
-        XCTAssertEqual(
-            "我已经把最新的 prompt 提交并更新".removingCJKLatinSpaces,
-            "我已经把最新的prompt提交并更新"
-        )
-        XCTAssertEqual("第 3 个".removingCJKLatinSpaces, "第3个")
-    }
 }

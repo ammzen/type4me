@@ -27,6 +27,7 @@ struct FeatureAccumulator: Codable, Equatable, Sendable {
     var negativeEvidence: Int = 0
     var acceptedEvidence: Int = 0
     var state: FeatureLearningState = .insufficient
+    var firstObservedAt: Date?
     var updatedAt: Date = .distantPast
 }
 
@@ -39,12 +40,15 @@ struct ScopeExpressionProfile: Codable, Equatable, Sendable {
 }
 
 struct ExpressionProfileDocument: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     var schemaVersion = currentSchemaVersion
     var global = ScopeExpressionProfile()
     var categories: [String: ScopeExpressionProfile] = [:]
     var applications: [String: ScopeExpressionProfile] = [:]
+    /// Persisted rebuild watermark. Historical observations at or before this
+    /// instant must never repopulate a profile the user explicitly cleared.
+    var expressionLearningResetAt: Date?
 }
 
 struct ExpressionLearningThresholds: Equatable, Sendable {
@@ -65,9 +69,30 @@ struct ExpressionObservation: Sendable {
     let createdAt: Date
     let appBundleIdentifier: String?
     let appCategory: ApplicationCategory
+    let sourceText: String?
     let injectedText: String
     let finalObservedText: String
     let correctionCandidateRange: NSRange?
+
+    init(
+        sessionID: String,
+        createdAt: Date,
+        appBundleIdentifier: String?,
+        appCategory: ApplicationCategory,
+        sourceText: String? = nil,
+        injectedText: String,
+        finalObservedText: String,
+        correctionCandidateRange: NSRange?
+    ) {
+        self.sessionID = sessionID
+        self.createdAt = createdAt
+        self.appBundleIdentifier = appBundleIdentifier
+        self.appCategory = appCategory
+        self.sourceText = sourceText
+        self.injectedText = injectedText
+        self.finalObservedText = finalObservedText
+        self.correctionCandidateRange = correctionCandidateRange
+    }
 }
 
 struct ExpressionFeatureSample: Equatable, Sendable {
@@ -99,6 +124,12 @@ enum ExpressionFeatureExtractor {
         ) else { return nil }
         var before = measurements(injected)
         var after = measurements(final)
+        let beforeListItems = ListStructureIntentAnalyzer.listItemCount(in: injected)
+        let afterListItems = ListStructureIntentAnalyzer.listItemCount(in: final)
+        if beforeListItems < 2, afterListItems < 2 {
+            before.removeValue(forKey: .listUsage)
+            after.removeValue(forKey: .listUsage)
+        }
         before[.compactness] = 1
         after[.compactness] = Double(final.count) / Double(max(1, injected.count))
         let directions = Dictionary(uniqueKeysWithValues: ExpressionFeature.allCases.map { feature in
@@ -148,7 +179,12 @@ enum ExpressionFeatureExtractor {
     }
 
     private static func isSafeStyleEdit(input: String, output: String) -> Bool {
-        if case .reject = IntelliSenseOutputGuard.evaluate(input: input, output: output) {
+        let guardedInput = removingStructuralListMarkers(from: input)
+        let guardedOutput = removingStructuralListMarkers(from: output)
+        if case .reject = IntelliSenseOutputGuard.evaluate(
+            input: guardedInput,
+            output: guardedOutput
+        ) {
             return false
         }
         let delta = abs(output.count - input.count)
@@ -160,10 +196,21 @@ enum ExpressionFeatureExtractor {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
             return true
         }
+        let value = removingStructuralListMarkers(from: text)
         return regex.firstMatch(
-            in: text,
-            range: NSRange(text.startIndex..<text.endIndex, in: text)
+            in: value,
+            range: NSRange(value.startIndex..<value.endIndex, in: value)
         ) != nil
+    }
+
+    private static func removingStructuralListMarkers(from text: String) -> String {
+        let pattern = #"(?m)^\s*(?:\d+[.)、]|[一二三四五六七八九十]+[、.)）])\s*"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return text }
+        return regex.stringByReplacingMatches(
+            in: text,
+            range: NSRange(text.startIndex..<text.endIndex, in: text),
+            withTemplate: ""
+        )
     }
 
     private static func matches(_ pattern: String, in text: String, caseInsensitive: Bool = false) -> Int {
@@ -194,8 +241,10 @@ actor ExpressionProfileStore {
     }
 
     func record(_ observation: ExpressionObservation) throws {
-        guard let sample = ExpressionFeatureExtractor.extract(observation) else { return }
         var document = loadDocument()
+        guard document.expressionLearningResetAt.map({ observation.createdAt > $0 }) ?? true,
+              let sample = ExpressionFeatureExtractor.extract(observation)
+        else { return }
         update(&document.global, sample: sample, at: observation.createdAt)
         update(&document.categories[observation.appCategory.rawValue, default: ScopeExpressionProfile()], sample: sample, at: observation.createdAt)
         if let bundleID = normalizedBundleID(observation.appBundleIdentifier) {
@@ -235,11 +284,50 @@ actor ExpressionProfileStore {
         )
     }
 
-    func clear() throws {
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            try FileManager.default.removeItem(at: fileURL)
+    func clear(at date: Date = Date()) throws {
+        var empty = ExpressionProfileDocument()
+        empty.expressionLearningResetAt = date
+        try persist(empty)
+        cached = empty
+    }
+
+    func rebuild(from records: [HistoryRecord]) throws {
+        let previous = loadDocument()
+        var rebuilt = ExpressionProfileDocument()
+        rebuilt.expressionLearningResetAt = previous.expressionLearningResetAt
+        for record in records {
+            guard let edited = record.userEditedText,
+                  record.userEditVersion == UserEditObservationFormat.currentVersion,
+                  record.userEditStatus == .edited || record.userEditStatus == .clearedAfterEdit,
+                  rebuilt.expressionLearningResetAt.map({ record.createdAt > $0 }) ?? true
+            else { continue }
+            let classification = UserEditClassifier.classify(
+                original: record.finalText,
+                edited: edited
+            )
+            guard classification == .expressionEdit || classification == .mixedEdit else {
+                continue
+            }
+            let observation = ExpressionObservation(
+                sessionID: record.id,
+                createdAt: record.userEditObservedAt ?? record.createdAt,
+                appBundleIdentifier: nil,
+                appCategory: .other,
+                sourceText: record.rawText,
+                injectedText: record.finalText,
+                finalObservedText: edited,
+                correctionCandidateRange: nil
+            )
+            guard let sample = ExpressionFeatureExtractor.extract(observation) else { continue }
+            update(&rebuilt.global, sample: sample, at: observation.createdAt)
+            update(
+                &rebuilt.categories[ApplicationCategory.other.rawValue, default: ScopeExpressionProfile()],
+                sample: sample,
+                at: observation.createdAt
+            )
         }
-        cached = ExpressionProfileDocument()
+        try persist(rebuilt)
+        cached = rebuilt
     }
 
     func documentForTesting() -> ExpressionProfileDocument { loadDocument() }
@@ -250,11 +338,26 @@ actor ExpressionProfileStore {
         decoder.dateDecodingStrategy = .iso8601
         guard let data = try? Data(contentsOf: fileURL),
               let decoded = try? decoder.decode(ExpressionProfileDocument.self, from: data),
-              decoded.schemaVersion == ExpressionProfileDocument.currentSchemaVersion
+              decoded.schemaVersion == 1
+                || decoded.schemaVersion == ExpressionProfileDocument.currentSchemaVersion
         else {
             let empty = ExpressionProfileDocument()
             cached = empty
             return empty
+        }
+        if decoded.schemaVersion == 1 {
+            var migrated = decoded
+            migrated.schemaVersion = ExpressionProfileDocument.currentSchemaVersion
+            resetListUsage(in: &migrated.global)
+            for key in Array(migrated.categories.keys) {
+                resetListUsage(in: &migrated.categories[key, default: ScopeExpressionProfile()])
+            }
+            for key in Array(migrated.applications.keys) {
+                resetListUsage(in: &migrated.applications[key, default: ScopeExpressionProfile()])
+            }
+            try? persist(migrated)
+            cached = migrated
+            return migrated
         }
         cached = decoded
         return decoded
@@ -285,22 +388,43 @@ actor ExpressionProfileStore {
             case -1: accumulator.negativeEvidence += 1
             default: accumulator.acceptedEvidence += 1
             }
+            accumulator.firstObservedAt = min(accumulator.firstObservedAt ?? date, date)
             accumulator.updatedAt = date
-            accumulator.state = learningState(for: accumulator, profile: profile)
+            accumulator.state = learningState(
+                for: accumulator,
+                feature: feature,
+                profile: profile
+            )
             profile.features[feature.rawValue] = accumulator
         }
     }
 
     private func learningState(
         for accumulator: FeatureAccumulator,
+        feature: ExpressionFeature,
         profile: ScopeExpressionProfile
     ) -> FeatureLearningState {
-        guard profile.sampleCount >= thresholds.learningSamples else { return .insufficient }
-        guard profile.sampleCount >= thresholds.stableSamples,
-              let first = profile.firstObservedAt,
-              let last = profile.lastObservedAt,
-              Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0 >= thresholds.stableDaySpan
-        else { return .learning }
+        if feature == .listUsage {
+            let evidence = accumulator.positiveEvidence
+                + accumulator.negativeEvidence
+                + accumulator.acceptedEvidence
+            guard evidence >= thresholds.learningSamples else { return .insufficient }
+            guard evidence >= thresholds.stableSamples,
+                  let first = accumulator.firstObservedAt,
+                  Calendar.current.dateComponents(
+                      [.day],
+                      from: first,
+                      to: accumulator.updatedAt
+                  ).day ?? 0 >= thresholds.stableDaySpan
+            else { return .learning }
+        } else {
+            guard profile.sampleCount >= thresholds.learningSamples else { return .insufficient }
+            guard profile.sampleCount >= thresholds.stableSamples,
+                  let first = profile.firstObservedAt,
+                  let last = profile.lastObservedAt,
+                  Calendar.current.dateComponents([.day], from: first, to: last).day ?? 0 >= thresholds.stableDaySpan
+            else { return .learning }
+        }
         let directional = accumulator.positiveEvidence + accumulator.negativeEvidence
         if directional == 0 { return .stable }
         let dominant = max(accumulator.positiveEvidence, accumulator.negativeEvidence)
@@ -359,6 +483,10 @@ actor ExpressionProfileStore {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(document).write(to: fileURL, options: .atomic)
+    }
+
+    private func resetListUsage(in profile: inout ScopeExpressionProfile) {
+        profile.features.removeValue(forKey: ExpressionFeature.listUsage.rawValue)
     }
 
     private func normalizedBundleID(_ value: String?) -> String? {
