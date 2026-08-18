@@ -5,7 +5,7 @@ import Type4MeIntelliSenseCore
 final class FixtureTests: XCTestCase {
     func testFixtureContractAndCounts() throws {
         let cases = try FixtureLoader.loadAll()
-        XCTAssertEqual(cases.count, 124)
+        XCTAssertEqual(cases.count, 126)
         XCTAssertEqual(cases.filter(\.smoke).count, 28)
         XCTAssertEqual(cases.filter(\.critical).count, 16)
     }

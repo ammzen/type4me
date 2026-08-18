@@ -1365,6 +1365,7 @@ struct HistoryTab: View {
         case .chatToneAdapted: return L("调整为自然短句", "Adapted to a natural short message")
         case .emailToneAdapted: return L("调整为完整礼貌表达", "Adapted to complete, polite wording")
         case .documentStructured: return L("整理段落或结构", "Organized paragraph structure")
+        case .listStructured: return L("按多要点列表整理", "Structured as a multi-point list")
         case .technicalSyntaxPreserved: return L("保留技术语法和标识符", "Preserved technical syntax and identifiers")
         case .explicitCorrectionApplied: return L("采用最终改口内容", "Applied the final self-correction")
         case .contextTermAdopted: return L("沿用上下文中的术语写法", "Adopted terminology from nearby text")

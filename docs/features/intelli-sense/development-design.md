@@ -544,9 +544,9 @@ L2 控件只做确定性覆盖：搜索框强制 `compactness = high`、`structu
 现有 speculative LLM 路径继续保留：
 
 - 录音开始时创建一次 `IntelliSenseRequestContext`；
-- 上下文快照和表达档案在当前 session 内冻结，并由 `IntelliSensePromptBuilder` 只构建一次 `frozenPrompt`；
-- `frozenPrompt` 已包含唯一的 `{text}` 占位符，不包含 `{selected}`、`{clipboard}` 或 `{tools_json}`；
-- Intelli Sense 的 speculative、TranscriptDiff 触发的 fresh final 和同步 final 三个调用点统一直接使用 `frozenPrompt`，不得再经过 `PromptContext.expandContextVariables(_:)`；
+- 上下文快照、设置和表达档案在当前 session 内冻结；最终 Prompt 按每次 speculative 或 final 的当前转写文本构建；
+- `ListStructureIntentAnalyzer` 在建 Prompt 时识别明确枚举；结构可用的控件会获得本次专属列表约束，并过滤冲突的“减少列表”画像；
+- speculative、TranscriptDiff 触发的 fresh final 和同步 final 三个调用点统一使用 `IntelliSensePromptBuilder.build(request:)`，不得再经过 `PromptContext.expandContextVariables(_:)`；
 - App 切换或学习模型更新不改变进行中的请求；
 - 最终 ASR 文本与 speculative 文本不兼容时，沿用 `TranscriptDiff` 发起新请求；
 - 不新增场景分类网络请求。
@@ -765,6 +765,8 @@ enum ExpressionFeature: String, Codable, CaseIterable {
 - 相反方向修改：负证据；
 - 同一 session 的连续键盘事件：只计一个样本。
 
+`listUsage` 采用独立资格口径：普通连续文本不提供负证据；只有已接受的真实列表、用户把连续文本改成列表，或用户主动把列表改回连续文本时才计入。其学习状态按该特征自身的有效证据数计算，不能由其他普通样本推到 `stable`。
+
 V1 暂定阈值为：
 
 - 至少 5 个有效 session 才能从 `insufficient` 进入 `learning`；
@@ -852,7 +854,7 @@ private var intelliSenseContextTask: Task<IntelliSenseContextSnapshot, Never>?
 private var intelliSenseRequestContext: IntelliSenseRequestContext?
 ```
 
-`IntelliSenseRequestContext` 包含本 session 冻结的设置、上下文、有效表达档案、开始录音时的模式 ID、`sessionGeneration` 和最终 `frozenPrompt`。创建成功后不可变。
+`IntelliSenseRequestContext` 包含本 session 冻结的设置、上下文、有效表达档案、开始录音时的模式 ID 和 `sessionGeneration`。创建成功后不可变；Prompt 使用这些快照和当前请求文本动态构建。
 
 ### 13.2 开始录音
 
@@ -865,7 +867,7 @@ private var intelliSenseRequestContext: IntelliSenseRequestContext?
 5. 继续现有录音与 ASR 启动；
 6. 完全跳过 `PromptContext.capture()`，不得读取剪贴板、选中文本或触发临时 Command+C；
 7. 复用录音开始时已经捕获的 `targetBundleId` 作为快照锚点和 App 级片段替换作用域，不做第二次前台 App 读取；
-8. 在首次 LLM 请求前将可用快照、设置和表达档案冻结并只构建一次 `frozenPrompt`。
+8. 在首次 LLM 请求前冻结可用快照、设置和表达档案；每个 LLM 请求用当前转写构建 Prompt。
 
 其他模式继续使用现有 `PromptContext`，不受影响。
 
@@ -883,8 +885,8 @@ HotwordStorage.loadEffective()
 
 所有模式继续在 LLM 前调用全局和 App 片段替换。Intelli Sense 在此基础上：
 
-1. 获取本 session 的 `frozenPrompt`；
-2. speculative、fresh final 和同步 final 调用点直接使用该值，不调用 `promptContext.expandContextVariables(currentMode.prompt)`；
+1. 获取本 session 冻结的上下文、设置和表达档案；
+2. speculative、fresh final 和同步 final 分别用各自当前转写调用统一的 `build(request:)`，不调用 `promptContext.expandContextVariables(currentMode.prompt)`；
 3. 发起现有 LLM 请求；若 `TranscriptDiff` 判定 speculative 结果不可复用，沿用现有逻辑取消旧任务并发起一次 fresh final，不增加额外校验请求；
 4. 通过 `IntelliSenseOutputGuard` 检查结果；
 5. 失败时回退片段替换后的 ASR 文本。
@@ -1188,9 +1190,9 @@ Type4MeTests/ExpressionProfileStoreTests.swift
 - 黑名单忽略所有增强；
 - 上下文中的命令不会改变 Prompt 任务；
 - `{text}` 只保留一次且不会被上下文二次展开；
-- `frozenPrompt` 不包含 `{selected}`、`{clipboard}` 或 `{tools_json}`；
+- 动态构建的 Prompt 不包含 `{selected}`、`{clipboard}` 或 `{tools_json}`；
 - Intelli Sense 三个 LLM 调用点均不经过 `PromptContext.expandContextVariables(_:)`；
-- speculative、fresh final 与同步 final Prompt 完全一致。
+- speculative、fresh final 与同步 final 共用同一 Builder 和冻结快照，并分别使用当前转写文本。
 
 ### 20.4 Guard
 
@@ -1210,7 +1212,7 @@ Type4MeTests/ExpressionProfileStoreTests.swift
 
 `Evaluation/IntelliSenseEval` 是手动运行的独立 Swift Package，通过本地 package dependency 直接依赖生产 `Type4MeIntelliSenseCore`，不复制 Prompt。它不加入根目录 `swift test`、Dev/Release 构建、PR CI 或定时任务。
 
-- 当前 124 条人工策划 JSONL：`core-polish` 44、`boundary-fidelity` 20、`application` 20、`context` 20、`expression` 12、`privacy-fallback` 8；
+- 当前 126 条人工策划 JSONL：`core-polish` 44、`boundary-fidelity` 20、`application` 20、`context` 20、`expression` 14、`privacy-fallback` 8；
 - `smoke` 是其中 28 条子集，16 条最高风险案例可用 `--repeat 3` 检查稳定性；
 - 支持 suite、case ID、tag、模型、限并发、请求缓存和 `--no-cache`；
 - 每次运行生成 `run.jsonl`、摘要和分 suite 的 `review-packet-*.md`，包含生产 Prompt 哈希、候选、Guard 结果、最终文本、diff、延迟与人工裁判栏；
@@ -1253,7 +1255,7 @@ Type4MeTests/ExpressionProfileStoreTests.swift
 - AX 元素销毁释放 observer；
 - 超时任务和防抖任务被正确取消；
 - 旧 session 的上下文不会污染新 session；
-- 设置在录音中变化不改写本次已冻结的 Prompt；若注入后观察期间关闭学习开关或加入黑名单，则立即停止对应观察；
+- 设置在录音中变化不改写本次已冻结的请求快照；若注入后观察期间关闭学习开关或加入黑名单，则立即停止对应观察；
 - 从 Intelli Sense 跨模式切出时取消并清空 request context；
 - 从其他模式跨入 Intelli Sense 时只使用基础润色且不启动表达学习；
 - App 退出、权限撤销和文件写入失败不崩溃；
@@ -1360,7 +1362,7 @@ Type4MeTests/ExpressionProfileStoreTests.swift
 12. 任一增强能力失败时仍能完成输入；
 13. speculative LLM、历史、注入和其他模式无回归；
 14. 完整测试套件通过；
-15. Intelli Sense 不读取剪贴板或选中文本，所有 LLM 路径使用同一冻结 Prompt；
+15. Intelli Sense 不读取剪贴板或选中文本，所有 LLM 路径使用同一冻结请求快照和统一 Prompt Builder；
 16. 跨模式切换不会复用错误的上下文或覆盖最后选择模式；
 17. Guard 拒绝率、ASR 回退率和端到端延迟可在不记录正文的前提下观测；
 18. 性能指标满足第 15 节预算。

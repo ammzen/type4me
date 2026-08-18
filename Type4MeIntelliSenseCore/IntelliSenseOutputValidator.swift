@@ -4,6 +4,7 @@ public enum IntelliSenseValidationWarning: String, Codable, Equatable, Sendable 
     case sourceProtectedTokenChanged
     case negationCountChanged
     case listStructureChanged
+    case expectedListStructureMissing
     case largeRewrite
     case supersededContentRetained
     case contextTermAdopted
@@ -132,6 +133,12 @@ public enum IntelliSenseOutputValidator {
         }
         if listMarkerCount(in: trimmed) != listMarkerCount(in: input) {
             warnings.append(.listStructureChanged)
+        }
+        let structureIntent = ListStructureIntentAnalyzer.analyze(input)
+        if ListStructureIntentAnalyzer.supportsStructuredOutput(context),
+           let requiredItems = structureIntent.requiredItemCount,
+           ListStructureIntentAnalyzer.listItemCount(in: trimmed) < requiredItems {
+            warnings.append(.expectedListStructureMissing)
         }
         if abs(trimmed.count - input.count) > max(24, input.count / 2) {
             warnings.append(.largeRewrite)

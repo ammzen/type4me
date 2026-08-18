@@ -24,6 +24,7 @@ public enum IntelliSenseHistoryEffect: String, Codable, Equatable, Hashable, Sen
     case chatToneAdapted
     case emailToneAdapted
     case documentStructured
+    case listStructured
     case technicalSyntaxPreserved
     case explicitCorrectionApplied
     case contextTermAdopted
@@ -219,6 +220,10 @@ public enum IntelliSenseHistoryTraceBuilder {
         if removedFiller(from: inputTrimmed, in: outputTrimmed) {
             values.append(.fillerRemoved)
         }
+        if ListStructureIntentAnalyzer.analyze(inputTrimmed) != .none,
+           ListStructureIntentAnalyzer.listItemCount(in: outputTrimmed) >= 2 {
+            values.append(.listStructured)
+        }
 
         switch scene {
         case .search:
@@ -229,7 +234,8 @@ public enum IntelliSenseHistoryTraceBuilder {
             values.append(.chatToneAdapted)
         case .email:
             values.append(.emailToneAdapted)
-        case .document where structureChanged(input: inputTrimmed, output: outputTrimmed):
+        case .document where structureChanged(input: inputTrimmed, output: outputTrimmed)
+            && !values.contains(.listStructured):
             values.append(.documentStructured)
         case .development, .terminal:
             values.append(.technicalSyntaxPreserved)

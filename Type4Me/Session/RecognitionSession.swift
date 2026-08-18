@@ -118,8 +118,25 @@ actor RecognitionSession {
         translationRequestContext?.target
     }
 
-    func promptForCurrentModeForTesting() async -> String {
-        await promptForCurrentMode()
+    func freezeIntelliSenseForTesting(
+        snapshot: IntelliSenseContextSnapshot,
+        settings: IntelliSenseSettings,
+        expressionProfile: EffectiveExpressionProfile? = nil
+    ) {
+        sessionGeneration &+= 1
+        currentMode = .intelliSense
+        intelliSenseStartedModeID = ProcessingMode.intelliSenseId
+        intelliSenseRequestContext = IntelliSenseRequestContext(
+            settings: settings,
+            snapshot: snapshot,
+            expressionProfile: expressionProfile,
+            startingModeID: ProcessingMode.intelliSenseId,
+            generation: sessionGeneration
+        )
+    }
+
+    func promptForCurrentModeForTesting(text: String? = nil) async -> String {
+        await promptForCurrentMode(text: text)
     }
 
     // MARK: - Dependencies
@@ -347,7 +364,6 @@ actor RecognitionSession {
         let expressionProfile: EffectiveExpressionProfile?
         let startingModeID: UUID
         let generation: Int
-        let frozenPrompt: String
     }
 
     private var intelliSenseContextTask: Task<IntelliSenseContextSnapshot, Never>?
@@ -1335,7 +1351,7 @@ actor RecognitionSession {
                     if let runtime = await resolveLLMRuntime() {
                         rememberHistoryLLM(runtime)
                         let llmConfig = runtime.config
-                        let prompt = await promptForCurrentMode()
+                        let prompt = await promptForCurrentMode(text: finalASRText)
                         let client = runtime.client
                         state = .postProcessing
                         if finalASRText != speculativeLLMText {
@@ -1538,7 +1554,7 @@ actor RecognitionSession {
                     let llmConfig = runtime.config
                     DebugFileLogger.log("stop: sync LLM firing mode=\(currentMode.name) model=\(llmConfig.model) with \(finalText.count) chars")
                     let client = runtime.client
-                    let prompt = await promptForCurrentMode()
+                    let prompt = await promptForCurrentMode(text: finalText)
                     let textForLLM = finalText
 
                     let requestStartedAt = Date()
@@ -1694,6 +1710,7 @@ actor RecognitionSession {
                         if shouldTrackLearning {
                             result = engine.injectTracked(
                                 finalText,
+                                sourceText: rawText,
                                 sourceRecordID: recordId,
                                 modeID: modeID
                             )
@@ -2255,7 +2272,7 @@ actor RecognitionSession {
         let llmConfig = runtime.config
 
         speculativeLLMText = text
-        let prompt = await promptForCurrentMode()
+        let prompt = await promptForCurrentMode(text: text)
 
         let client = runtime.client
         DebugFileLogger.log("speculative LLM: firing mode=\(currentMode.name) model=\(llmConfig.model) with \(text.count) chars")
@@ -2347,7 +2364,7 @@ actor RecognitionSession {
         }
     }
 
-    private func promptForCurrentMode() async -> String {
+    private func promptForCurrentMode(text: String? = nil) async -> String {
         if currentMode.id == ProcessingMode.translationModeId,
            let context = translationRequestContext,
            context.generation == sessionGeneration {
@@ -2361,7 +2378,12 @@ actor RecognitionSession {
         }
         if let context = intelliSenseRequestContext,
            context.generation == sessionGeneration {
-            return context.frozenPrompt
+            return IntelliSensePromptBuilder.build(request: IntelliSenseRequest(
+                text: text ?? "",
+                context: context.snapshot,
+                settings: context.settings,
+                expressionProfile: context.expressionProfile
+            ))
         }
 
         let settings: IntelliSenseSettings
@@ -2396,11 +2418,6 @@ actor RecognitionSession {
         } else {
             expressionProfile = nil
         }
-        let frozenPrompt = IntelliSensePromptBuilder.build(input: IntelliSensePromptInput(
-            context: snapshot,
-            settings: settings,
-            expressionProfile: expressionProfile
-        ))
         DebugFileLogger.log(
             "intelli sense context app=\(snapshot.appCategory.rawValue) control=\(snapshot.controlCategory.rawValue) availability=\(snapshot.availability.rawValue) beforeLength=\(snapshot.contextBeforeCursor.count) afterLength=\(snapshot.contextAfterCursor.count) truncated=\(snapshot.wasTruncated) layers=app:\(settings.applicationAwarenessEnabled),context:\(settings.contextAwarenessEnabled),expression:\(settings.expressionLearningEnabled),correction:\(settings.correctionDetectionEnabled) profileScope=\(expressionProfile?.sourceScope ?? "none") profileDirectives=\(expressionProfile?.directives.count ?? 0)"
         )
@@ -2409,10 +2426,14 @@ actor RecognitionSession {
             snapshot: snapshot,
             expressionProfile: expressionProfile,
             startingModeID: ProcessingMode.intelliSenseId,
-            generation: sessionGeneration,
-            frozenPrompt: frozenPrompt
+            generation: sessionGeneration
         )
-        return frozenPrompt
+        return IntelliSensePromptBuilder.build(request: IntelliSenseRequest(
+            text: text ?? "",
+            context: snapshot,
+            settings: settings,
+            expressionProfile: expressionProfile
+        ))
     }
 
     private func clearIntelliSenseSessionContext() {

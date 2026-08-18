@@ -1,5 +1,6 @@
 import XCTest
 @testable import Type4Me
+@testable import Type4MeIntelliSenseCore
 
 final class RecognitionSessionTests: XCTestCase {
     override func tearDown() {
@@ -86,6 +87,41 @@ final class RecognitionSessionTests: XCTestCase {
         XCTAssertEqual(secondPrompt, firstPrompt)
         XCTAssertTrue(secondPrompt.contains("English (en)"))
         XCTAssertFalse(secondPrompt.contains("Japanese (ja)"))
+    }
+
+    func testIntelliSensePromptUsesCurrentTranscriptWithFrozenContext() async {
+        let session = RecognitionSession()
+        var settings = IntelliSenseSettings()
+        settings.applicationAwarenessEnabled = true
+        settings.expressionLearningEnabled = true
+        await session.freezeIntelliSenseForTesting(
+            snapshot: IntelliSenseContextSnapshot(
+                bundleIdentifier: "company.thebrowser.dia",
+                appName: "Dia",
+                appCategory: .browser,
+                controlCategory: .multiLine,
+                contextBeforeCursor: "",
+                contextAfterCursor: "",
+                availability: .appOnly,
+                wasTruncated: false
+            ),
+            settings: settings,
+            expressionProfile: EffectiveExpressionProfile(
+                directives: ["倾向连续自然段，减少列表。"]
+            )
+        )
+
+        let speculative = await session.promptForCurrentModeForTesting(
+            text: "目前报价模式分为三块。第一块是 license，第二块是 Studio。"
+        )
+        let final = await session.promptForCurrentModeForTesting(
+            text: "目前报价模式分为三块。第一块是 license，第二块是 Studio，第三块是 FDE。"
+        )
+
+        XCTAssertTrue(speculative.contains("明确包含 2 个有顺序"))
+        XCTAssertTrue(final.contains("明确包含 3 个有顺序"))
+        XCTAssertFalse(final.contains("减少列表"))
+        XCTAssertTrue(final.contains("company.thebrowser.dia") == false)
     }
 
     func testUnknownTranslationTargetCannotBeFrozen() async {

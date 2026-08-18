@@ -6,7 +6,7 @@ public enum FixtureLoader {
         "boundary-fidelity": 20,
         "application": 20,
         "context": 20,
-        "expression": 12,
+        "expression": 14,
         "privacy-fallback": 8,
     ]
 

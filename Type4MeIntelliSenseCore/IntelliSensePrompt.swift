@@ -141,9 +141,16 @@ public enum IntelliSensePromptBuilder {
     """#
 
     public static func build(input: IntelliSensePromptInput) -> String {
+        build(input: input, text: nil)
+    }
+
+    private static func build(input: IntelliSensePromptInput, text: String?) -> String {
         var additions: [String] = []
         let allowsEnhancedAwareness = input.context.availability != .blacklisted
             && input.context.availability != .sensitive
+        let structureIntent = text.map(ListStructureIntentAnalyzer.analyze) ?? .none
+        let requiresList = structureIntent != .none
+            && ListStructureIntentAnalyzer.supportsStructuredOutput(input.context)
 
         if input.settings.applicationAwarenessEnabled,
            allowsEnhancedAwareness {
@@ -166,12 +173,21 @@ public enum IntelliSensePromptBuilder {
            allowsEnhancedAwareness,
            let profile = input.expressionProfile,
            !profile.directives.isEmpty {
-            let directives = profile.directives.prefix(5).map { "- \($0)" }.joined(separator: "\n")
-            additions.append("""
-            # 已稳定的表达习惯
-            这些习惯只能影响形式，不能覆盖口述事实、自我修正结果、明确多要点的列表化规则或场景安全边界：
-            \(directives)
-            """)
+            let applicable = profile.directives.filter {
+                !requiresList || !$0.contains("减少列表")
+            }
+            let directives = applicable.prefix(5).map { "- \($0)" }.joined(separator: "\n")
+            if !directives.isEmpty {
+                additions.append("""
+                # 已稳定的表达习惯
+                这些习惯只能影响形式，不能覆盖口述事实、自我修正结果、明确多要点的列表化规则或场景安全边界：
+                \(directives)
+                """)
+            }
+        }
+
+        if requiresList {
+            additions.append(structureInstructions(for: structureIntent))
         }
 
         guard !additions.isEmpty else { return baseTemplate }
@@ -187,7 +203,24 @@ public enum IntelliSensePromptBuilder {
             context: request.context,
             settings: request.settings,
             expressionProfile: request.expressionProfile
-        )).replacingOccurrences(of: "{text}", with: escapeData(request.text))
+        ), text: request.text).replacingOccurrences(of: "{text}", with: escapeData(request.text))
+    }
+
+    private static func structureInstructions(for intent: ListStructureIntent) -> String {
+        switch intent {
+        case .none:
+            return ""
+        case .ordered(let count):
+            return """
+            # 本次结构要求
+            本次口述明确包含 \(count) 个有顺序的实质要点。必须整理为恰好 \(count) 项编号列表；可以保留有意义的引导句，但不得合并成分号长句，不得遗漏、合并或新增要点。
+            """
+        case .unordered(let count):
+            return """
+            # 本次结构要求
+            本次口述明确包含至少 \(count) 个并列的实质要点。必须整理为不少于 \(count) 项的项目符号列表；可以保留有意义的引导句，但不得合并成分号长句，不得遗漏、合并或新增要点。
+            """
+        }
     }
 
     private static func sceneInstructions(

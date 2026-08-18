@@ -12,6 +12,7 @@ struct CorrectionObservationContext: @unchecked Sendable {
     let beforeSelectedRange: NSRange?
     let afterSelectedRange: NSRange?
     let placeholderCandidates: [String]
+    let sourceText: String
     let injectedText: String
     let sourceRecordID: String
     let modeID: UUID
@@ -1141,6 +1142,7 @@ final class PostInjectionLearningCoordinator: NSObject {
             createdAt: Date(),
             appBundleIdentifier: active.context.bundleIdentifier,
             appCategory: active.options.appCategory,
+            sourceText: active.context.sourceText,
             injectedText: active.visibleInjectedText,
             finalObservedText: styleValue,
             correctionCandidateRange: nil

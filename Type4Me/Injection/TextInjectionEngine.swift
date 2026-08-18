@@ -98,13 +98,22 @@ final class TextInjectionEngine: @unchecked Sendable {
 
     /// Inject text while capturing enough Accessibility context to observe a
     /// later correction in the exact field Type4Me wrote into.
-    func injectTracked(_ text: String, sourceRecordID: String, modeID: UUID) -> TrackedInjectionResult {
+    func injectTracked(
+        _ text: String,
+        sourceText: String,
+        sourceRecordID: String,
+        modeID: UUID
+    ) -> TrackedInjectionResult {
         guard !text.isEmpty else {
             return TrackedInjectionResult(outcome: .inserted, observationContext: nil)
         }
         return injectViaClipboard(
             text,
-            trackingMetadata: (sourceRecordID: sourceRecordID, modeID: modeID)
+            trackingMetadata: (
+                sourceText: sourceText,
+                sourceRecordID: sourceRecordID,
+                modeID: modeID
+            )
         )
     }
 
@@ -141,7 +150,7 @@ final class TextInjectionEngine: @unchecked Sendable {
 
     private func injectViaClipboard(
         _ text: String,
-        trackingMetadata: (sourceRecordID: String, modeID: UUID)?
+        trackingMetadata: (sourceText: String, sourceRecordID: String, modeID: UUID)?
     ) -> TrackedInjectionResult {
         let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture() : nil
 
@@ -178,6 +187,7 @@ final class TextInjectionEngine: @unchecked Sendable {
                 before: before,
                 after: after,
                 pastedText: text,
+                sourceText: metadata.sourceText,
                 sourceRecordID: metadata.sourceRecordID,
                 modeID: metadata.modeID,
                 outcome: outcome
@@ -401,6 +411,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         before: FocusedElementSnapshot?,
         after: FocusedElementSnapshot?,
         pastedText: String,
+        sourceText: String,
         sourceRecordID: String,
         modeID: UUID,
         outcome: InjectionOutcome
@@ -442,6 +453,7 @@ final class TextInjectionEngine: @unchecked Sendable {
                 before.accessibilityDescription,
                 after.accessibilityDescription,
             ].compactMap { $0 },
+            sourceText: sourceText,
             injectedText: pastedText,
             sourceRecordID: sourceRecordID,
             modeID: modeID

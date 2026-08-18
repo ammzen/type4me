@@ -15,7 +15,135 @@ final class ExpressionProfileStoreTests: XCTestCase {
         )
         let sample = try XCTUnwrap(ExpressionFeatureExtractor.extract(observation))
         XCTAssertTrue(sample.wasEdited)
-        XCTAssertEqual(Set(sample.values.keys), Set(ExpressionFeature.allCases))
+        XCTAssertEqual(
+            Set(sample.values.keys),
+            Set(ExpressionFeature.allCases).subtracting([.listUsage])
+        )
+    }
+
+    func testListUsageOnlyLearnsFromListEligibleEvidence() throws {
+        let prose = ExpressionObservation(
+            sessionID: "prose",
+            createdAt: Date(),
+            appBundleIdentifier: nil,
+            appCategory: .other,
+            sourceText: "有三个问题需要说明",
+            injectedText: "这是普通连续文本，没有使用任何列表结构。",
+            finalObservedText: "这是普通连续文本，没有使用任何列表结构。",
+            correctionCandidateRange: nil
+        )
+        XCTAssertNil(ExpressionFeatureExtractor.extract(prose)?.values[.listUsage])
+
+        let acceptedList = ExpressionObservation(
+            sessionID: "accepted-list",
+            createdAt: Date(),
+            appBundleIdentifier: nil,
+            appCategory: .other,
+            injectedText: "说明：\n1. 登录问题需要修复\n2. 支付问题需要回归",
+            finalObservedText: "说明：\n1. 登录问题需要修复\n2. 支付问题需要回归",
+            correctionCandidateRange: nil
+        )
+        XCTAssertNotNil(ExpressionFeatureExtractor.extract(acceptedList)?.values[.listUsage])
+
+        let addedList = ExpressionObservation(
+            sessionID: "added-list",
+            createdAt: Date(),
+            appBundleIdentifier: nil,
+            appCategory: .other,
+            injectedText: "说明：登录问题需要修复，支付问题需要回归。",
+            finalObservedText: "说明：\n1. 登录问题需要修复\n2. 支付问题需要回归",
+            correctionCandidateRange: nil
+        )
+        let positive = try XCTUnwrap(ExpressionFeatureExtractor.extract(addedList))
+        XCTAssertEqual(positive.directions[.listUsage], 1)
+
+        let removedList = ExpressionObservation(
+            sessionID: "removed-list",
+            createdAt: Date(),
+            appBundleIdentifier: nil,
+            appCategory: .other,
+            injectedText: "说明：\n1. 登录问题需要修复\n2. 支付问题需要回归",
+            finalObservedText: "说明：登录问题需要修复，支付问题需要回归。",
+            correctionCandidateRange: nil
+        )
+        let negative = try XCTUnwrap(ExpressionFeatureExtractor.extract(removedList))
+        XCTAssertEqual(negative.values[.listUsage], 0)
+        XCTAssertEqual(negative.directions[.listUsage], -1)
+    }
+
+    func testOrdinarySamplesCannotMakeSingleListObservationStable() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = ExpressionProfileStore(
+            fileURL: directory.appendingPathComponent("profile.json"),
+            thresholds: ExpressionLearningThresholds(
+                learningSamples: 2,
+                stableSamples: 3,
+                stableDaySpan: 0,
+                directionalConsistency: 0.6,
+                editedWeight: 1,
+                acceptedWeight: 0.25
+            )
+        )
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        for index in 0..<10 {
+            try await store.record(ExpressionObservation(
+                sessionID: "prose-\(index)",
+                createdAt: start.addingTimeInterval(Double(index)),
+                appBundleIdentifier: nil,
+                appCategory: .other,
+                injectedText: "这是普通连续文本，没有任何列表偏好证据。",
+                finalObservedText: "这是普通连续文本，没有任何列表偏好证据。",
+                correctionCandidateRange: nil
+            ))
+        }
+        try await store.record(ExpressionObservation(
+            sessionID: "one-list",
+            createdAt: start.addingTimeInterval(20),
+            appBundleIdentifier: nil,
+            appCategory: .other,
+            injectedText: "事项：\n1. 修复登录问题\n2. 回归支付问题",
+            finalObservedText: "事项：\n1. 修复登录问题\n2. 回归支付问题",
+            correctionCandidateRange: nil
+        ))
+
+        let list = await store.documentForTesting().global.features[ExpressionFeature.listUsage.rawValue]
+        XCTAssertEqual(list?.acceptedEvidence, 1)
+        XCTAssertEqual(list?.state, .insufficient)
+    }
+
+    func testV1MigrationResetsOnlyListUsage() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let profileURL = directory.appendingPathComponent("profile.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let resetAt = Date(timeIntervalSince1970: 1_700_000_000)
+        var legacy = ExpressionProfileDocument()
+        legacy.schemaVersion = 1
+        legacy.expressionLearningResetAt = resetAt
+        let list = FeatureAccumulator(weightedMean: 0, totalWeight: 8, acceptedEvidence: 32, state: .stable)
+        let spacing = FeatureAccumulator(weightedMean: 1, totalWeight: 4, acceptedEvidence: 16, state: .stable)
+        legacy.global.features[ExpressionFeature.listUsage.rawValue] = list
+        legacy.global.features[ExpressionFeature.chineseEnglishSpacing.rawValue] = spacing
+        legacy.categories[ApplicationCategory.browser.rawValue] = legacy.global
+        legacy.applications["company.thebrowser.dia"] = legacy.global
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(legacy).write(to: profileURL)
+
+        let store = ExpressionProfileStore(fileURL: profileURL)
+        let migrated = await store.documentForTesting()
+        XCTAssertEqual(migrated.schemaVersion, 2)
+        XCTAssertEqual(migrated.expressionLearningResetAt, resetAt)
+        XCTAssertNil(migrated.global.features[ExpressionFeature.listUsage.rawValue])
+        XCTAssertNil(migrated.categories[ApplicationCategory.browser.rawValue]?.features[ExpressionFeature.listUsage.rawValue])
+        XCTAssertNil(migrated.applications["company.thebrowser.dia"]?.features[ExpressionFeature.listUsage.rawValue])
+        XCTAssertEqual(
+            migrated.global.features[ExpressionFeature.chineseEnglishSpacing.rawValue],
+            spacing
+        )
     }
 
     func testStableAppProfileOverridesCategoryAndGlobal() async throws {
