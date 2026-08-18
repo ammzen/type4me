@@ -23,6 +23,8 @@ final class FloatingBarPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
+        ignoresMouseEvents = false
+        acceptsMouseMovedEvents = true
         animationBehavior = .utilityWindow
         appearance = NSAppearance(named: .darkAqua)
     }
@@ -57,8 +59,16 @@ final class FloatingBarController {
         self.state = state
 
         let inset: CGFloat = 16  // extra room for shadow/glow
+        // Action tooltips are centered over the edge controls, so they extend
+        // beyond the 400-point capsule at full width.
+        let horizontalInset = inset + TF.recordingTooltipOverhang
         let contentHeight = TF.barHeight + TF.transcriptPopupGap + TF.transcriptPopupMaxHeight
-        let frame = NSRect(x: 0, y: 0, width: TF.barWidth + inset * 2, height: contentHeight + inset * 2)
+        let frame = NSRect(
+            x: 0,
+            y: 0,
+            width: TF.barWidth + horizontalInset * 2,
+            height: contentHeight + inset * 2
+        )
         panelSize = frame.size
         panel = FloatingBarPanel(contentRect: frame)
 

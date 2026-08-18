@@ -166,7 +166,7 @@ actor SenseVoiceServerManager {
             cleanupQwen3Process(proc, intentional: true, killIfRunning: true)
             throw ServerError.launchFailed(
                 NSError(domain: "SenseVoiceServerManager", code: -1,
-                        userInfo: [NSLocalizedDescriptionKey: "Health check failed after server start"])
+                        userInfo: [NSLocalizedDescriptionKey: L("服务启动后健康检查失败", "Health check failed after server start")])
             )
         }
         savePidsToFile()

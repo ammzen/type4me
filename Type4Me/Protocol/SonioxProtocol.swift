@@ -8,11 +8,11 @@ enum SonioxProtocolError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
-            return "Failed to build Soniox WebSocket URL"
+            return L("无法生成 Soniox WebSocket URL", "Failed to build Soniox WebSocket URL")
         case .invalidMessage:
-            return "Invalid Soniox streaming message"
+            return L("Soniox 流式消息无效", "Invalid Soniox streaming message")
         case .invalidStartMessage:
-            return "Invalid Soniox start message"
+            return L("Soniox 启动消息无效", "Invalid Soniox start message")
         }
     }
 }
@@ -60,6 +60,7 @@ enum SonioxProtocol {
             "sample_rate": 16000,
             "num_channels": 1,
             "enable_endpoint_detection": true,
+            "endpoint_sensitivity": config.endpointSensitivity,
             "max_endpoint_delay_ms": maxEndpointDelayMs,
             "language_hints": ["zh", "en"],
             "language_hints_strict": true,

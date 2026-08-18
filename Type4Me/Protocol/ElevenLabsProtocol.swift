@@ -7,19 +7,19 @@ enum ElevenLabsProtocolError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidEndpoint:
-            return "Failed to build ElevenLabs WebSocket URL"
+            return L("无法生成 ElevenLabs WebSocket URL", "Failed to build ElevenLabs WebSocket URL")
         case .serverError(let type, let message):
             if let message, !message.isEmpty {
-                return "ElevenLabs error (\(type)): \(message)"
+                return L("ElevenLabs 错误（\(type)）：\(message)", "ElevenLabs error (\(type)): \(message)")
             }
-            return "ElevenLabs error: \(type)"
+            return L("ElevenLabs 错误：\(type)", "ElevenLabs error: \(type)")
         }
     }
 }
 
 struct ElevenLabsTermsError: Error, LocalizedError {
     var errorDescription: String? {
-        "ElevenLabs terms not accepted. Please visit elevenlabs.io/app/product-terms to enable Speech-to-Text."
+        L("ElevenLabs 条款尚未接受。请访问 elevenlabs.io/app/product-terms 启用 Speech-to-Text。", "ElevenLabs terms not accepted. Please visit elevenlabs.io/app/product-terms to enable Speech-to-Text.")
     }
 }
 
@@ -103,7 +103,8 @@ enum ElevenLabsProtocol {
     static func makeTranscriptUpdate(
         from data: Data,
         confirmedSegments: [String],
-        isFinalCommit: Bool = false
+        isFinalCommit: Bool = false,
+        languageCode: String = ""
     ) throws -> ElevenLabsTranscriptUpdate? {
         guard data.first == UInt8(ascii: "{") else { return nil }
         let message = try JSONDecoder().decode(InboundMessage.self, from: data)
@@ -116,7 +117,11 @@ enum ElevenLabsProtocol {
             // ElevenLabs sends cumulative text — strip the already-confirmed prefix to avoid duplication
             let partialOnly = stripConfirmedPrefix(from: text, confirmed: confirmed)
             guard !partialOnly.isEmpty else { return nil }
-            let normalized = normalize(segment: partialOnly, after: confirmed)
+            let punctuated = ScriptPunctuationNormalizer.normalizeIfNeeded(
+                languageCode: languageCode,
+                text: partialOnly
+            )
+            let normalized = normalize(segment: punctuated, after: confirmed)
             let transcript = RecognitionTranscript(
                 confirmedSegments: confirmedSegments,
                 partialText: normalized,
@@ -132,7 +137,11 @@ enum ElevenLabsProtocol {
             if !trimmed.isEmpty {
                 let newOnly = stripConfirmedPrefix(from: trimmed, confirmed: confirmed)
                 if !newOnly.isEmpty {
-                    next.append(normalize(segment: newOnly, after: confirmed))
+                    let punctuated = ScriptPunctuationNormalizer.normalizeIfNeeded(
+                        languageCode: languageCode,
+                        text: newOnly
+                    )
+                    next.append(normalize(segment: punctuated, after: confirmed))
                 }
             }
             // Mid-stream auto-commits (VAD) use isFinal: false so the session keeps recording.

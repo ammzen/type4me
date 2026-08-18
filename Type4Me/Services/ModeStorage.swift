@@ -33,9 +33,8 @@ struct ModeStorage {
         var result = saved.compactMap { mode -> ProcessingMode? in
             if mode.id == ProcessingMode.directId {
                 var d = ProcessingMode.direct
-                d.hotkeyCode = mode.hotkeyCode
-                d.hotkeyModifiers = mode.hotkeyModifiers
-                d.hotkeyStyle = mode.hotkeyStyle
+                d.hotkeyBindings = mode.hotkeyBindings
+                d.shortTextExemption = mode.shortTextExemption
                 return d
             }
             if mode.id == ProcessingMode.smartDirectId {
@@ -58,15 +57,31 @@ struct ModeStorage {
                     || mode.prompt.contains("内容包含多个要点时")
                     || isV4
                 var d = ProcessingMode.formalWriting
-                d.hotkeyCode = mode.hotkeyCode
-                d.hotkeyModifiers = mode.hotkeyModifiers
-                d.hotkeyStyle = mode.hotkeyStyle
+                d.hotkeyBindings = mode.hotkeyBindings
+                d.description = mode.description
+                d.shortTextExemption = mode.shortTextExemption
                 // If user customized the prompt, keep theirs
                 if !isLegacy {
                     d.name = mode.name
                     d.processingLabel = mode.processingLabel
                     d.prompt = mode.prompt
                 }
+                return d
+            }
+            if mode.id == ProcessingMode.selectionAskId {
+                var d = ProcessingMode.selectionAsk
+                d.hotkeyBindings = mode.hotkeyBindings
+                if mode.prompt != ProcessingMode.selectionAsk.prompt,
+                   !selectionAskPromptIsLegacy(mode.prompt) {
+                    d.name = mode.name
+                    d.processingLabel = mode.processingLabel
+                    d.prompt = mode.prompt
+                }
+                return d
+            }
+            if mode.id == ProcessingMode.macActionId {
+                var d = ProcessingMode.macAction
+                d.hotkeyBindings = mode.hotkeyBindings
                 return d
             }
             if mode.id == ProcessingMode.translate.id {
@@ -82,9 +97,8 @@ struct ModeStorage {
                     || (mode.prompt.contains("不编造具体方向") && !mode.prompt.contains("分析/研究/方案类任务"))  // V3 without complexity fix
                 if isLegacy {
                     var migrated = ProcessingMode.promptOptimize
-                    migrated.hotkeyCode = mode.hotkeyCode
-                    migrated.hotkeyModifiers = mode.hotkeyModifiers
-                    migrated.hotkeyStyle = mode.hotkeyStyle
+                    migrated.hotkeyBindings = mode.hotkeyBindings
+                    migrated.description = mode.description
                     return migrated
                 }
                 return mode
@@ -118,17 +132,39 @@ struct ModeStorage {
             }
         }
 
-        // One-time seed of agentMode for existing installs
-        // (custom defaults are not auto-injected like builtins, so we seed once then respect the user's edits)
-        let agentSeedKey = "tf_agentModeSeeded"
-        if !UserDefaults.standard.bool(forKey: agentSeedKey) {
-            if !result.contains(where: { $0.id == ProcessingMode.agentModeId }) {
-                result.append(ProcessingMode.agentMode)
-                // Persist immediately so the seeded mode survives even if the
-                // user quits before triggering any save path.
+        // One-time seeds for deletable default modes on existing installs.
+        // Once seeded, deleting one is respected and will not re-inject it.
+        let seededDefaults: [(mode: ProcessingMode, key: String)] = [
+            (.translateToChinese, "tf_translateToChineseModeSeeded"),
+            (.agentMode, "tf_agentModeSeeded"),
+        ]
+        var seededAnyMode = false
+        for seed in seededDefaults where !UserDefaults.standard.bool(forKey: seed.key) {
+            if !result.contains(where: { $0.id == seed.mode.id }) {
+                result.append(seed.mode)
+                seededAnyMode = true
+            }
+            UserDefaults.standard.set(true, forKey: seed.key)
+        }
+        if seededAnyMode {
+            // Persist immediately so seeded modes survive even if the user
+            // quits before triggering another save path.
+            try? save(result)
+        }
+
+        // One-time migration: the short-text-skip threshold used to be a single
+        // global UserDefaults value that only applied to 语音润色 (formal writing).
+        // Move it onto that mode so the per-mode setting preserves existing behavior.
+        let exemptionMigratedKey = "tf_shortTextExemptionMigrated"
+        if !UserDefaults.standard.bool(forKey: exemptionMigratedKey) {
+            let legacyGlobal = Int(UserDefaults.standard.string(forKey: "tf_shortTextExemption") ?? "0") ?? 0
+            if legacyGlobal > 0,
+               let idx = result.firstIndex(where: { $0.id == ProcessingMode.formalWritingId }),
+               result[idx].shortTextExemption == 0 {
+                result[idx].shortTextExemption = legacyGlobal
                 try? save(result)
             }
-            UserDefaults.standard.set(true, forKey: agentSeedKey)
+            UserDefaults.standard.set(true, forKey: exemptionMigratedKey)
         }
 
         return result
@@ -144,9 +180,11 @@ struct ModeStorage {
         if !mode.processingLabel.isEmpty {
             migrated.processingLabel = mode.processingLabel
         }
-        migrated.hotkeyCode = mode.hotkeyCode
-        migrated.hotkeyModifiers = mode.hotkeyModifiers
-        migrated.hotkeyStyle = mode.hotkeyStyle
+        if !mode.description.isEmpty {
+            migrated.description = mode.description
+        }
+        migrated.hotkeyBindings = mode.hotkeyBindings
+        migrated.shortTextExemption = mode.shortTextExemption
         migrated.isBuiltin = false
         return migrated
     }
@@ -162,5 +200,13 @@ struct ModeStorage {
         migrated.prompt = fallbackPrompt
         migrated.isBuiltin = false
         return migrated
+    }
+
+    private func selectionAskPromptIsLegacy(_ prompt: String) -> Bool {
+        prompt.contains("固定询问：“这句话是什么意思？”")
+            || prompt.contains("先直接解释选中文本的核心含义")
+            || prompt.contains("请用中文回答，允许使用 Markdown")
+            || (!prompt.contains("# 用户语音问题") && prompt.contains("# 选中文本"))
+            || (prompt.contains("你是语音问答助手") && !prompt.contains("{conversation}"))
     }
 }

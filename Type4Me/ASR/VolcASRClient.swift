@@ -7,9 +7,9 @@ enum VolcASRError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unsupportedProvider: return "VolcASRClient requires VolcanoASRConfig"
+        case .unsupportedProvider: return L("火山引擎识别配置无效", "VolcASRClient requires VolcanoASRConfig")
         case .serverRejected(let code, let message):
-            return message ?? "HTTP \(code)"
+            return message ?? L("HTTP \(code)", "HTTP \(code)")
         }
     }
 
@@ -78,10 +78,14 @@ actor VolcASRClient: SpeechRecognizer {
         var request = URLRequest(url: targetURL)
         if !isCloudProxy {
             // Direct connection: inject vendor credentials
-            request.setValue(volcConfig.appKey, forHTTPHeaderField: "X-Api-App-Key")
-            request.setValue(volcConfig.accessKey, forHTTPHeaderField: "X-Api-Access-Key")
-            request.setValue(volcConfig.resourceId, forHTTPHeaderField: "X-Api-Resource-Id")
-            request.setValue(connectId, forHTTPHeaderField: "X-Api-Connect-Id")
+            let headers = VolcProtocol.authHeaders(
+                authentication: volcConfig.authentication,
+                resourceId: volcConfig.resourceId,
+                connectId: connectId
+            )
+            for (field, value) in headers {
+                request.setValue(value, forHTTPHeaderField: field)
+            }
         }
 
         // Send full_client_request (no compression, plain JSON)

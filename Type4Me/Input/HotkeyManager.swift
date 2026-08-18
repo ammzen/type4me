@@ -4,6 +4,7 @@ import MediaPlayer
 typealias HotkeyStyle = ProcessingMode.HotkeyStyle
 
 struct ModeBinding {
+    let bindingId: UUID
     let modeId: UUID
     let keyCode: CGKeyCode
     let modifiers: CGEventFlags  // .maskCommand etc. Use [] for no modifiers
@@ -39,7 +40,7 @@ struct ModeBinding {
         .maskSecondaryFn,
     ]
 
-    /// Encode a mouse button number as a keyCode (for storage in ProcessingMode.hotkeyCode).
+    /// Encode a mouse button number as a keyCode (for storage in a HotkeyBinding).
     static func mouseKeyCode(for buttonNumber: Int) -> Int { mouseKeyCodeBase + buttonNumber }
 
     /// Decode a mouse keyCode back to a button number.
@@ -56,7 +57,7 @@ struct ModeBinding {
     // NX_KEYTYPE_FAST=19, NX_KEYTYPE_REWIND=20.
     // No collision with keyboard (0–127) or mouse (0x8000+) keyCodes.
 
-    /// Encode an NX_KEYTYPE value as a keyCode (for storage in ProcessingMode.hotkeyCode).
+    /// Encode an NX_KEYTYPE value as a keyCode (for storage in a HotkeyBinding).
     static func mediaKeyCode(for keyType: Int) -> Int { mediaKeyCodeBase + keyType }
 
     /// Decode a media keyCode back to the NX_KEYTYPE value.
@@ -170,21 +171,46 @@ final class HotkeyManager: NSObject {
     // MARK: - Configuration
 
     private var bindings: [ModeBinding] = []
+    /// Per-binding state, all keyed by `HotkeyBinding.id` so multiple bindings of the
+    /// same mode never collide.
     private var holdState: [UUID: Bool] = [:]
-    private var toggleState: [UUID: Bool] = [:]
     private var wasModifierDown: [UUID: Bool] = [:]
     private var holdSafetyTimers: [UUID: Timer] = [:]
-    /// Which toggle mode is currently active (recording). Only one can be active at a time.
-    private var activeToggleModeId: UUID?
+    /// The single binding currently driving a recording (hold or toggle), if any.
+    /// Only one recording can be active at a time across all modes/bindings.
+    private var activeRecordingBindingId: UUID?
+    /// The mode owning the active recording binding. Used to distinguish same-mode
+    /// (stop) from cross-mode (switch) presses.
+    private var activeRecordingModeId: UUID?
     private struct PendingModifierTrigger {
         let binding: ModeBinding
         let token: UUID
     }
     private var pendingModifierTriggers: [UUID: PendingModifierTrigger] = [:]
+    /// The modifier-only binding whose full flag combo is currently exactly held.
+    /// Modifier combos are matched by their complete set of flags (order-independent),
+    /// so we track the single exactly-active combo rather than per-key edge state.
+    private var activeModifierComboBindingId: UUID?
+    /// Normalized modifier flags observed on the previous flagsChanged event, used to
+    /// distinguish building a combo up (a real press) from releasing a larger combo
+    /// down through a smaller one (a transient we must not treat as a press).
+    private var previousModifierFlags: CGEventFlags = []
 
     /// Maximum hold duration before auto-stop (seconds).
     private let maxHoldDuration: TimeInterval = 120
-    private let modifierPrefixTriggerDelay: TimeInterval = 0.12
+
+    /// Default delay before a *prefix* modifier combo fires (e.g. `fn` when `fn+Shift`
+    /// also exists), giving the user time to complete the longer combo.
+    static let defaultModifierPrefixTriggerDelay: TimeInterval = 0.25
+    /// UserDefaults key to override `defaultModifierPrefixTriggerDelay` at runtime.
+    /// No settings UI yet — adjust via `defaults write` if needed.
+    static let modifierPrefixTriggerDelayKey = "tf_modifierPrefixTriggerDelay"
+    /// Effective prefix-combo trigger delay (seconds). Reads the UserDefaults override
+    /// when a positive value is present, otherwise the default.
+    private var modifierPrefixTriggerDelay: TimeInterval {
+        let stored = UserDefaults.standard.double(forKey: Self.modifierPrefixTriggerDelayKey)
+        return stored > 0 ? stored : Self.defaultModifierPrefixTriggerDelay
+    }
 
     // MARK: - State
 
@@ -200,15 +226,19 @@ final class HotkeyManager: NSObject {
     /// Reset all active recording/hold state. Called when session ends (completed/error/finalized)
     /// to ensure hotkeys and ESC don't remain stuck.
     func resetActiveState() {
-        activeToggleModeId = nil
-        for key in toggleState.keys { toggleState[key] = false }
+        clearActiveRecordingState()
+        for key in wasModifierDown.keys { wasModifierDown[key] = false }
         for key in holdState.keys { holdState[key] = false }
+        holdSafetyTimers.values.forEach { $0.invalidate() }
+        holdSafetyTimers = [:]
         cancelPendingModifierTriggers()
+        activeModifierComboBindingId = nil
+        previousModifierFlags = []
     }
 
-    /// Called when recording is stopped by a different mode's hotkey.
-    /// The UUID is the new mode's ID that should be used for processing.
-    var onCrossModeStop: ((UUID) -> Void)?
+    /// Called when recording is finished by a different mode's hotkey.
+    /// The application decides whether the ending mode should replace the starting mode.
+    var onCrossModeFinish: ((UUID) -> Void)?
 
     /// Called when ESC is pressed during active recording or processing (abort).
     /// Called when ESC is pressed during active recording or processing (abort).
@@ -231,11 +261,13 @@ final class HotkeyManager: NSObject {
     func registerBindings(_ newBindings: [ModeBinding]) {
         bindings = newBindings
         holdState = [:]
-        toggleState = [:]
         wasModifierDown = [:]
+        clearActiveRecordingState()
         holdSafetyTimers.values.forEach { $0.invalidate() }
         holdSafetyTimers = [:]
         cancelPendingModifierTriggers()
+        activeModifierComboBindingId = nil
+        previousModifierFlags = []
         updateMediaKeySession()
     }
 
@@ -316,8 +348,8 @@ final class HotkeyManager: NSObject {
         runLoopSource = nil
         lastEventTime = nil
         holdState = [:]
-        toggleState = [:]
         wasModifierDown = [:]
+        clearActiveRecordingState()
         holdSafetyTimers.values.forEach { $0.invalidate() }
         holdSafetyTimers = [:]
         cancelPendingModifierTriggers()
@@ -396,22 +428,7 @@ final class HotkeyManager: NSObject {
                     }
                 case .toggle:
                     if type == .otherMouseDown {
-                        let id = binding.modeId
-                        if let activeId = activeToggleModeId, activeId != id {
-                            toggleState[activeId] = false
-                            activeToggleModeId = nil
-                            onCrossModeStop?(id)
-                        } else {
-                            let isOn = toggleState[id] ?? false
-                            toggleState[id] = !isOn
-                            if !isOn {
-                                activeToggleModeId = id
-                                binding.onStart()
-                            } else {
-                                activeToggleModeId = nil
-                                binding.onStop()
-                            }
-                        }
+                        handleTogglePress(binding: binding)
                     }
                 }
                 return nil  // Swallow matched mouse button events
@@ -451,22 +468,7 @@ final class HotkeyManager: NSObject {
                     }
                 case .toggle:
                     if isKeyDown {
-                        let id = binding.modeId
-                        if let activeId = activeToggleModeId, activeId != id {
-                            toggleState[activeId] = false
-                            activeToggleModeId = nil
-                            onCrossModeStop?(id)
-                        } else {
-                            let isOn = toggleState[id] ?? false
-                            toggleState[id] = !isOn
-                            if !isOn {
-                                activeToggleModeId = id
-                                binding.onStart()
-                            } else {
-                                activeToggleModeId = nil
-                                binding.onStop()
-                            }
-                        }
+                        handleTogglePress(binding: binding)
                     }
                 }
                 return nil  // Swallow matched media key events
@@ -481,81 +483,50 @@ final class HotkeyManager: NSObject {
             cancelPendingModifierTriggers()
         }
 
+        // Modifier-only combos (fn, Ctrl+Shift, fn+Shift, …) are matched by their full
+        // set of held flags, independent of the physical order the keys were pressed.
+        // Handle them all in one place on every flagsChanged event. When the current
+        // flags exactly match a registered combo, swallow the event so the modifier
+        // doesn't also trigger its own system behavior.
+        if type == .flagsChanged {
+            let matchedCombo = evaluateModifierBindings(currentFlags: event.flags)
+            return matchedCombo ? nil : Unmanaged.passUnretained(event)
+        }
+
         for binding in bindings {
             // Skip mouse button and media key bindings in the keyboard path
             guard !binding.isMouseButton && !binding.isMediaKey else { continue }
+            // Modifier-only bindings are handled by evaluateModifierBindings above.
+            guard !isModifierKeyCode(binding.keyCode) else { continue }
             guard binding.keyCode == keyCode else { continue }
 
-            if isModifierKeyCode(keyCode) {
-                // Modifier keys: handle via flagsChanged only, don't swallow.
-                // For combos like Ctrl+Shift, binding.modifiers stores "other modifiers".
-                guard type == .flagsChanged else { continue }
-                let pressed = isModifierPressed(keyCode: keyCode, flags: event.flags)
+            // Regular keys: check modifier flags match
+            let requiredMods = normalizedModifierFlags(binding.modifiers, forKeyCode: Int(binding.keyCode))
+            let currentMods = normalizedModifierFlags(event.flags, forKeyCode: Int(keyCode))
+            guard currentMods == requiredMods else { continue }
 
-                if pressed {
-                    let requiredMods = normalizedModifierFlags(binding.modifiers)
-                    let currentMods = otherModifierFlags(for: keyCode, flags: event.flags)
-                    guard currentMods == requiredMods else { continue }
-                    if shouldDeferModifierTrigger(for: binding) {
-                        schedulePendingModifierTrigger(for: binding)
-                    } else {
-                        cancelPendingModifierTriggers()
-                        handleBindingEvent(binding: binding, pressed: true)
-                    }
-                    return Unmanaged.passUnretained(event)
-                } else if consumePendingModifierRelease(for: binding) {
-                    return Unmanaged.passUnretained(event)
-                } else if isModifierBindingActive(binding) {
-                    // Always release active state even if other modifiers were released first.
+            switch binding.style {
+            case .hold:
+                if type == .keyDown {
+                    let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat)
+                    if isRepeat != 0 { return nil }
+                    handleBindingEvent(binding: binding, pressed: true)
+                } else if type == .keyUp {
                     handleBindingEvent(binding: binding, pressed: false)
-                    return Unmanaged.passUnretained(event)
                 }
-                continue
-            } else {
-                // Regular keys: check modifier flags match
-                let requiredMods = normalizedModifierFlags(binding.modifiers, forKeyCode: Int(binding.keyCode))
-                let currentMods = normalizedModifierFlags(event.flags, forKeyCode: Int(keyCode))
-                guard currentMods == requiredMods else { continue }
-
-                switch binding.style {
-                case .hold:
-                    if type == .keyDown {
-                        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat)
-                        if isRepeat != 0 { return nil }
-                        handleBindingEvent(binding: binding, pressed: true)
-                    } else if type == .keyUp {
-                        handleBindingEvent(binding: binding, pressed: false)
-                    }
-                case .toggle:
-                    if type == .keyDown {
-                        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat)
-                        if isRepeat != 0 { return nil }
-                        let id = binding.modeId
-                        if let activeId = activeToggleModeId, activeId != id {
-                            // Cross-mode stop: different mode's key pressed while recording
-                            toggleState[activeId] = false
-                            activeToggleModeId = nil
-                            onCrossModeStop?(id)
-                        } else {
-                            let isOn = toggleState[id] ?? false
-                            toggleState[id] = !isOn
-                            if !isOn {
-                                activeToggleModeId = id
-                                binding.onStart()
-                            } else {
-                                activeToggleModeId = nil
-                                binding.onStop()
-                            }
-                        }
-                    }
+            case .toggle:
+                if type == .keyDown {
+                    let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat)
+                    if isRepeat != 0 { return nil }
+                    handleTogglePress(binding: binding)
                 }
-                return nil  // Swallow matched regular key events
             }
+            return nil  // Swallow matched regular key events
         }
 
         // ESC key (keyCode 53) - abort active recording or processing
         if isESCAbortEnabled && type == .keyDown && keyCode == 53 {
-            let isRecording = activeToggleModeId != nil || holdState.values.contains(true)
+            let isRecording = activeRecordingBindingId != nil || holdState.values.contains(true)
             let shouldAbort = isRecording || isProcessing
             if shouldAbort {
                 NSLog("[HotkeyManager] ESC pressed, triggering abort (recording=%@, processing=%@)",
@@ -576,46 +547,232 @@ final class HotkeyManager: NSObject {
 
     // MARK: - Binding dispatch
 
+    /// Unified per-binding event handler.
+    /// - Hold bindings: press/release drive start/stop.
+    /// - Toggle bindings: only the pressed edge is actionable; modifier toggles arrive as
+    ///   level-triggered `flagsChanged`, so they're edge-gated via `wasModifierDown`.
     private func handleBindingEvent(binding: ModeBinding, pressed: Bool) {
-        let id = binding.modeId
-
         switch binding.style {
         case .hold:
-            let wasHolding = holdState[id] ?? false
-            if pressed && !wasHolding {
-                holdState[id] = true
-                startSafetyTimer(for: binding)
-                binding.onStart()
-            } else if !pressed && wasHolding {
-                holdState[id] = false
-                cancelSafetyTimer(for: id)
-                binding.onStop()
+            if pressed {
+                handleHoldPress(binding: binding)
+            } else {
+                handleHoldRelease(binding: binding)
             }
 
         case .toggle:
-            let wasDown = wasModifierDown[id] ?? false
-            if pressed && !wasDown {
-                wasModifierDown[id] = true
-                if let activeId = activeToggleModeId, activeId != id {
-                    // Cross-mode stop via modifier key
-                    toggleState[activeId] = false
-                    activeToggleModeId = nil
-                    onCrossModeStop?(id)
-                } else {
-                    let isOn = toggleState[id] ?? false
-                    toggleState[id] = !isOn
-                    if !isOn {
-                        activeToggleModeId = id
-                        binding.onStart()
-                    } else {
-                        activeToggleModeId = nil
-                        binding.onStop()
-                    }
-                }
-            } else if !pressed {
-                wasModifierDown[id] = false
+            let bindingId = binding.bindingId
+            if pressed {
+                let wasDown = wasModifierDown[bindingId] ?? false
+                guard !wasDown else { return }
+                wasModifierDown[bindingId] = true
+                handleTogglePress(binding: binding)
+            } else {
+                wasModifierDown[bindingId] = false
             }
         }
+    }
+
+    /// A toggle binding was pressed. Start when idle, stop when the same mode is recording,
+    /// or hand off to cross-mode switching when a different mode is recording.
+    private func handleTogglePress(binding: ModeBinding) {
+        if activeRecordingBindingId != nil {
+            if activeRecordingModeId == binding.modeId {
+                // Same mode (same binding = toggle off, or a sibling binding): stop.
+                stopActiveRecording()
+            } else {
+                // Different mode: finish the current recording through the app's policy.
+                clearActiveRecordingState()
+                onCrossModeFinish?(binding.modeId)
+            }
+        } else {
+            startRecording(with: binding)
+        }
+    }
+
+    /// A hold binding went down.
+    private func handleHoldPress(binding: ModeBinding) {
+        let bindingId = binding.bindingId
+        // Ignore repeated down while already holding this binding.
+        guard holdState[bindingId] != true else { return }
+
+        if activeRecordingBindingId != nil {
+            if activeRecordingModeId == binding.modeId {
+                // Same mode recording via another binding: this press just stops it.
+                // Do not begin a hold recording, so the eventual release is a no-op.
+                stopActiveRecording()
+            } else {
+                // Different mode: finish the current recording through the app's policy.
+                clearActiveRecordingState()
+                onCrossModeFinish?(binding.modeId)
+            }
+            return
+        }
+
+        // Idle: begin hold recording.
+        holdState[bindingId] = true
+        startSafetyTimer(for: binding)
+        startRecording(with: binding)
+    }
+
+    /// A hold binding was released.
+    private func handleHoldRelease(binding: ModeBinding) {
+        let bindingId = binding.bindingId
+        guard holdState[bindingId] == true else { return }
+        holdState[bindingId] = false
+        cancelSafetyTimer(for: bindingId)
+        if activeRecordingBindingId == bindingId {
+            stopActiveRecording()
+        }
+    }
+
+    // MARK: - Active recording lifecycle
+
+    private func startRecording(with binding: ModeBinding) {
+        activeRecordingBindingId = binding.bindingId
+        activeRecordingModeId = binding.modeId
+        binding.onStart()
+    }
+
+    /// Stop the active recording, invoking its binding's `onStop`.
+    private func stopActiveRecording() {
+        let active = activeRecordingBinding()
+        clearActiveRecordingState()
+        active?.onStop()
+    }
+
+    /// Clear all active-recording bookkeeping. This is the single point where an in-flight
+    /// recording is torn down, regardless of the trigger (same-mode second binding,
+    /// cross-mode toggle/hold, ESC, safety timer, reset, …). Before dropping the active
+    /// binding id we clear its hold-side state (`holdState` + safety timer), so a hold
+    /// binding that is interrupted mid-recording by another binding/mode cannot leave a
+    /// dangling 120s safety timer that later fires `handleHoldSafetyTimer` and invokes
+    /// `onStop` a second time on an already-stopped session ("ghost stop"). On the timer
+    /// self-fire path the hold state is already cleared by `handleHoldSafetyTimer`, so
+    /// clearing here is a safe no-op.
+    /// Clear all active-recording bookkeeping. This is the single point where an in-flight
+    /// recording is torn down, regardless of the trigger (same-mode second binding,
+    /// cross-mode toggle/hold, ESC, safety timer, reset, …). Before dropping the active
+    /// binding id we clear its hold-side state (`holdState` + safety timer), so a hold
+    /// binding that is interrupted mid-recording by another binding/mode cannot leave a
+    /// dangling 120s safety timer that later fires `handleHoldSafetyTimer` and invokes
+    /// `onStop` a second time on an already-stopped session ("ghost stop"). On the timer
+    /// self-fire path the hold state is already cleared by `handleHoldSafetyTimer`, so
+    /// clearing here is a safe no-op.
+    private func clearActiveRecordingState() {
+        if let activeId = activeRecordingBindingId {
+            holdState[activeId] = false
+            cancelSafetyTimer(for: activeId)
+        }
+        activeRecordingBindingId = nil
+        activeRecordingModeId = nil
+    }
+
+    private func activeRecordingBinding() -> ModeBinding? {
+        guard let id = activeRecordingBindingId else { return nil }
+        return bindings.first { $0.bindingId == id }
+    }
+
+    // MARK: - Test SPI (internal)
+    //
+    // Exposes a thin driver + read-only views of the state machine so unit tests can
+    // replay the hold/toggle/cross-mode paths and assert no ghost hold state or timers
+    // are left behind. These members are `internal` (not `private`) so the `@testable
+    // import Type4Me` test target can reach them; they are not used by production code.
+
+    /// Drive the state machine the same way a real key event would (press or release).
+    internal func simulateBindingEvent(_ binding: ModeBinding, pressed: Bool) {
+        handleBindingEvent(binding: binding, pressed: pressed)
+    }
+
+    /// Drive the modifier-combo evaluator with synthetic flags. This covers the
+    /// prefix-delay path used by modifier-only bindings such as fn and fn+Shift.
+    @discardableResult
+    internal func simulateModifierFlags(_ flags: CGEventFlags) -> Bool {
+        evaluateModifierBindings(currentFlags: flags)
+    }
+
+    /// Stop the active recording (same path as ESC / safety timer / reset).
+    internal func simulateStopActiveRecording() {
+        stopActiveRecording()
+    }
+
+    /// True when a hold binding's press has been recorded but not yet released/stopped.
+    internal func isHoldActive(for bindingId: UUID) -> Bool {
+        holdState[bindingId] == true
+    }
+
+    /// True when this binding currently owns the active recording.
+    internal func isActiveRecordingBinding(_ bindingId: UUID) -> Bool {
+        activeRecordingBindingId == bindingId
+    }
+
+    /// True if a safety timer is still pending for this binding (would fire later).
+    internal func hasPendingSafetyTimer(for bindingId: UUID) -> Bool {
+        holdSafetyTimers[bindingId] != nil
+    }
+
+    // MARK: - Modifier Combo Evaluation
+
+    /// Order-independent evaluation of modifier-only combos (e.g. `fn`, `Ctrl+Shift`,
+    /// `fn+Shift`). A combo is active when the full set of currently-held modifier flags
+    /// exactly equals the combo's flags, regardless of the order the keys were pressed.
+    /// At most one combo matches at a time. Prefix combos (e.g. `fn` when `fn+Shift`
+    /// also exists) are deferred so the longer combo wins when both are being formed.
+    /// - Returns: `true` when the current flags exactly match a registered combo, so the
+    ///   caller can swallow the event and suppress the modifier's own system behavior.
+    @discardableResult
+    private func evaluateModifierBindings(currentFlags: CGEventFlags) -> Bool {
+        let current = normalizedModifierFlags(currentFlags)
+        let previous = previousModifierFlags
+        previousModifierFlags = current
+
+        let matched = bindings.first { b in
+            guard isModifierKeyCode(b.keyCode), !b.isMouseButton, !b.isMediaKey,
+                  let expected = ModeBinding.fullModifierFlags(
+                      keyCode: Int(b.keyCode), modifiers: b.modifiers.rawValue)
+            else { return false }
+            return expected == current
+        }
+        let shouldSwallow = matched != nil
+
+        guard matched?.bindingId != activeModifierComboBindingId else { return shouldSwallow }
+
+        // Release the previously-active combo.
+        if let activeId = activeModifierComboBindingId,
+           let activeBinding = bindings.first(where: { $0.bindingId == activeId }) {
+            activeModifierComboBindingId = nil
+            let activeExpected = ModeBinding.fullModifierFlags(
+                keyCode: Int(activeBinding.keyCode), modifiers: activeBinding.modifiers.rawValue) ?? []
+            let buildingIntoLargerCombo = activeExpected != current && activeExpected.isSubset(of: current)
+            if buildingIntoLargerCombo, pendingModifierTriggers[activeId] != nil {
+                // We're extending a deferred prefix (e.g. fn → fn+Shift) into the longer
+                // combo. Drop the pending prefix trigger silently; do NOT fire it as a tap.
+                cancelPendingModifierTriggers()
+            } else if !consumePendingModifierRelease(for: activeBinding) {
+                handleBindingEvent(binding: activeBinding, pressed: false)
+            }
+        }
+
+        // Press the newly-active combo (if any).
+        guard let matched, !current.isEmpty,
+              let expected = ModeBinding.fullModifierFlags(
+                  keyCode: Int(matched.keyCode), modifiers: matched.modifiers.rawValue)
+        else { return shouldSwallow }
+
+        // Arriving here by releasing a *larger* combo down through this one (previous
+        // flags were a strict superset) is a release transient, not a deliberate press:
+        // don't trigger, and don't mark active so the following release is a clean no-op.
+        if expected != previous && expected.isSubset(of: previous) { return shouldSwallow }
+
+        activeModifierComboBindingId = matched.bindingId
+        if shouldDeferModifierTrigger(for: matched) {
+            schedulePendingModifierTrigger(for: matched)
+        } else {
+            cancelPendingModifierTriggers()
+            handleBindingEvent(binding: matched, pressed: true)
+        }
+        return shouldSwallow
     }
 
     // MARK: - Modifier Prefix Conflicts
@@ -624,7 +781,7 @@ final class HotkeyManager: NSObject {
         guard isModifierKeyCode(binding.keyCode) else { return false }
 
         return bindings.contains { other in
-            guard other.modeId != binding.modeId,
+            guard other.bindingId != binding.bindingId,
                   !other.isMouseButton,
                   !other.isMediaKey
             else { return false }
@@ -638,32 +795,41 @@ final class HotkeyManager: NSObject {
     }
 
     private func schedulePendingModifierTrigger(for binding: ModeBinding) {
-        cancelPendingModifierTriggers(except: binding.modeId)
+        cancelPendingModifierTriggers(except: binding.bindingId)
         let token = UUID()
-        pendingModifierTriggers[binding.modeId] = PendingModifierTrigger(binding: binding, token: token)
+        pendingModifierTriggers[binding.bindingId] = PendingModifierTrigger(binding: binding, token: token)
         DispatchQueue.main.asyncAfter(deadline: .now() + modifierPrefixTriggerDelay) { [weak self] in
-            self?.firePendingModifierTrigger(modeId: binding.modeId, token: token)
+            self?.firePendingModifierTrigger(bindingId: binding.bindingId, token: token)
         }
     }
 
-    private func firePendingModifierTrigger(modeId: UUID, token: UUID) {
-        guard let pending = pendingModifierTriggers[modeId],
+    private func firePendingModifierTrigger(bindingId: UUID, token: UUID) {
+        guard let pending = pendingModifierTriggers[bindingId],
               pending.token == token,
               isExactModifierComboActive(for: pending.binding)
         else { return }
-        pendingModifierTriggers.removeValue(forKey: modeId)
+        pendingModifierTriggers.removeValue(forKey: bindingId)
         handleBindingEvent(binding: pending.binding, pressed: true)
     }
 
     private func consumePendingModifierRelease(for binding: ModeBinding) -> Bool {
-        guard let pending = pendingModifierTriggers.removeValue(forKey: binding.modeId) else { return false }
+        guard let pending = pendingModifierTriggers.removeValue(forKey: binding.bindingId) else { return false }
+
+        // A hold binding released before its prefix delay elapsed was never
+        // physically active. Starting and stopping it back-to-back is both
+        // useless and racy: onStart schedules the recording asynchronously,
+        // so onStop can run first and observe an idle UI, leaving the later
+        // recording start unstopped. A quick release should therefore cancel
+        // the pending hold entirely. Toggle bindings still need a synthesized
+        // press/release so a quick tap retains toggle semantics.
+        guard pending.binding.style == .toggle else { return true }
         handleBindingEvent(binding: pending.binding, pressed: true)
         handleBindingEvent(binding: pending.binding, pressed: false)
         return true
     }
 
-    private func cancelPendingModifierTriggers(except modeId: UUID? = nil) {
-        let ids = pendingModifierTriggers.keys.filter { $0 != modeId }
+    private func cancelPendingModifierTriggers(except bindingId: UUID? = nil) {
+        let ids = pendingModifierTriggers.keys.filter { $0 != bindingId }
         for id in ids {
             pendingModifierTriggers.removeValue(forKey: id)
         }
@@ -674,19 +840,20 @@ final class HotkeyManager: NSObject {
             keyCode: Int(binding.keyCode),
             modifiers: binding.modifiers.rawValue
         ) else { return false }
-        let stateFlags = CGEventSource.flagsState(.combinedSessionState)
-        var current = normalizedModifierFlags(stateFlags)
-        if stateFlags.contains(.maskSecondaryFn) {
-            current.insert(.maskSecondaryFn)
-        }
-        return current == expected
+
+        // `CGEventSource.flagsState` does not reliably report `.maskSecondaryFn`
+        // while Fn is held. The event tap has already observed the authoritative
+        // flagsChanged state, and updates `previousModifierFlags` before scheduling
+        // the prefix delay. Use that state so a deferred Fn hold can actually fire;
+        // a release event clears it before the pending trigger gets a chance to run.
+        return previousModifierFlags == expected
     }
 
     // MARK: - Safety Timer
 
     private func startSafetyTimer(for binding: ModeBinding) {
-        cancelSafetyTimer(for: binding.modeId)
-        let id = binding.modeId
+        cancelSafetyTimer(for: binding.bindingId)
+        let id = binding.bindingId
         holdSafetyTimers[id] = Timer.scheduledTimer(
             timeInterval: maxHoldDuration,
             target: self,
@@ -705,11 +872,15 @@ final class HotkeyManager: NSObject {
     private func handleHoldSafetyTimer(_ timer: Timer) {
         guard let id = timer.userInfo as? UUID else { return }
         guard holdState[id] == true else { return }
-        guard let binding = bindings.first(where: { $0.modeId == id }) else { return }
+        guard let binding = bindings.first(where: { $0.bindingId == id }) else { return }
 
-        NSLog("[HotkeyManager] Safety timer fired for mode %@, auto-stopping", id.uuidString)
+        NSLog("[HotkeyManager] Safety timer fired for binding %@, auto-stopping", id.uuidString)
         holdState[id] = false
-        binding.onStop()
+        if activeRecordingBindingId == id {
+            stopActiveRecording()
+        } else {
+            binding.onStop()
+        }
     }
 
     // MARK: - Stuck Hold Recovery
@@ -719,7 +890,7 @@ final class HotkeyManager: NSObject {
         let currentFlags = CGEventSource.flagsState(.combinedSessionState)
 
         for binding in bindings where binding.style == .hold {
-            let id = binding.modeId
+            let id = binding.bindingId
             guard holdState[id] == true else { continue }
 
             // Mouse buttons and media keys: no API to query current state, rely on release events instead.
@@ -734,10 +905,14 @@ final class HotkeyManager: NSObject {
             }
 
             if !stillDown {
-                NSLog("[HotkeyManager] Recovering stuck hold for mode %@", id.uuidString)
+                NSLog("[HotkeyManager] Recovering stuck hold for binding %@", id.uuidString)
                 holdState[id] = false
                 cancelSafetyTimer(for: id)
-                binding.onStop()
+                if activeRecordingBindingId == id {
+                    stopActiveRecording()
+                } else {
+                    binding.onStop()
+                }
             }
         }
     }
@@ -760,23 +935,6 @@ final class HotkeyManager: NSObject {
 
     private func modifierEventFlag(for keyCode: CGKeyCode) -> CGEventFlags? {
         ModeBinding.modifierEventFlag(for: Int(keyCode))
-    }
-
-    private func otherModifierFlags(for keyCode: CGKeyCode, flags: CGEventFlags) -> CGEventFlags {
-        var mods = normalizedModifierFlags(flags)
-        if let ownFlag = modifierEventFlag(for: keyCode) {
-            mods.remove(ownFlag)
-        }
-        return mods
-    }
-
-    private func isModifierBindingActive(_ binding: ModeBinding) -> Bool {
-        switch binding.style {
-        case .hold:
-            return holdState[binding.modeId] ?? false
-        case .toggle:
-            return wasModifierDown[binding.modeId] ?? false
-        }
     }
 
     private func isModifierPressed(keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {

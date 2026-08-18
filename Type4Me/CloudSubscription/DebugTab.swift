@@ -1,15 +1,9 @@
-// Developer-only diagnostics panel.
-// Hidden by default. Enable with: defaults write com.type4me.app tf_debug_panel -bool true
-// Disable with: defaults delete com.type4me.app tf_debug_panel
-
 import SwiftUI
 import os
 
-struct DebugTab: View, SettingsCardHelpers {
-
-    static var isEnabled: Bool {
-        UserDefaults.standard.bool(forKey: "tf_debug_panel")
-    }
+/// Cloud-only diagnostics embedded by the universal Debug settings page.
+/// This file is excluded from packages that do not include CloudSubscription.
+struct CloudDebugDiagnosticsSection: View, SettingsCardHelpers {
 
     @State private var cnMs: String = "—"
     @State private var usMs: String = "—"
@@ -19,12 +13,6 @@ struct DebugTab: View, SettingsCardHelpers {
     private let logger = Logger(subsystem: "com.type4me.app", category: "DebugTab")
 
     var body: some View {
-        SettingsSectionHeader(
-            label: "DEBUG",
-            title: "Diagnostics",
-            description: "Region switching, latency testing, endpoint info."
-        )
-
         regionCard
         Spacer().frame(height: 16)
         endpointsCard
@@ -33,9 +21,9 @@ struct DebugTab: View, SettingsCardHelpers {
     // MARK: - Region Card
 
     private var regionCard: some View {
-        settingsGroupCard("Region", icon: "network") {
+        settingsGroupCard(L("区域", "Region"), icon: "network") {
             HStack {
-                Text("Active Region")
+                Text(L("当前区域", "Active Region"))
                     .font(.system(size: 12))
                     .foregroundStyle(TF.settingsTextSecondary)
                 Spacer()
@@ -50,7 +38,7 @@ struct DebugTab: View, SettingsCardHelpers {
                 latencyColumn("CN (Beijing)", ms: cnMs, active: currentRegion == .cn)
                 latencyColumn("US (Los Angeles)", ms: usMs, active: currentRegion == .overseas)
                 Spacer()
-                secondaryButton(pinging ? "Pinging..." : "Ping Both") {
+                secondaryButton(pinging ? L("检测中...", "Pinging...") : L("检测两边", "Ping Both")) {
                     pingBoth()
                 }
                 .disabled(pinging)
@@ -59,9 +47,9 @@ struct DebugTab: View, SettingsCardHelpers {
             SettingsDivider()
 
             HStack(spacing: 8) {
-                regionButton("Force CN", region: .cn)
-                regionButton("Force US", region: .overseas)
-                secondaryButton("Auto Detect") {
+                regionButton(L("强制中国区", "Force CN"), region: .cn)
+                regionButton(L("强制美国区", "Force US"), region: .overseas)
+                secondaryButton(L("自动检测", "Auto Detect")) {
                     UserDefaults.standard.removeObject(forKey: "tf_cloud_region_override")
                     Task {
                         let r = await RegionDetector.detect()
@@ -75,7 +63,7 @@ struct DebugTab: View, SettingsCardHelpers {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
-                    Text("Manual override active. Auto-detect disabled.")
+                    Text(L("已启用手动指定区域，自动检测已关闭。", "Manual override active. Auto-detect disabled."))
                         .font(.system(size: 11))
                 }
                 .foregroundStyle(TF.settingsAccentAmber)
@@ -87,12 +75,12 @@ struct DebugTab: View, SettingsCardHelpers {
     // MARK: - Endpoints Card
 
     private var endpointsCard: some View {
-        settingsGroupCard("Endpoints", icon: "server.rack") {
+        settingsGroupCard(L("端点", "Endpoints"), icon: "server.rack") {
             endpointRow("CN API", value: CloudConfig.cnAPIEndpoint)
             SettingsDivider()
             endpointRow("US API", value: CloudConfig.usAPIEndpoint)
             SettingsDivider()
-            endpointRow("Active", value: CloudConfig.apiEndpoint)
+            endpointRow(L("当前", "Active"), value: CloudConfig.apiEndpoint)
         }
     }
 

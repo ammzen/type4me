@@ -7,9 +7,9 @@ enum BaiduProtocolError: Error, LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidMessage:
-            return "Invalid Baidu realtime ASR message"
+            return L("百度实时识别消息无效", "Invalid Baidu realtime ASR message")
         case .serverError(let code, let message):
-            return "Baidu realtime ASR failed [\(code)]: \(message)"
+            return L("百度实时识别失败 [\(code)]：\(message)", "Baidu realtime ASR failed [\(code)]: \(message)")
         }
     }
 }

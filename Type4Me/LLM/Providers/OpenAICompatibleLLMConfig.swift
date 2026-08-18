@@ -40,7 +40,7 @@ struct OpenAICompatibleLLMConfig<Tag: OpenAICompatibleLLMTag>: LLMProviderConfig
         }()
         return [
             CredentialField(
-                key: "apiKey", label: "API Key",
+                key: "apiKey", label: L("API Key", "API Key"),
                 placeholder: p.requiresAPIKey ? "sk-..." : L("可选", "Optional"),
                 isSecure: true, isOptional: !p.requiresAPIKey, defaultValue: ""
             ),
@@ -52,7 +52,7 @@ struct OpenAICompatibleLLMConfig<Tag: OpenAICompatibleLLMTag>: LLMProviderConfig
                 options: models, allowCustomInput: true
             ),
             CredentialField(
-                key: "baseURL", label: "Base URL",
+                key: "baseURL", label: L("Base URL", "Base URL"),
                 placeholder: baseURLPlaceholder,
                 isSecure: false, isOptional: true, defaultValue: p.defaultBaseURL
             ),

@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 /// Timeline-driven animation controller that cycles FloatingBarView through
-/// a demo loop: preparing -> recording (text flows in) -> processing -> done -> hidden -> repeat.
+/// a demo loop: recording (text flows in) -> processing -> done -> hidden -> repeat.
 @Observable
 @MainActor
 final class DemoState {
@@ -58,11 +58,7 @@ final class DemoState {
     // MARK: - One Demo Cycle
 
     private func runOneCycle() async {
-        // 1. Preparing (spinner dot) for 0.8s
-        barPhase = .preparing
-        guard await sleep(0.8) else { return }
-
-        // 2. Recording: text flows in 3 segments
+        // 1. Recording: text flows in 3 segments
         segments = []
         audioLevel.current = 0
         recordingStartDate = Date()
@@ -83,17 +79,17 @@ final class DemoState {
 
         stopAudioSimulation()
 
-        // 3. Processing for 0.5s
+        // 2. Processing for 0.5s
         processingFinishTime = nil
         barPhase = .processing
         guard await sleep(0.5) else { return }
 
-        // 4. Done "已完成" for 1.5s
+        // 3. Done "已完成" for 1.5s
         feedbackMessage = L("已完成", "Done")
         barPhase = .done
         guard await sleep(1.5) else { return }
 
-        // 5. Hidden for 1.5s
+        // 4. Hidden for 1.5s
         barPhase = .hidden
         segments = []
         recordingStartDate = nil
@@ -134,5 +130,17 @@ final class DemoState {
 // MARK: - FloatingBarState Conformance
 
 extension DemoState: FloatingBarState {
+    var pinsTranscriptPopup: Bool { false }
     var isQwen3OnlyMode: Bool { false }
+
+    func performRecordingControlAction(_ action: RecordingControlAction) {
+        guard barPhase == .preparing || barPhase == .recording else { return }
+        switch action {
+        case .finish:
+            barPhase = .processing
+        case .cancel:
+            feedbackMessage = L("已取消", "Cancelled")
+            barPhase = .done
+        }
+    }
 }

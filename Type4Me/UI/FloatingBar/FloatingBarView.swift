@@ -3,6 +3,12 @@ import SwiftUI
 /// Cached font for text measurement (module-level to avoid generic-type static restriction).
 private let floatingBarFont = NSFont.systemFont(ofSize: 14, weight: .medium)
 
+private enum FloatingBarTopOverlay: Equatable {
+    case transcript
+    case action(RecordingControlAction)
+    case mode
+}
+
 // MARK: - FloatingBarState Protocol
 
 @MainActor
@@ -16,29 +22,36 @@ protocol FloatingBarState: AnyObject, Observable {
     var processingFinishTime: Date? { get }
     var transcriptionText: String { get }
     var recordingStartDate: Date? { get }
+    var pinsTranscriptPopup: Bool { get }
     /// True when recording without SenseVoice streaming (Qwen3-only).
     var isQwen3OnlyMode: Bool { get }
     var effectiveProcessingLabel: String { get }
+    func performRecordingControlAction(_ action: RecordingControlAction)
 }
 
-/// Dark-themed floating transcription bar with smooth morphing between states.
+/// Dark-themed floating transcription bar.
 ///
-/// Design: single capsule container that animates width + content transitions.
-/// - Recording: audio-reactive dot + live text + timer, breathing border
-/// - Processing: rotating orb with breathing glow + "AI" badge
-/// - Done: full progress bar + centered text
+/// Design: state changes are immediate; recording starts directly in the full
+/// listening UI even while the audio service is still preparing internally.
+/// - Recording: static dot + live text + completion/cancellation controls
+/// - Processing: selected background effect + centered status text
+/// - Done: immediate feedback message
 struct FloatingBarView<S: FloatingBarState>: View {
 
     let state: S
 
 
-    @State private var breathe = false
-    @State private var doneGlow = true
     /// High-water mark: only grows during recording, never shrinks (prevents ASR correction jitter)
     @State private var recordingPeakWidth: CGFloat = TF.barHeight
     @State private var processingStartDate: Date?
     @State private var doneStartDate: Date?
-    @State private var isHovered = false
+    @State private var isTranscriptHoverActive = false
+    @State private var transcriptHoverExitTask: Task<Void, Never>?
+    @State private var hoveredAction: RecordingControlAction?
+    @State private var showsModeHint = false
+    @State private var modeHintTask: Task<Void, Never>?
+    @State private var recordingActionLocked = false
+    @AppStorage(LiveTranscriptDisplayPreference.storageKey) private var showLiveTranscript = LiveTranscriptDisplayPreference.defaultValue
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
     @AppStorage(RecordingVisualStyle.storageKey) private var visualStyle = RecordingVisualStyle.defaultValue
 
@@ -48,37 +61,58 @@ struct FloatingBarView<S: FloatingBarState>: View {
         RecordingVisualStyle(rawValue: visualStyle) ?? .timeline
     }
 
+    private var showsTranscriptInCurrentPhase: Bool {
+        LiveTranscriptDisplayPreference.showsTranscript(
+            isEnabled: showLiveTranscript,
+            phase: state.barPhase
+        )
+    }
+
     private var shouldRenderCapsule: Bool {
-        guard state.barPhase != .hidden else { return false }
-        if !recordingVisualStyle.showsRecordingPanel,
-           state.barPhase == .preparing || state.barPhase == .recording {
-            return false
-        }
-        return true
+        state.barPhase != .hidden && recordingVisualStyle.showsRecordingPanel
     }
 
     private var showTranscriptPopup: Bool {
+        guard recordingVisualStyle.showsRecordingPanel else { return false }
+        guard showsTranscriptInCurrentPhase else { return false }
+        if state.pinsTranscriptPopup {
+            return !state.segments.isEmpty
+        }
+        if state.barPhase == .recovering {
+            return !state.segments.isEmpty
+        }
         guard recordingVisualStyle.showsRecordingPanel,
               hoverTranscriptPreview,
-              isHovered,
+              isTranscriptHoverActive,
               state.barPhase == .recording,
               !state.segments.isEmpty
         else { return false }
         let textWidth = measureText(state.transcriptionText)
-        return textWidth + 66 > TF.barWidth
+        return textWidth + TF.recordingChromeWidth > TF.barWidth
+    }
+
+    private var activeTopOverlay: FloatingBarTopOverlay? {
+        guard recordingVisualStyle.showsRecordingPanel else { return nil }
+        if showTranscriptPopup { return .transcript }
+        if let hoveredAction, state.barPhase == .recording { return .action(hoveredAction) }
+        if showsModeHint,
+           (state.barPhase == .preparing || state.barPhase == .recording) {
+            return .mode
+        }
+        return nil
     }
 
     private var capsuleWidth: CGFloat {
         switch state.barPhase {
         case .preparing:
-            return TF.barHeight
+            return TF.barWidthCompact
         case .recording:
-            if state.segments.isEmpty {
-                return state.isQwen3OnlyMode ? 110 : TF.barHeight
-            }
+            guard showLiveTranscript, !state.segments.isEmpty else { return TF.barWidthCompact }
             return recordingPeakWidth
         case .processing:
-            return measureText(state.effectiveProcessingLabel) + 66.0
+            return min(TF.barWidth, max(110, measureText(state.effectiveProcessingLabel) + 66.0))
+        case .recovering:
+            return min(TF.barWidth, measureText(state.effectiveProcessingLabel) + 86.0)
         case .done:
             return feedbackWidth(for: state.feedbackMessage)
         case .error:
@@ -89,57 +123,39 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     var body: some View {
-        VStack(spacing: TF.transcriptPopupGap) {
-            if showTranscriptPopup {
-                transcriptPopup
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.95, anchor: .bottom).combined(with: .opacity),
-                        removal: .opacity
-                    ))
+        VStack(spacing: topOverlayGap) {
+            if let overlay = activeTopOverlay {
+                topOverlay(overlay)
             }
 
             if shouldRenderCapsule {
                 capsuleBar
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.92).combined(with: .opacity),
-                    removal: .opacity
-                ))
-            }
-        }
-        .background {
-            FloatingBarHoverTracker { hovered in
-                withAnimation(TF.springSnappy) {
-                    isHovered = hovered
-                }
             }
         }
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .animation(TF.springSnappy, value: state.barPhase != .hidden)
-        .animation(TF.springSnappy, value: shouldRenderCapsule)
-        .animation(TF.springSnappy, value: visualStyle)
-        .animation(TF.springSnappy, value: showTranscriptPopup)
         .onChange(of: state.barPhase) { _, newPhase in
             handlePhaseChange(newPhase)
         }
         .onChange(of: state.segments) { _, newSegments in
-            guard state.barPhase == .recording else { return }
+            guard state.barPhase == .recording, showLiveTranscript else { return }
             let text = newSegments.map(\.text).joined()
             let textWidth = measureText(text)
-            let needed = min(TF.barWidth, max(TF.barHeight, textWidth + 66.0))
+            let needed = min(TF.barWidth, max(TF.barWidthCompact, textWidth + TF.recordingChromeWidth))
             if needed > recordingPeakWidth {
-                // Growing: fixed velocity 250pt/s
-                let distance = needed - recordingPeakWidth
-                let duration = max(0.12, Double(distance / 250.0))
-                withAnimation(.linear(duration: duration)) {
-                    recordingPeakWidth = needed
-                }
+                recordingPeakWidth = needed
             } else if recordingPeakWidth - needed > 30 {
-                // Large correction (hotword etc.): allow shrink
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    recordingPeakWidth = needed
-                }
+                recordingPeakWidth = needed
             }
+        }
+        .onChange(of: state.transcriptionText) { _, text in
+            if !text.isEmpty {
+                dismissModeHint()
+            }
+        }
+        .onDisappear {
+            modeHintTask?.cancel()
+            transcriptHoverExitTask?.cancel()
         }
     }
 
@@ -147,7 +163,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var capsuleBar: some View {
         barContent
-            .animation(TF.springSnappy, value: state.barPhase)
             .frame(width: capsuleWidth, height: TF.barHeight)
             .clipShape(Capsule())
             .background {
@@ -155,7 +170,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .clipShape(Capsule())
             }
             .shadow(color: Color(white: 0.08, opacity: 0.5), radius: 5, x: 0, y: 0)
-            .animation(TF.springSnappy, value: state.barPhase)
     }
 
     // MARK: - Content by Phase
@@ -164,88 +178,114 @@ struct FloatingBarView<S: FloatingBarState>: View {
     private var barContent: some View {
         switch state.barPhase {
         case .preparing:
-            preparingContent
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.92).combined(with: .opacity),
-                    removal: .opacity
-                ))
+            recordingContent
         case .recording:
             recordingContent
-                .transition(.asymmetric(
-                    insertion: .opacity,
-                    removal: .scale(scale: 0.9, anchor: .leading).combined(with: .opacity)
-                ))
         case .processing:
             processingContent
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.85).combined(with: .opacity),
-                    removal: .scale(scale: 0.9).combined(with: .opacity)
-                ))
+        case .recovering:
+            recoveringContent
         case .done:
             doneContent
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.85).combined(with: .opacity),
-                    removal: .opacity
-                ))
         case .error:
             errorContent
-                .transition(.asymmetric(
-                    insertion: .scale(scale: 0.9).combined(with: .opacity),
-                    removal: .opacity
-                ))
         case .hidden:
             EmptyView()
         }
     }
 
-    private var preparingContent: some View {
-        HStack(spacing: 0) {
-            PreparingDot()
+    private var recordingContent: some View {
+        HStack(spacing: TF.recordingControlGap) {
+            recordingButton(.finish)
+
+            recordingText
+
+            recordingButton(.cancel)
         }
-        .frame(maxWidth: .infinity)
+        .padding(.horizontal, TF.recordingEdgeInset)
     }
 
-    private var recordingContent: some View {
-        HStack(spacing: 10) {
-            // Module 1: dot (fixed position, 14pt from left edge)
-            RecordingDot(meter: state.audioLevel)
-
-            // Module 2: text container (fills remaining space, grows with frame)
-            // Uses overlay so text sizing never affects HStack layout
-            if state.segments.isEmpty && state.isQwen3OnlyMode {
-                Text(L("录音中", "Recording"))
+    private var recordingText: some View {
+        Color.clear
+            .overlay(alignment: recordingPeakWidth >= TF.barWidth ? .trailing : .center) {
+                Text(recordingDisplayText)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
-            } else if !state.segments.isEmpty {
-                Color.clear
-                    .overlay(alignment: .trailing) {
-                        Text(state.transcriptionText)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
+                    .foregroundStyle(TF.floatingText)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .mask {
+                if showLiveTranscript && !state.segments.isEmpty && recordingPeakWidth >= TF.barWidth {
+                    HStack(spacing: 0) {
+                        LinearGradient(
+                            colors: [.clear, .white],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                        .frame(width: 12)
+                        Rectangle()
                     }
-                    .mask {
-                        if recordingPeakWidth >= TF.barWidth {
-                            HStack(spacing: 0) {
-                                LinearGradient(
-                                    colors: [.clear, .white],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                                .frame(width: 12)
-                                Rectangle()
-                            }
-                        } else {
-                            Rectangle()
-                        }
-                    }
-                    .padding(.trailing, 4)
+                } else {
+                    Rectangle()
+                }
+            }
+            .background {
+                FloatingBarHoverTracker { hovered in
+                    updateTranscriptHover(hovered)
+                }
+            }
+            .allowsHitTesting(true)
+    }
+
+    private var recordingDisplayText: String {
+        guard showLiveTranscript, !state.segments.isEmpty else {
+            return L("倾听中", "Listening")
+        }
+        return state.transcriptionText
+    }
+
+    private func recordingButton(_ action: RecordingControlAction) -> some View {
+        ZStack {
+            Circle()
+                .fill(action == .finish ? TF.floatingControl : TF.floatingControlLight)
+
+            if action == .finish {
+                RecordingDot()
                     .allowsHitTesting(false)
-                    .transition(.opacity)
+            } else {
+                Image(systemName: "xmark")
+                    .font(.system(size: 19, weight: .regular))
+                    .foregroundStyle(TF.floatingBackground)
+                    .allowsHitTesting(false)
             }
         }
-        .padding(.horizontal, 14)
+        .frame(width: TF.recordingControlSize, height: TF.recordingControlSize)
+        .contentShape(Circle())
+        .accessibilityLabel(action == .finish
+            ? L("完成录制", "Finish Recording")
+            : L("取消录制", "Cancel Recording"))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            triggerRecordingAction(action)
+        }
+        .overlay {
+            FloatingBarButtonInteraction(
+                onHoverChanged: { hovered in
+                    guard !recordingActionLocked else { return }
+                    hoveredAction = hovered ? action : (hoveredAction == action ? nil : hoveredAction)
+                },
+                onClick: { triggerRecordingAction(action) }
+            )
+        }
+    }
+
+    private func triggerRecordingAction(_ action: RecordingControlAction) {
+        guard !recordingActionLocked else { return }
+        recordingActionLocked = true
+        hoveredAction = nil
+        transcriptHoverExitTask?.cancel()
+        isTranscriptHoverActive = false
+        state.performRecordingControlAction(action)
     }
 
     private var processingContent: some View {
@@ -255,6 +295,22 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 .foregroundStyle(.white)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var recoveringContent: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(TF.recording)
+                .frame(width: 10, height: 10)
+                .shadow(color: TF.recording.opacity(0.4), radius: 3)
+
+            Text(state.effectiveProcessingLabel)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 14)
     }
 
     private var doneContent: some View {
@@ -316,21 +372,21 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var capsuleBackground: some View {
         ZStack {
-            Color(white: 0.08, opacity: 0.88)
+            TF.floatingBackground
 
-            if state.barPhase == .recording {
+            if state.barPhase == .recording && recordingVisualStyle.showsBackgroundEffect {
                 AudioRipple(meter: state.audioLevel, style: recordingVisualStyle)
                     .id(recordingVisualStyle.rawValue)
-                    .transition(.opacity)
             }
 
-            if state.barPhase == .processing || state.barPhase == .done {
+            if (state.barPhase == .processing || state.barPhase == .recovering || state.barPhase == .done),
+               recordingVisualStyle.showsBackgroundEffect {
                 ProcessingProgress(
+                    style: recordingVisualStyle,
                     finishTime: state.processingFinishTime,
                     processingStartDate: processingStartDate,
                     doneStartDate: doneStartDate
                 )
-                .transition(.opacity)
             }
 
             if state.barPhase == .error {
@@ -339,7 +395,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     startPoint: .leading,
                     endPoint: UnitPoint(x: 0.45, y: 0.5)
                 )
-                .transition(.opacity)
             }
         }
     }
@@ -352,17 +407,19 @@ struct FloatingBarView<S: FloatingBarState>: View {
     private var borderColor: Color {
         switch state.barPhase {
         case .preparing:
-            .white.opacity(0.04)
+            .white.opacity(0.05)
         case .recording:
-            .white.opacity(breathe ? 0.14 : 0.05)
+            .white.opacity(0.05)
         case .processing:
             .white.opacity(0.07)
+        case .recovering:
+            .white.opacity(0.12)
         case .done:
             switch state.feedbackKind {
             case .macActionUnsure:
                 TF.amber.opacity(0.30)
             case .macActionSuccess, .macActionFailure, .standard:
-                TF.success.opacity(doneGlow ? 0.3 : 0.08)
+                TF.success.opacity(0.3)
             }
         case .error:
             TF.settingsAccentRed.opacity(0.22)
@@ -379,44 +436,41 @@ struct FloatingBarView<S: FloatingBarState>: View {
         // instead of firing mouseExited, so isHovered would otherwise leak across
         // recording sessions and auto-show the popup without any actual hover.
         if phase == .preparing || phase == .hidden {
-            isHovered = false
+            transcriptHoverExitTask?.cancel()
+            isTranscriptHoverActive = false
+            hoveredAction = nil
         }
         switch phase {
         case .preparing:
-            recordingPeakWidth = TF.barHeight
+            recordingPeakWidth = TF.barWidthCompact
             processingStartDate = nil
             doneStartDate = nil
-            breathe = false
-            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                breathe = true
-            }
+            recordingActionLocked = false
+            showModeHint()
         case .recording:
-            recordingPeakWidth = TF.barHeight
-            breathe = false
-            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
-                breathe = true
-            }
+            recordingActionLocked = false
         case .processing:
+            dismissModeHint()
             processingStartDate = Date()
             doneStartDate = nil
-            breathe = false
+        case .recovering:
+            dismissModeHint()
+            processingStartDate = Date()
+            doneStartDate = nil
         case .done:
+            dismissModeHint()
             doneStartDate = Date()
-            breathe = false
-            doneGlow = true
-            withAnimation(.easeOut(duration: 1.0)) { doneGlow = false }
         case .error:
-            breathe = false
-            doneGlow = false
+            dismissModeHint()
         default:
-            breathe = false
+            dismissModeHint()
         }
     }
 
     private func feedbackWidth(for message: String) -> CGFloat {
         // Reserve extra room when an SF Symbol icon is shown (icon + spacing).
         let iconExtra: CGFloat = feedbackIcon == nil ? 0 : 26
-        return measureText(message) + 66.0 + iconExtra
+        return min(TF.barWidth, max(110, measureText(message) + 66.0 + iconExtra))
     }
 
     /// Measure actual rendered width using the same font as the floating bar text.
@@ -424,51 +478,153 @@ struct FloatingBarView<S: FloatingBarState>: View {
         ceil((string as NSString).size(withAttributes: [.font: floatingBarFont]).width)
     }
 
-    // MARK: - Transcript Popup View
+    // MARK: - Top overlays
 
-    private var transcriptPopup: some View {
-        Text(state.transcriptionText)
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(.white)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .frame(width: TF.barWidth)
+    private var topOverlayGap: CGFloat {
+        switch activeTopOverlay {
+        case .action, .mode:
+            return TF.recordingTooltipGap
+        case .transcript, nil:
+            return TF.transcriptPopupGap
+        }
+    }
+
+    @ViewBuilder
+    private func topOverlay(_ overlay: FloatingBarTopOverlay) -> some View {
+        switch overlay {
+        case .transcript:
+            TranscriptPopup(
+                text: state.transcriptionText,
+                onHoverChanged: updateTranscriptHover
+            )
+        case .mode:
+            hintBubble(text: state.currentMode.name)
+                .transaction { $0.animation = nil }
+        case .action(.finish):
+            alignedActionHint(.finish)
+        case .action(.cancel):
+            alignedActionHint(.cancel)
+        }
+    }
+
+    private func alignedActionHint(_ action: RecordingControlAction) -> some View {
+        let distanceFromCenter = capsuleWidth / 2
+            - TF.recordingEdgeInset
+            - TF.recordingControlSize / 2
+        let horizontalOffset = action == .finish ? -distanceFromCenter : distanceFromCenter
+
+        return actionHintBubble(action)
+            .offset(x: horizontalOffset)
+            .frame(width: capsuleWidth)
+    }
+
+    private func actionHintBubble(_ action: RecordingControlAction) -> some View {
+        HStack(spacing: 7) {
+            Text(action == .finish
+                ? L("完成录制", "Finish Recording")
+                : L("取消录制", "Cancel Recording"))
+
+            if action == .cancel {
+                Text("esc")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(TF.floatingText)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(TF.recordingTooltipBadge))
+            }
+        }
+        .font(.system(size: 14, weight: .semibold))
+        .foregroundStyle(TF.floatingText)
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous)
+                .fill(TF.floatingBackground)
+        )
+        .frame(maxWidth: TF.recordingTooltipMaxWidth)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func hintBubble(text: String) -> some View {
+        Text(text)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(TF.floatingText)
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
             .background(
                 RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous)
-                    .fill(Color(white: 0.08, opacity: 0.78))
+                    .fill(TF.floatingBackground)
             )
+    }
+
+    private func showModeHint() {
+        modeHintTask?.cancel()
+        showsModeHint = true
+        modeHintTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            showsModeHint = false
+        }
+    }
+
+    private func dismissModeHint() {
+        modeHintTask?.cancel()
+        modeHintTask = nil
+        if showsModeHint {
+            showsModeHint = false
+        }
+    }
+
+    private func updateTranscriptHover(_ hovering: Bool) {
+        transcriptHoverExitTask?.cancel()
+        if hovering {
+            isTranscriptHoverActive = true
+            return
+        }
+
+        transcriptHoverExitTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            isTranscriptHoverActive = false
+        }
+    }
+}
+
+private struct TranscriptPopup: View {
+    let text: String
+    let onHoverChanged: (Bool) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                Text(text)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(TF.floatingText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+
+                Color.clear
+                    .frame(height: 1)
+                    .id("transcript-end")
+            }
+            .scrollIndicators(.hidden)
+            .frame(width: TF.transcriptPopupWidth)
+            .frame(maxHeight: TF.transcriptPopupMaxHeight)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(
+                RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous)
+                    .fill(TF.floatingBackground)
+            )
+            .overlay {
+                FloatingBarHoverTracker(onHoverChanged: onHoverChanged)
+            }
             .clipShape(RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous))
             .shadow(color: Color.black.opacity(0.3), radius: 8, y: -2)
-    }
-}
-
-// MARK: - Recording Dot
-
-struct PreparingDot: View {
-
-    @State private var rotation = 0.0
-
-    var body: some View {
-        ZStack {
-            Circle()
-                .stroke(TF.recording.opacity(0.16), lineWidth: 1.6)
-                .frame(width: 14, height: 14)
-
-            Circle()
-                .trim(from: 0.16, to: 0.76)
-                .stroke(
-                    TF.recording,
-                    style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
-                )
-                .frame(width: 14, height: 14)
-                .rotationEffect(.degrees(rotation))
-        }
-        .frame(width: 24, height: 24)
-        .onAppear {
-            rotation = 0
-            withAnimation(.linear(duration: 0.8).repeatForever(autoreverses: false)) {
-                rotation = 360
+            .onAppear { proxy.scrollTo("transcript-end", anchor: .bottom) }
+            .onChange(of: text) { _, _ in
+                proxy.scrollTo("transcript-end", anchor: .bottom)
             }
         }
     }
@@ -476,90 +632,15 @@ struct PreparingDot: View {
 
 // MARK: - Recording Dot
 
-/// Audio-reactive red dot with dual concentric pulse rings.
+/// Static recording dot. Recording background effects are rendered separately
+/// according to the user's configured visual style.
 struct RecordingDot: View {
-
-    let meter: AudioLevelMeter
-
-    @State private var outerPulse = false
-    @State private var innerPulse = false
-
-    var body: some View {
-        TimelineView(.animation) { _ in
-            let level = CGFloat(max(0.05, min(1.0, meter.current)))
-            let levelSize: CGFloat = 10 + level * 12
-
-            ZStack {
-                // Outer slow pulse ring
-                Circle()
-                    .fill(TF.recording.opacity(outerPulse ? 0.0 : 0.25))
-                    .frame(width: outerPulse ? 24 : 10, height: outerPulse ? 24 : 10)
-
-                // Audio-reactive ring (smooth following)
-                Circle()
-                    .fill(TF.recording.opacity(0.18))
-                    .frame(width: levelSize, height: levelSize)
-
-                // Inner faster pulse ring (offset phase)
-                Circle()
-                    .stroke(TF.recording.opacity(innerPulse ? 0.2 : 0.0), lineWidth: 1)
-                    .frame(width: innerPulse ? 18 : 12, height: innerPulse ? 18 : 12)
-
-                // Core dot
-                Circle()
-                    .fill(TF.recording)
-                    .frame(width: 10, height: 10)
-                    .shadow(color: TF.recording.opacity(0.4), radius: 3)
-            }
-        }
-        .frame(width: 24, height: 24)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
-                outerPulse = true
-            }
-            withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true).delay(0.15)) {
-                innerPulse = true
-            }
-        }
-    }
-}
-
-// MARK: - Processing Orb
-
-/// Purple/blue gradient sphere with rotation + breathing glow.
-struct ProcessingOrb: View {
-
-    @State private var rotation: Double = 0
-    @State private var breathe = false
-
     var body: some View {
         Circle()
-            .fill(
-                AngularGradient(
-                    colors: [
-                        Color(red: 0.40, green: 0.30, blue: 0.90),
-                        Color(red: 0.30, green: 0.55, blue: 1.00),
-                        Color(red: 0.40, green: 0.30, blue: 0.90),
-                    ],
-                    center: .center,
-                    startAngle: .degrees(rotation),
-                    endAngle: .degrees(rotation + 360)
-                )
-            )
-            .frame(width: 22, height: 22)
-            .scaleEffect(breathe ? 1.08 : 0.95)
-            .shadow(
-                color: Color(red: 0.35, green: 0.35, blue: 0.90).opacity(breathe ? 0.6 : 0.3),
-                radius: breathe ? 10 : 5
-            )
-            .onAppear {
-                withAnimation(.linear(duration: 2.5).repeatForever(autoreverses: false)) {
-                    rotation = 360
-                }
-                withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-                    breathe = true
-                }
-            }
+            .fill(TF.recording)
+            .frame(width: 10, height: 10)
+            .shadow(color: TF.recording.opacity(0.4), radius: 3)
+            .frame(width: 24, height: 24)
     }
 }
 
@@ -599,7 +680,8 @@ struct RecordingTimer: View {
 
 // MARK: - Processing Progress
 
-/// Particle progress bar with two-phase fill:
+/// Processing progress that preserves the user's selected recording visual style.
+/// The timing is shared by all styles; only the rendering changes.
 /// - Fast phase: 0% → 70% in 1.5s (ease-out)
 /// - Slow cruise: 70% → 95% asymptotically (never stalls, always creeping)
 /// When processingFinishTime is set, sprints toward 100% in 0.3s.
@@ -607,6 +689,7 @@ struct RecordingTimer: View {
 /// All timing comes from parent — no @State, so view recreation is harmless.
 struct ProcessingProgress: View {
 
+    let style: RecordingVisualStyle
     let finishTime: Date?
     var processingStartDate: Date?
     var doneStartDate: Date?
@@ -646,7 +729,82 @@ struct ProcessingProgress: View {
                     progress = base + (1.0 - base) * doneT
                 }
 
-                // Push soft leading edge past visible boundary when full
+                switch style {
+                case .classic:
+                    drawLines(context: &context, size: size, time: time, progress: progress)
+                case .dual:
+                    drawParticles(context: &context, size: size, time: time, progress: progress)
+                case .timeline:
+                    drawLevels(context: &context, size: size, time: time, progress: progress)
+                case .effectless, .hidden:
+                    break
+                }
+            }
+        }
+        .drawingGroup()
+    }
+
+    private func drawLines(
+        context: inout GraphicsContext,
+        size: CGSize,
+        time: Double,
+        progress: CGFloat
+    ) {
+        let center = size.height / 2
+        let fillEdge = progress * size.width
+        for index in 0..<2 {
+            var path = Path()
+            let phase = time * (index == 0 ? 2.2 : 1.6) + Double(index) * 1.4
+            var x: CGFloat = 0
+            while x <= fillEdge {
+                let envelope = sin(.pi * min(1, x / max(size.width, 1)))
+                let y = center + sin(Double(x) / (index == 0 ? 24 : 34) + phase)
+                    * Double(envelope * size.height * (index == 0 ? 0.22 : 0.13))
+                if x == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                else { path.addLine(to: CGPoint(x: x, y: y)) }
+                x += 2
+            }
+            context.stroke(
+                path,
+                with: .linearGradient(
+                    Gradient(colors: [.white.opacity(0.35), Color.blue.opacity(0.55)]),
+                    startPoint: .zero,
+                    endPoint: CGPoint(x: size.width, y: center)
+                ),
+                style: StrokeStyle(lineWidth: 1.4, lineCap: .round)
+            )
+        }
+    }
+
+    private func drawLevels(
+        context: inout GraphicsContext,
+        size: CGSize,
+        time: Double,
+        progress: CGFloat
+    ) {
+        let center = size.height / 2
+        let fillEdge = progress * size.width
+        var x: CGFloat = 3
+        while x < fillEdge {
+            let wave = 0.25 + 0.75 * abs(sin(Double(x) * 0.11 + time * 3.4))
+            let height = CGFloat(wave) * size.height * 0.64
+            let rect = CGRect(x: x, y: center - height / 2, width: 2, height: height)
+            let opacity = 0.18 + 0.35 * Double(x / max(size.width, 1))
+            context.fill(
+                RoundedRectangle(cornerRadius: 1).path(in: rect),
+                with: .color(Color(red: 0.56, green: 0.68, blue: 1).opacity(opacity))
+            )
+            x += 5
+        }
+    }
+
+    private func drawParticles(
+        context: inout GraphicsContext,
+        size: CGSize,
+        time: Double,
+        progress: CGFloat
+    ) {
+                // Push soft leading edge past visible boundary when full.
                 let fillEdge = progress * size.width + (progress >= 0.99 ? 20 : 0)
                 let center = size.height / 2
 
@@ -702,9 +860,6 @@ struct ProcessingProgress: View {
                     col += 1
                     xi += 2
                 }
-            }
-        }
-        .drawingGroup()
     }
 
     private func hash(_ a: Int, _ b: Int) -> CGFloat {
@@ -737,7 +892,8 @@ struct AudioRipple: View {
                 switch style {
                 case .classic: drawClassicWaves(context: &context, size: size, time: time)
                 case .dual: drawDualSpine(context: &context, size: size, time: time)
-                case .timeline, .hidden: drawTimeline(context: &context, size: size, time: time)
+                case .timeline: drawTimeline(context: &context, size: size, time: time)
+                case .effectless, .hidden: break
                 }
             }
         }
@@ -963,6 +1119,56 @@ private final class LevelTimeline {
 
 // MARK: - Hover Tracking (works even when app is not active)
 
+/// AppKit-backed click target for controls hosted in a non-activating panel.
+/// `acceptsFirstMouse` makes the first click actionable even while another app
+/// owns focus, which SwiftUI `Button` does not reliably guarantee here.
+private struct FloatingBarButtonInteraction: NSViewRepresentable {
+    let onHoverChanged: (Bool) -> Void
+    let onClick: () -> Void
+
+    func makeNSView(context: Context) -> FloatingBarButtonNSView {
+        let view = FloatingBarButtonNSView()
+        view.onHoverChanged = onHoverChanged
+        view.onClick = onClick
+        return view
+    }
+
+    func updateNSView(_ nsView: FloatingBarButtonNSView, context: Context) {
+        nsView.onHoverChanged = onHoverChanged
+        nsView.onClick = onClick
+    }
+}
+
+final class FloatingBarButtonNSView: NSView {
+    var onHoverChanged: ((Bool) -> Void)?
+    var onClick: (() -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func updateTrackingAreas() {
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self
+        ))
+        super.updateTrackingAreas()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHoverChanged?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHoverChanged?(false)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        onClick?()
+    }
+}
+
 /// Uses NSTrackingArea with `.activeAlways` so hover fires on a non-key,
 /// non-activating NSPanel regardless of which app is in the foreground.
 struct FloatingBarHoverTracker: NSViewRepresentable {
@@ -982,6 +1188,10 @@ struct FloatingBarHoverTracker: NSViewRepresentable {
 final class HoverTrackingNSView: NSView {
     var onHoverChanged: ((Bool) -> Void)?
     private var enterWorkItem: DispatchWorkItem?
+
+    /// Tracking areas should observe hover without intercepting SwiftUI button
+    /// clicks or scroll-wheel events from controls underneath this helper view.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func updateTrackingAreas() {
         for area in trackingAreas { removeTrackingArea(area) }

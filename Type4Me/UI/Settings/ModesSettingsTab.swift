@@ -1,16 +1,45 @@
 import SwiftUI
 
+// MARK: - Shared field label
+
+/// Section field label shared by the mode detail forms: a small semibold title
+/// with an optional inline hint to its right (keeps rows compact and uniform).
+@ViewBuilder
+private func fieldLabel(_ title: String, _ hint: String? = nil) -> some View {
+    HStack(spacing: 6) {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(TF.settingsTextTertiary)
+        if let hint {
+            Text(hint)
+                .font(.system(size: 10))
+                .foregroundStyle(TF.settingsTextTertiary.opacity(0.7))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        Spacer(minLength: 0)
+    }
+}
+
 // MARK: - Recording Sheet Target
 
 private struct RecordingTarget: Identifiable {
-    let id: UUID
-    let name: String
-    let currentStyle: ProcessingMode.HotkeyStyle
+    /// Fresh identity per presentation so re-opening the sheet always re-presents.
+    let id = UUID()
+    let modeId: UUID
+    let modeName: String
+    /// Non-nil when editing an existing binding; nil when adding a new one.
+    let editingBindingId: UUID?
+    let initialKeyCode: Int?
+    let initialModifiers: UInt64?
+    let initialStyle: ProcessingMode.HotkeyStyle
 }
 
 // MARK: - Main View
 
 struct ModesSettingsTab: View {
+
+    var showsHeader = true
 
     @Environment(AppState.self) private var appState
     @State private var modes: [ProcessingMode] = ModeStorage().load()
@@ -18,15 +47,23 @@ struct ModesSettingsTab: View {
     @State private var recordingTarget: RecordingTarget?
     @State private var deletingModeId: UUID?
     @State private var draggingModeId: UUID?
+    @State private var hoveredModeId: UUID?
+    /// Latest edited (unsaved) snapshot of the selected mode and whether it differs
+    /// from storage. Used to warn before switching away with unsaved changes.
+    @State private var draftMode: ProcessingMode?
+    @State private var draftDirty = false
+    @State private var pendingSelection: UUID?
     @State private var selectedASRProvider: ASRProvider = KeychainService.selectedASRProvider
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SettingsSectionHeader(
-                label: "MODES",
-                title: L("处理模式", "Modes"),
-                description: L("配置语音转写与后处理流水线。快速模式实时输出，自定义模式可经 LLM 加工。", "Configure speech-to-text and post-processing pipelines. Quick Mode outputs live text, and custom modes can use LLM processing.")
-            )
+            if showsHeader {
+                SettingsSectionHeader(
+                    label: L("模式", "MODES"),
+                    title: L("处理模式", "Modes"),
+                    description: L("配置语音转写与后处理流水线。快速模式实时输出，自定义模式可经 LLM 加工。", "Configure speech-to-text and post-processing pipelines. Quick Mode outputs live text, and custom modes can use LLM processing.")
+                )
+            }
 
             HStack(alignment: .top, spacing: 0) {
                 // Left: mode list (all modes)
@@ -53,8 +90,16 @@ struct ModesSettingsTab: View {
                     }
                 }
                 .scrollBounceBehavior(.basedOnSize)
-                .frame(width: 320)
-                .padding(.trailing, 16)
+                .frame(width: 210)
+                .padding(.trailing, 14)
+                .onDrop(of: [.text], isTargeted: nil) { _ in
+                    // Fallback: reset drag state when released over empty list space.
+                    if draggingModeId != nil {
+                        persistModes()
+                        draggingModeId = nil
+                    }
+                    return true
+                }
 
                 // Divider
                 Rectangle()
@@ -96,58 +141,71 @@ struct ModesSettingsTab: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .selectMode)) { note in
             guard let modeId = note.object as? UUID else { return }
-            selectedModeId = modeId
+            attemptSelect(modeId)
         }
         .sheet(item: $recordingTarget) { target in
             HotkeyRecordingSheet(
                 target: target,
                 checkConflict: { code, mods in
                     guard let code else { return nil }
+                    // Cross-mode conflict: another mode owns an equivalent binding.
                     return modes.first { other in
-                        guard other.id != target.id,
-                              let otherCode = other.hotkeyCode
-                        else { return false }
-                        return ModeBinding.hotkeysAreEquivalent(
-                            keyCode: code,
-                            modifiers: mods,
-                            otherKeyCode: otherCode,
-                            otherModifiers: other.hotkeyModifiers
-                        )
+                        guard other.id != target.modeId else { return false }
+                        return other.hotkeyBindings.contains { b in
+                            ModeBinding.hotkeysAreEquivalent(
+                                keyCode: code, modifiers: mods,
+                                otherKeyCode: b.keyCode, otherModifiers: b.modifiers
+                            )
+                        }
+                    }
+                },
+                checkDuplicateInMode: { code, mods in
+                    guard let code,
+                          let mode = modes.first(where: { $0.id == target.modeId })
+                    else { return false }
+                    return mode.hotkeyBindings.contains { b in
+                        b.id != target.editingBindingId
+                            && ModeBinding.hotkeysAreEquivalent(
+                                keyCode: code, modifiers: mods,
+                                otherKeyCode: b.keyCode, otherModifiers: b.modifiers
+                            )
                     }
                 },
                 checkPrefixConflict: { code, mods in
                     guard let code else { return nil }
+                    // Prefix conflict is per-binding: exclude only the binding being edited.
                     return modes.first { other in
-                        guard other.id != target.id,
-                              let otherCode = other.hotkeyCode
-                        else { return false }
-                        return ModeBinding.hasModifierPrefixConflict(
-                            keyCode: code,
-                            modifiers: mods,
-                            otherKeyCode: otherCode,
-                            otherModifiers: other.hotkeyModifiers
-                        )
+                        other.hotkeyBindings.contains { b in
+                            !(other.id == target.modeId && b.id == target.editingBindingId)
+                                && ModeBinding.hasModifierPrefixConflict(
+                                    keyCode: code, modifiers: mods,
+                                    otherKeyCode: b.keyCode, otherModifiers: b.modifiers
+                                )
+                        }
                     }
                 },
                 onConfirm: { code, mods, style in
-                    if let conflictIdx = modes.firstIndex(where: {
-                        guard $0.id != target.id,
-                              let otherCode = $0.hotkeyCode
-                        else { return false }
-                        return ModeBinding.hotkeysAreEquivalent(
-                            keyCode: code,
-                            modifiers: mods,
-                            otherKeyCode: otherCode,
-                            otherModifiers: $0.hotkeyModifiers
-                        )
-                    }) {
-                        modes[conflictIdx].hotkeyCode = nil
-                        modes[conflictIdx].hotkeyModifiers = nil
+                    // Global uniqueness: transfer by removing the single conflicting
+                    // binding from any other mode.
+                    for i in modes.indices where modes[i].id != target.modeId {
+                        modes[i].hotkeyBindings.removeAll { b in
+                            ModeBinding.hotkeysAreEquivalent(
+                                keyCode: code, modifiers: mods,
+                                otherKeyCode: b.keyCode, otherModifiers: b.modifiers
+                            )
+                        }
                     }
-                    if let idx = modes.firstIndex(where: { $0.id == target.id }) {
-                        modes[idx].hotkeyCode = code
-                        modes[idx].hotkeyModifiers = mods
-                        modes[idx].hotkeyStyle = style
+                    if let idx = modes.firstIndex(where: { $0.id == target.modeId }) {
+                        if let editId = target.editingBindingId,
+                           let bIdx = modes[idx].hotkeyBindings.firstIndex(where: { $0.id == editId }) {
+                            modes[idx].hotkeyBindings[bIdx].keyCode = code
+                            modes[idx].hotkeyBindings[bIdx].modifiers = mods
+                            modes[idx].hotkeyBindings[bIdx].style = style
+                        } else {
+                            modes[idx].hotkeyBindings.append(
+                                HotkeyBinding(keyCode: code, modifiers: mods, style: style)
+                            )
+                        }
                     }
                     persistModes()
                     recordingTarget = nil
@@ -174,125 +232,118 @@ struct ModesSettingsTab: View {
                 Text(L("确定要删除「\(mode.name)」吗？此操作不可撤销。", "Delete \"\(mode.name)\"? This cannot be undone."))
             }
         }
+        .alert(
+            L("未保存的更改", "Unsaved Changes"),
+            isPresented: Binding(
+                get: { pendingSelection != nil },
+                set: { if !$0 { pendingSelection = nil } }
+            )
+        ) {
+            Button(L("保存", "Save")) {
+                if let draft = draftMode,
+                   let idx = modes.firstIndex(where: { $0.id == draft.id }) {
+                    modes[idx] = draft
+                    persistModes()
+                }
+                if let target = pendingSelection { commitSelection(target) }
+            }
+            Button(L("放弃更改", "Discard"), role: .destructive) {
+                if let target = pendingSelection { commitSelection(target) }
+            }
+            Button(L("取消", "Cancel"), role: .cancel) { pendingSelection = nil }
+        } message: {
+            let name = draftMode?.name ?? selectedMode?.name ?? ""
+            Text(L("「\(name)」有未保存的更改。切换前要保存吗？",
+                   "\"\(name)\" has unsaved changes. Save before switching?"))
+        }
+    }
+
+    // MARK: - Selection with unsaved-changes guard
+
+    private func attemptSelect(_ id: UUID) {
+        guard id != selectedModeId else { return }
+        if draftDirty {
+            pendingSelection = id
+        } else {
+            commitSelection(id)
+        }
+    }
+
+    private func commitSelection(_ id: UUID) {
+        draftDirty = false
+        draftMode = nil
+        pendingSelection = nil
+        var t = Transaction(); t.animation = nil
+        withTransaction(t) { selectedModeId = id }
     }
 
     // MARK: - Mode Row
 
     private func modeRow(_ mode: ProcessingMode) -> some View {
         let isActive = selectedModeId == mode.id
+        let isHovered = hoveredModeId == mode.id
+        let isDragging = draggingModeId == mode.id
 
-        return HStack(spacing: 6) {
-            // Drag handle
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 10, weight: .medium))
-                .foregroundStyle(isActive ? .white.opacity(0.35) : TF.settingsTextTertiary.opacity(0.5))
-                .frame(width: 16)
-                .contentShape(Rectangle())
-                .onDrag {
-                    draggingModeId = mode.id
-                    return NSItemProvider(object: mode.id.uuidString as NSString)
-                }
+        let rowFill: Color = isActive
+            ? TF.settingsSidebarActive
+            : (isHovered ? TF.settingsSidebarHover : .clear)
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 5) {
-                    Text(mode.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(isActive ? .white : TF.settingsText)
-                    if mode.isBuiltin {
-                        Text(L("内置", "BUILT-IN"))
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(isActive ? .white.opacity(0.5) : TF.settingsTextTertiary)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(isActive ? Color.white.opacity(0.12) : TF.settingsCardAlt))
-                    }
-                }
+        return HStack(spacing: 7) {
+            dragDots
+                .opacity(isHovered || isDragging ? 1 : 0)
 
-                if let kc = mode.hotkeyCode {
-                    HStack(spacing: 4) {
-                        Text(hotkeyStyleLabel(mode.hotkeyStyle))
-                            .font(.system(size: 9))
-                            .foregroundStyle(isActive ? .white.opacity(0.45) : TF.settingsTextTertiary)
-                        Text(HotkeyRecorderView.keyDisplayName(keyCode: kc, modifiers: mode.hotkeyModifiers))
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(isActive ? .white.opacity(0.6) : TF.settingsTextSecondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(isActive ? Color.white.opacity(0.12) : TF.settingsBg)
-                            )
-                        Button {
-                            if let idx = modes.firstIndex(where: { $0.id == mode.id }) {
-                                modes[idx].hotkeyCode = nil
-                                modes[idx].hotkeyModifiers = nil
-                                persistModes()
-                            }
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 7, weight: .bold))
-                                .foregroundStyle(isActive ? .white.opacity(0.4) : TF.settingsTextTertiary)
-                                .frame(width: 14, height: 14)
-                                .background(Circle().fill(isActive ? Color.white.opacity(0.1) : TF.settingsBg))
-                        }
-                        .buttonStyle(.plain)
-                        .help(L("删除快捷键", "Remove hotkey"))
-                    }
-                } else {
-                    Text(L("未设置快捷键", "No hotkey"))
-                        .font(.system(size: 9))
-                        .foregroundStyle(isActive ? .white.opacity(0.35) : TF.settingsTextTertiary.opacity(0.6))
-                }
+            Text(mode.name)
+                .font(.system(size: 13, weight: isActive ? .semibold : .medium))
+                .foregroundStyle(TF.settingsText)
+                .lineLimit(1)
+
+            if mode.isBuiltin {
+                Text(L("内置", "BUILT-IN"))
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(TF.settingsCardAlt))
             }
 
-            Spacer()
+            Spacer(minLength: 4)
 
-            HStack(spacing: 4) {
-                Button {
-                    recordingTarget = RecordingTarget(
-                        id: mode.id, name: mode.name, currentStyle: mode.hotkeyStyle
-                    )
-                } label: {
-                    HStack(spacing: 3) {
-                        Image(systemName: "record.circle")
-                            .font(.system(size: 10))
-                        Text(L("按键录制", "Record key"))
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundStyle(isActive ? .white.opacity(0.7) : TF.settingsTextSecondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .fill(isActive ? Color.white.opacity(0.1) : TF.settingsBg)
-                    )
-                }
-                .buttonStyle(.plain)
-
+            if !mode.isBuiltin && isHovered {
                 Button { deletingModeId = mode.id } label: {
                     Image(systemName: "trash")
                         .font(.system(size: 10))
-                        .foregroundStyle(isActive ? .white.opacity(0.6) : TF.settingsTextTertiary)
-                        .frame(width: 24, height: 24)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .fill(isActive ? Color.white.opacity(0.1) : TF.settingsBg)
-                        )
+                        .foregroundStyle(TF.settingsAccentRed)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help(L("删除模式", "Delete mode"))
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isActive ? TF.settingsNavActive : .clear)
-        )
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .frame(height: 34)
+        .background(RoundedRectangle(cornerRadius: 7).fill(rowFill))
+        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .opacity(isDragging ? 0.45 : 1)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.12)) {
+                hoveredModeId = hovering ? mode.id : nil
+            }
+        }
         .onTapGesture {
-            var t = Transaction(); t.animation = nil
-            withTransaction(t) { selectedModeId = mode.id }
+            attemptSelect(mode.id)
+        }
+        .onDrag {
+            draggingModeId = mode.id
+            return NSItemProvider(object: mode.id.uuidString as NSString)
+        } preview: {
+            Text(mode.name)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(TF.settingsText)
+                .padding(.horizontal, 12)
+                .frame(height: 32)
+                .background(RoundedRectangle(cornerRadius: 7).fill(TF.settingsCard))
         }
         .onDrop(of: [.text], delegate: ModeDropDelegate(
             targetId: mode.id,
@@ -302,11 +353,18 @@ struct ModesSettingsTab: View {
         ))
     }
 
-    private func hotkeyStyleLabel(_ style: ProcessingMode.HotkeyStyle) -> String {
-        switch style {
-        case .hold: return L("按住录制", "Hold to record")
-        case .toggle: return L("按下切换", "Toggle")
+    /// Six-dot drag affordance (2×3), matching common reorder handles.
+    private var dragDots: some View {
+        VStack(spacing: 2.5) {
+            ForEach(0..<3, id: \.self) { _ in
+                HStack(spacing: 2.5) {
+                    Circle().frame(width: 2.5, height: 2.5)
+                    Circle().frame(width: 2.5, height: 2.5)
+                }
+            }
         }
+        .foregroundStyle(TF.settingsTextTertiary.opacity(0.55))
+        .frame(width: 12)
     }
 
     // MARK: - Mode Detail
@@ -314,16 +372,66 @@ struct ModesSettingsTab: View {
     @ViewBuilder
     private func modeDetail(_ mode: ProcessingMode) -> some View {
         if mode.isBuiltin && mode.id != ProcessingMode.formalWritingId {
-            builtinModeDetail(mode)
+            VStack(alignment: .leading, spacing: 18) {
+                builtinModeDetail(mode)
+                HotkeySectionView(
+                    bindings: mode.hotkeyBindings,
+                    onEdit: { editBinding(mode, $0) },
+                    onDelete: { deleteBinding(mode.id, $0) },
+                    onAdd: { addBinding(mode) }
+                )
+            }
+            .padding(.bottom, 8)
         } else if mode.id == ProcessingMode.formalWritingId {
             formalWritingModeDetail(mode)
         } else {
-            ModeDetailInner(mode: mode) { updated in
-                if let idx = modes.firstIndex(where: { $0.id == updated.id }) {
-                    modes[idx] = updated
-                    persistModes()
-                }
-            }
+            ModeDetailInner(
+                mode: mode,
+                onSave: { updated in
+                    if let idx = modes.firstIndex(where: { $0.id == updated.id }) {
+                        modes[idx] = updated
+                        persistModes()
+                    }
+                },
+                onDraftChange: { draft, dirty in
+                    draftMode = draft
+                    draftDirty = dirty
+                },
+                onEditBinding: { editBinding(mode, $0) },
+                onDeleteBinding: { deleteBinding(mode.id, $0) },
+                onAddBinding: { addBinding(mode) }
+            )
+        }
+    }
+
+    // MARK: - Hotkey binding actions (shared by all detail variants)
+
+    private func editBinding(_ mode: ProcessingMode, _ binding: HotkeyBinding) {
+        recordingTarget = RecordingTarget(
+            modeId: mode.id,
+            modeName: mode.name,
+            editingBindingId: binding.id,
+            initialKeyCode: binding.keyCode,
+            initialModifiers: binding.modifiers,
+            initialStyle: binding.style
+        )
+    }
+
+    private func addBinding(_ mode: ProcessingMode) {
+        recordingTarget = RecordingTarget(
+            modeId: mode.id,
+            modeName: mode.name,
+            editingBindingId: nil,
+            initialKeyCode: nil,
+            initialModifiers: nil,
+            initialStyle: ProcessingMode.defaultHotkeyStyle
+        )
+    }
+
+    private func deleteBinding(_ modeId: UUID, _ binding: HotkeyBinding) {
+        if let idx = modes.firstIndex(where: { $0.id == modeId }) {
+            modes[idx].hotkeyBindings.removeAll { $0.id == binding.id }
+            persistModes()
         }
     }
 
@@ -346,15 +454,14 @@ struct ModesSettingsTab: View {
 
             if mode.id == ProcessingMode.macActionId {
                 macActionDescription
+            } else if mode.id == ProcessingMode.selectionAskId {
+                selectionAskDescription
             } else {
-                Text(L("直接使用语音识别 API，识别完成后不做处理、直接粘贴。适合非正式场合、无需纠正口头表达的场景，输入流程更丝滑。",
-                         "Uses the ASR API directly, pastes raw output without post-processing. Best for informal contexts where oral expressions don't need correction."))
+                Text(mode.description)
                     .font(.system(size: 12))
                     .foregroundStyle(TF.settingsTextSecondary)
                     .lineSpacing(3)
             }
-
-            Spacer()
         }
     }
 
@@ -362,7 +469,37 @@ struct ModesSettingsTab: View {
         switch mode.id {
         case ProcessingMode.formalWritingId: return "wand.and.stars"
         case ProcessingMode.macActionId: return "command.circle.fill"
+        case ProcessingMode.selectionAskId: return "sparkle.magnifyingglass"
         default: return "bolt.fill"
+        }
+    }
+
+    private var selectionAskDescription: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L(
+                "选中文本后按下热键开始录音，说出你的问题或指令，再按热键停止。Type4Me 会结合选中文本流式生成 Markdown 回答，不粘贴、不修改剪贴板。",
+                "Select text, press the hotkey to record your question or instruction, then press it again to stop. Type4Me streams a Markdown answer using the selected text without pasting or changing the clipboard."
+            ))
+                .font(.system(size: 12))
+                .foregroundStyle(TF.settingsTextSecondary)
+                .lineSpacing(3)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L("使用方式", "How it works"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(TF.settingsText)
+                ForEach(selectionAskExamples, id: \.self) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("•")
+                            .font(.system(size: 11))
+                            .foregroundStyle(TF.settingsTextTertiary)
+                        Text(item)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(TF.settingsText)
+                            .lineSpacing(2)
+                    }
+                }
+            }
         }
     }
 
@@ -413,6 +550,14 @@ struct ModesSettingsTab: View {
 
     private var macActionExamples: [(String, String)] {
         [
+            (L("打开热词", "Open hotwords"),
+             L("进入 ASR 热词管理", "Open ASR hotword management")),
+            (L("打开片段替换", "Open snippets"),
+             L("进入片段替换管理", "Open snippet management")),
+            (L("替换这个单词", "Replace this word"),
+             L("用选中文本预填片段触发词", "Prefill a snippet trigger from selected text")),
+            (L("添加热词", "Add hotword"),
+             L("将选中文本加入 ASR 热词", "Add selected text to ASR hotwords")),
             (L("打开 Safari", "Open Safari"),
              L("启动应用", "Launch an app")),
             (L("音量调到 30", "Set volume to 30"),
@@ -446,18 +591,31 @@ struct ModesSettingsTab: View {
         ]
     }
 
-    @AppStorage("tf_shortTextExemption") private var shortTextExemption = "0"
+    private var selectionAskExamples: [String] {
+        [
+            L("选中英文、系统提示、代码片段或术语。", "Select English text, system messages, code snippets, or terms."),
+            L("按下「随便问」热键，说出“翻译一下”“这是什么意思”“帮我总结”等问题。", "Press the Ask Anything hotkey and say a question such as translate this, what does this mean, or summarize it."),
+            L("再次按热键停止，在弹框中阅读流式 Markdown 回答。", "Press the hotkey again to stop and read the streamed Markdown answer in the popup."),
+        ]
+    }
 
     private func formalWritingModeDetail(_ mode: ProcessingMode) -> some View {
         FormalWritingDetailInner(
             mode: mode,
-            shortTextExemption: $shortTextExemption
-        ) { updated in
-            if let idx = modes.firstIndex(where: { $0.id == updated.id }) {
-                modes[idx] = updated
-                persistModes()
-            }
-        }
+            onSave: { updated in
+                if let idx = modes.firstIndex(where: { $0.id == updated.id }) {
+                    modes[idx] = updated
+                    persistModes()
+                }
+            },
+            onDraftChange: { draft, dirty in
+                draftMode = draft
+                draftDirty = dirty
+            },
+            onEditBinding: { editBinding(mode, $0) },
+            onDeleteBinding: { deleteBinding(mode.id, $0) },
+            onAddBinding: { addBinding(mode) }
+        )
     }
 
     // MARK: - Helpers
@@ -479,7 +637,12 @@ struct ModesSettingsTab: View {
     }
 
     private func persistModes() {
-        try? ModeStorage().save(modes)
+        do {
+            try ModeStorage().save(modes)
+        } catch {
+            NSLog("[Type4Me] Failed to persist mode order/settings: %@", error.localizedDescription)
+            DebugFileLogger.log("failed to persist mode order/settings: \(error)")
+        }
         appState.availableModes = modes
         NotificationCenter.default.post(name: .modesDidChange, object: nil)
         if let updatedCurrentMode = modes.first(where: { $0.id == appState.currentMode.id }) {
@@ -509,6 +672,7 @@ private struct ModeDropDelegate: DropDelegate {
 
     func performDrop(info: DropInfo) -> Bool {
         draggingId = nil
+        onReorder()
         return true
     }
 
@@ -519,14 +683,197 @@ private struct ModeDropDelegate: DropDelegate {
               let toIndex = modes.firstIndex(where: { $0.id == targetId })
         else { return }
 
-        withAnimation(.easeInOut(duration: 0.2)) {
-            modes.move(fromOffsets: IndexSet(integer: fromIndex), toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex)
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) {
+            modes.move(
+                fromOffsets: IndexSet(integer: fromIndex),
+                toOffset: toIndex > fromIndex ? toIndex + 1 : toIndex
+            )
         }
+        // `dropEntered` is the point where the visible order actually changes.
+        // Persist here instead of relying only on `performDrop`: AppKit may end a
+        // drag over row gaps or scroll-view edges without calling the row's
+        // `performDrop`, which previously left a reordered UI backed by stale disk data.
         onReorder()
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         DropProposal(operation: .move)
+    }
+}
+
+// MARK: - Hotkey Section (detail pane)
+
+/// A hotkey list styled to match the other detail-form fields: a small section
+/// label plus a stack of low-chrome rows, each with a subtle color-coded style
+/// glyph and hover-revealed edit/delete actions consistent with other pages.
+private struct HotkeySectionView: View {
+    let bindings: [HotkeyBinding]
+    let onEdit: (HotkeyBinding) -> Void
+    let onDelete: (HotkeyBinding) -> Void
+    let onAdd: () -> Void
+
+    @State private var hoveredId: UUID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text(L("快捷键", "Hotkeys"))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                Text(L("键盘、鼠标或耳机按键", "Keyboard, mouse or headphone keys"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary.opacity(0.7))
+                Spacer(minLength: 0)
+            }
+
+            FlowLayout(spacing: 6, lineSpacing: 6) {
+                ForEach(bindings) { binding in
+                    capsule(binding)
+                }
+                addCapsule
+            }
+        }
+    }
+
+    /// A read-style capsule matching the Home dashboard: color-coded style glyph
+    /// + key, tap to edit, hover to reveal a delete affordance.
+    private func capsule(_ binding: HotkeyBinding) -> some View {
+        let accent = styleColor(binding.style)
+        let hovered = hoveredId == binding.id
+        return HStack(spacing: 5) {
+            Image(systemName: styleIcon(binding.style))
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(accent)
+
+            Text(HotkeyRecorderView.keyDisplayName(
+                keyCode: binding.keyCode, modifiers: binding.modifiers))
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(TF.settingsText)
+
+            if hovered {
+                Button {
+                    onDelete(binding)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(TF.settingsAccentRed)
+                        .frame(width: 15, height: 15)
+                        .background(Circle().fill(Color.white.opacity(0.85)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(L("删除", "Delete"))
+            }
+        }
+        .padding(.leading, 9)
+        .padding(.trailing, hovered ? 4 : 9)
+        .frame(height: 28)
+        .background(Capsule().fill(accent.opacity(0.12)))
+        .overlay(Capsule().stroke(accent.opacity(0.35), lineWidth: 1))
+        .contentShape(Capsule())
+        .onTapGesture { onEdit(binding) }
+        .help(L("点击编辑 · \(styleLabel(binding.style))", "Click to edit · \(styleLabel(binding.style))"))
+        .onHover { h in
+            withAnimation(.easeOut(duration: 0.12)) {
+                hoveredId = h ? binding.id : nil
+            }
+        }
+    }
+
+    private var addCapsule: some View {
+        Button(action: onAdd) {
+            HStack(spacing: 4) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(L("添加快捷键", "Add hotkey"))
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(TF.settingsTextSecondary)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(
+                Capsule().strokeBorder(
+                    TF.settingsTextTertiary.opacity(0.5),
+                    style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                )
+            )
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func styleIcon(_ style: ProcessingMode.HotkeyStyle) -> String {
+        switch style {
+        case .hold: return "hand.tap.fill"
+        case .toggle: return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    private func styleColor(_ style: ProcessingMode.HotkeyStyle) -> Color {
+        switch style {
+        case .hold: return Color(red: 0.20, green: 0.60, blue: 0.86)
+        case .toggle: return TF.settingsAccentGreen
+        }
+    }
+
+    private func styleLabel(_ style: ProcessingMode.HotkeyStyle) -> String {
+        switch style {
+        case .hold: return L("按住", "Hold")
+        case .toggle: return L("切换", "Toggle")
+        }
+    }
+}
+
+// MARK: - Flow Layout (wrapping HStack)
+
+/// A simple wrapping layout: places subviews left-to-right, moving to the next
+/// line when the current one runs out of width.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            totalWidth = max(totalWidth, x - spacing)
+        }
+        let width = maxWidth == .infinity ? totalWidth : min(totalWidth, maxWidth)
+        return CGSize(width: width, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+            sub.place(
+                at: CGPoint(x: x, y: y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(size)
+            )
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 
@@ -536,6 +883,7 @@ private struct HotkeyRecordingSheet: View {
 
     let target: RecordingTarget
     let checkConflict: (Int?, UInt64?) -> ProcessingMode?
+    let checkDuplicateInMode: (Int?, UInt64?) -> Bool
     let checkPrefixConflict: (Int?, UInt64?) -> ProcessingMode?
     let onConfirm: (Int, UInt64?, ProcessingMode.HotkeyStyle) -> Void
     let onCancel: () -> Void
@@ -543,7 +891,7 @@ private struct HotkeyRecordingSheet: View {
     @State private var capturedKeyCode: Int?
     @State private var capturedModifiers: UInt64?
     @State private var hotkeyStyle: ProcessingMode.HotkeyStyle
-    @State private var isListening = true
+    @State private var isListening: Bool
     @State private var eventMonitor: Any?
     @State private var pendingModifierCode: Int?
     @State private var pendingModifierModifiers: UInt64 = 0
@@ -552,30 +900,44 @@ private struct HotkeyRecordingSheet: View {
     init(
         target: RecordingTarget,
         checkConflict: @escaping (Int?, UInt64?) -> ProcessingMode?,
+        checkDuplicateInMode: @escaping (Int?, UInt64?) -> Bool,
         checkPrefixConflict: @escaping (Int?, UInt64?) -> ProcessingMode?,
         onConfirm: @escaping (Int, UInt64?, ProcessingMode.HotkeyStyle) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.target = target
         self.checkConflict = checkConflict
+        self.checkDuplicateInMode = checkDuplicateInMode
         self.checkPrefixConflict = checkPrefixConflict
         self.onConfirm = onConfirm
         self.onCancel = onCancel
-        _hotkeyStyle = State(initialValue: target.currentStyle)
+        _hotkeyStyle = State(initialValue: target.initialStyle)
+        // When editing an existing binding, prefill it and skip the listening state.
+        _capturedKeyCode = State(initialValue: target.initialKeyCode)
+        _capturedModifiers = State(initialValue: target.initialModifiers)
+        _isListening = State(initialValue: target.initialKeyCode == nil)
     }
+
+    private var isEditing: Bool { target.editingBindingId != nil }
 
     private var conflict: ProcessingMode? {
         checkConflict(capturedKeyCode, capturedModifiers)
     }
 
+    private var isDuplicateInMode: Bool {
+        checkDuplicateInMode(capturedKeyCode, capturedModifiers)
+    }
+
     private var prefixConflict: ProcessingMode? {
-        guard conflict == nil else { return nil }
+        guard conflict == nil, !isDuplicateInMode else { return nil }
         return checkPrefixConflict(capturedKeyCode, capturedModifiers)
     }
 
     var body: some View {
         VStack(spacing: 20) {
-            Text(L("为「\(target.name)」录制快捷键", "Record hotkey for \"\(target.name)\""))
+            Text(isEditing
+                ? L("为「\(target.modeName)」编辑快捷键", "Edit hotkey for \"\(target.modeName)\"")
+                : L("为「\(target.modeName)」添加快捷键", "Add hotkey for \"\(target.modeName)\""))
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(TF.settingsText)
 
@@ -611,6 +973,16 @@ private struct HotkeyRecordingSheet: View {
                     )
             )
 
+            if isDuplicateInMode {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                    Text(L("此快捷键在本模式中已存在", "This hotkey already exists in this mode"))
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(TF.settingsAccentAmber)
+            }
+
             if let conflict {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -627,8 +999,8 @@ private struct HotkeyRecordingSheet: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
                     Text(L(
-                        "与「\(prefixConflict.name)」存在前缀冲突；「\(target.name)」触发将改为抬起按键时触发，速度稍慢、手感变差",
-                        "Prefix conflict with \"\(prefixConflict.name)\". \"\(target.name)\" will trigger when the key is released, which is slightly slower and less responsive"
+                        "与「\(prefixConflict.name)」存在前缀冲突；「\(target.modeName)」触发将改为抬起按键时触发，速度稍慢、手感变差",
+                        "Prefix conflict with \"\(prefixConflict.name)\". \"\(target.modeName)\" will trigger when the key is released, which is slightly slower and less responsive"
                     ))
                     .font(.system(size: 11))
                 }
@@ -714,7 +1086,7 @@ private struct HotkeyRecordingSheet: View {
                 .foregroundStyle(TF.settingsTextSecondary)
 
                 Button(prefixConflict == nil ? L("确认", "Confirm") : L("仍要设置", "Set Anyway")) {
-                    guard let code = capturedKeyCode else { return }
+                    guard let code = capturedKeyCode, !isDuplicateInMode else { return }
                     cleanup()
                     onConfirm(code, capturedModifiers, hotkeyStyle)
                 }
@@ -724,15 +1096,18 @@ private struct HotkeyRecordingSheet: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 6).fill(TF.settingsNavActive))
-                .disabled(capturedKeyCode == nil)
-                .opacity(capturedKeyCode == nil ? 0.5 : 1)
+                .disabled(capturedKeyCode == nil || isDuplicateInMode)
+                .opacity((capturedKeyCode == nil || isDuplicateInMode) ? 0.5 : 1)
             }
         }
         .padding(28)
         .frame(width: 360)
         .onAppear {
             NotificationCenter.default.post(name: .hotkeyRecordingDidStart, object: nil)
-            startListening()
+            // When editing an existing binding, show it and wait; the user taps Re-record to change it.
+            if target.initialKeyCode == nil {
+                startListening()
+            }
         }
         .onDisappear {
             cleanup()
@@ -897,9 +1272,14 @@ private struct ModeDetailInner: View {
 
     let mode: ProcessingMode
     let onSave: (ProcessingMode) -> Void
+    let onDraftChange: (ProcessingMode, Bool) -> Void
+    let onEditBinding: (HotkeyBinding) -> Void
+    let onDeleteBinding: (HotkeyBinding) -> Void
+    let onAddBinding: () -> Void
 
-    @AppStorage("tf_shortTextExemption") private var shortTextExemption = "0"
+    @State private var shortTextExemption = "0"
     @State private var name = ""
+    @State private var modeDescription = ""
     @State private var processingLabel = ""
     @State private var prompt = ""
     @State private var saveStatus: SaveStatus = .clean
@@ -909,7 +1289,11 @@ private struct ModeDetailInner: View {
     }
 
     private var isDirty: Bool {
-        name != mode.name || processingLabel != mode.processingLabel || prompt != mode.prompt
+        name != mode.name
+            || modeDescription != mode.description
+            || processingLabel != mode.processingLabel
+            || prompt != mode.prompt
+            || (Int(shortTextExemption) ?? 0) != mode.shortTextExemption
     }
 
     private let exemptionOptions: [(value: String, label: String)] = [
@@ -985,10 +1369,13 @@ private struct ModeDetailInner: View {
                 Button(L("保存", "Save")) {
                     var updated = mode
                     updated.name = name
+                    updated.description = modeDescription
                     updated.processingLabel = processingLabel
                     updated.prompt = prompt
+                    updated.shortTextExemption = Int(shortTextExemption) ?? 0
                     onSave(updated)
                     withAnimation { saveStatus = .saved }
+                    onDraftChange(updated, false)
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .semibold))
@@ -1000,12 +1387,8 @@ private struct ModeDetailInner: View {
                 ))
                 .disabled(!isDirty)
             }
-
-            // Name
             VStack(alignment: .leading, spacing: 4) {
-                Text(L("名称", "Name"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(TF.settingsTextTertiary)
+                fieldLabel(L("名称", "Name"))
                 TextField(L("模式名称", "Mode name"), text: $name)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
@@ -1014,21 +1397,44 @@ private struct ModeDetailInner: View {
                     .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
             }
 
-            // Processing label
+            // Description
             VStack(alignment: .leading, spacing: 4) {
-                Text(L("处理标签", "Processing label"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(TF.settingsTextTertiary)
-                TextField(L("处理中", "Processing"), text: $processingLabel)
+                fieldLabel(L("描述", "Description"),
+                           L("显示在首页，不发送给模型", "Shown on Home, not sent to the model"))
+                TextField(L("简要说明这个模式的用途", "Briefly explain what this mode does"), text: $modeDescription)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .padding(.horizontal, 12)
                     .frame(height: 36)
                     .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
-                Text(L("处理进行时浮窗显示的文案，如「翻译中」「修正中」", "Text shown in the floating bar during processing, e.g. \"Translating\" \"Correcting\""))
-                    .font(.system(size: 10))
-                    .foregroundStyle(TF.settingsTextTertiary)
             }
+
+            // Processing label + short text skip (compact, side by side)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    fieldLabel(L("处理标签", "Processing label"),
+                               L("浮窗文案，如「翻译中」", "Bar text, e.g. \"Translating\""))
+                    TextField(L("处理中", "Processing"), text: $processingLabel)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .padding(.horizontal, 12)
+                        .frame(height: 36)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    fieldLabel(L("短文本跳过", "Short text skip"),
+                               L("少于字数跳过润色", "Skip polishing under N chars"))
+                    exemptionDropdown
+                }
+                .frame(width: 176)
+            }
+            HotkeySectionView(
+                bindings: mode.hotkeyBindings,
+                onEdit: onEditBinding,
+                onDelete: onDeleteBinding,
+                onAdd: onAddBinding
+            )
 
             // Prompt
             VStack(alignment: .leading, spacing: 4) {
@@ -1052,16 +1458,32 @@ private struct ModeDetailInner: View {
         }
         .onAppear { syncFields() }
         .onChange(of: mode.id) { syncFields() }
-        .onChange(of: name) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
-        .onChange(of: processingLabel) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
-        .onChange(of: prompt) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
+        .onChange(of: name) { _, _ in reportDraft() }
+        .onChange(of: modeDescription) { _, _ in reportDraft() }
+        .onChange(of: processingLabel) { _, _ in reportDraft() }
+        .onChange(of: prompt) { _, _ in reportDraft() }
+        .onChange(of: shortTextExemption) { _, _ in reportDraft() }
+    }
+
+    private func reportDraft() {
+        if saveStatus == .saved { saveStatus = .dirty }
+        var updated = mode
+        updated.name = name
+        updated.description = modeDescription
+        updated.processingLabel = processingLabel
+        updated.prompt = prompt
+        updated.shortTextExemption = Int(shortTextExemption) ?? 0
+        onDraftChange(updated, isDirty)
     }
 
     private func syncFields() {
         name = mode.name
+        modeDescription = mode.description
         processingLabel = mode.processingLabel
         prompt = mode.prompt
+        shortTextExemption = String(mode.shortTextExemption)
         saveStatus = .clean
+        onDraftChange(mode, false)
     }
 }
 
@@ -1070,10 +1492,15 @@ private struct ModeDetailInner: View {
 private struct FormalWritingDetailInner: View {
 
     let mode: ProcessingMode
-    @Binding var shortTextExemption: String
+    @State private var shortTextExemption = "0"
     let onSave: (ProcessingMode) -> Void
+    let onDraftChange: (ProcessingMode, Bool) -> Void
+    let onEditBinding: (HotkeyBinding) -> Void
+    let onDeleteBinding: (HotkeyBinding) -> Void
+    let onAddBinding: () -> Void
 
     @State private var name = ""
+    @State private var modeDescription = ""
     @State private var processingLabel = ""
     @State private var prompt = ""
     @State private var saveStatus: SaveStatus = .clean
@@ -1084,7 +1511,11 @@ private struct FormalWritingDetailInner: View {
     }
 
     private var isDirty: Bool {
-        name != mode.name || processingLabel != mode.processingLabel || prompt != mode.prompt
+        name != mode.name
+            || modeDescription != mode.description
+            || processingLabel != mode.processingLabel
+            || prompt != mode.prompt
+            || (Int(shortTextExemption) ?? 0) != mode.shortTextExemption
     }
 
     private var isLatestPrompt: Bool {
@@ -1175,11 +1606,14 @@ private struct FormalWritingDetailInner: View {
                 Button(L("保存", "Save")) {
                     var updated = mode
                     updated.name = name
+                    updated.description = modeDescription
                     updated.processingLabel = processingLabel
                     updated.prompt = prompt
+                    updated.shortTextExemption = Int(shortTextExemption) ?? 0
                     onSave(updated)
                     promptBeforeUpdate = nil
                     withAnimation { saveStatus = .saved }
+                    onDraftChange(updated, false)
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .semibold))
@@ -1194,9 +1628,7 @@ private struct FormalWritingDetailInner: View {
 
             // Name
             VStack(alignment: .leading, spacing: 4) {
-                Text(L("名称", "Name"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(TF.settingsTextTertiary)
+                fieldLabel(L("名称", "Name"))
                 TextField(L("模式名称", "Mode name"), text: $name)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
@@ -1205,25 +1637,46 @@ private struct FormalWritingDetailInner: View {
                     .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
             }
 
-            // Processing label
+            // Description
             VStack(alignment: .leading, spacing: 4) {
-                Text(L("处理标签", "Processing label"))
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(TF.settingsTextTertiary)
-                TextField(L("处理中", "Processing"), text: $processingLabel)
+                fieldLabel(L("描述", "Description"),
+                           L("显示在首页，不发送给模型", "Shown on Home, not sent to the model"))
+                TextField(L("简要说明这个模式的用途", "Briefly explain what this mode does"), text: $modeDescription)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .padding(.horizontal, 12)
                     .frame(height: 36)
                     .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
-                Text(L("处理进行时浮窗显示的文案，如「翻译中」「修正中」",
-                         "Text shown in the floating bar during processing"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(TF.settingsTextTertiary)
             }
 
-            // Short text exemption
-            shortTextExemptionSection
+            // Processing label + short text skip (compact, side by side)
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    fieldLabel(L("处理标签", "Processing label"),
+                               L("浮窗文案，如「翻译中」", "Bar text, e.g. \"Translating\""))
+                    TextField(L("处理中", "Processing"), text: $processingLabel)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .padding(.horizontal, 12)
+                        .frame(height: 36)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    fieldLabel(L("短文本跳过", "Short text skip"),
+                               L("少于字数跳过润色", "Skip polishing under N chars"))
+                    exemptionDropdown
+                }
+                .frame(width: 176)
+            }
+
+            // Hotkeys
+            HotkeySectionView(
+                bindings: mode.hotkeyBindings,
+                onEdit: onEditBinding,
+                onDelete: onDeleteBinding,
+                onAdd: onAddBinding
+            )
 
             // Prompt 模板
             VStack(alignment: .leading, spacing: 4) {
@@ -1247,9 +1700,22 @@ private struct FormalWritingDetailInner: View {
         }
         .onAppear { syncFields() }
         .onChange(of: mode.id) { syncFields() }
-        .onChange(of: name) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
-        .onChange(of: processingLabel) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
-        .onChange(of: prompt) { _, _ in if saveStatus == .saved { saveStatus = .dirty } }
+        .onChange(of: name) { _, _ in reportDraft() }
+        .onChange(of: modeDescription) { _, _ in reportDraft() }
+        .onChange(of: processingLabel) { _, _ in reportDraft() }
+        .onChange(of: prompt) { _, _ in reportDraft() }
+        .onChange(of: shortTextExemption) { _, _ in reportDraft() }
+    }
+
+    private func reportDraft() {
+        if saveStatus == .saved { saveStatus = .dirty }
+        var updated = mode
+        updated.name = name
+        updated.description = modeDescription
+        updated.processingLabel = processingLabel
+        updated.prompt = prompt
+        updated.shortTextExemption = Int(shortTextExemption) ?? 0
+        onDraftChange(updated, isDirty)
     }
 
     private var exemptionDropdown: some View {
@@ -1285,9 +1751,12 @@ private struct FormalWritingDetailInner: View {
 
     private func syncFields() {
         name = mode.name
+        modeDescription = mode.description
         processingLabel = mode.processingLabel
         prompt = mode.prompt
+        shortTextExemption = String(mode.shortTextExemption)
         saveStatus = .clean
+        onDraftChange(mode, false)
     }
 }
 

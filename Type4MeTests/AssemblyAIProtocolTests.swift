@@ -190,15 +190,15 @@ final class AssemblyAIProtocolTests: XCTestCase {
 
         XCTAssertEqual(
             unauthorized.errorDescription,
-            "AssemblyAI unauthorized connection: Missing Authorization header"
+            L("AssemblyAI 鉴权失败：Missing Authorization header", "AssemblyAI unauthorized connection: Missing Authorization header")
         )
         XCTAssertEqual(
             cancelled.errorDescription,
-            "AssemblyAI session cancelled: An error occurred"
+            L("AssemblyAI 会话被取消：An error occurred", "AssemblyAI session cancelled: An error occurred")
         )
         XCTAssertEqual(
             generic.errorDescription,
-            "AssemblyAI session closed (3007): Input duration violation"
+            L("AssemblyAI 会话已关闭（3007）：Input duration violation", "AssemblyAI session closed (3007): Input duration violation")
         )
     }
 

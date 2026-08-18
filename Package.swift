@@ -9,15 +9,22 @@ let hasSherpaFramework = FileManager.default.fileExists(
 let hasCloudSubscription = FileManager.default.fileExists(
     atPath: packageDir + "/Type4Me/CloudSubscription/marker"
 )
+let isDevBuild = ProcessInfo.processInfo.environment["TYPE4ME_DEV_BUILD"] == "1"
 
 var swiftDefines: [SwiftSetting] = [.swiftLanguageMode(.v5)]
 if hasSherpaFramework { swiftDefines.append(.define("HAS_SHERPA_ONNX")) }
 if hasCloudSubscription { swiftDefines.append(.define("HAS_CLOUD_SUBSCRIPTION")) }
+if isDevBuild { swiftDefines.append(.define("TYPE4ME_DEV_BUILD")) }
 
 var excludes = ["Resources"]
 if !hasCloudSubscription { excludes.append("CloudSubscription") }
 
 var targets: [Target] = [
+    .target(
+        name: "Type4MeUI",
+        path: "Type4MeUI",
+        swiftSettings: swiftDefines
+    ),
     .executableTarget(
         name: "Type4Me",
         dependencies: hasSherpaFramework ? ["SherpaOnnxLib"] : [],
@@ -50,6 +57,10 @@ if hasSherpaFramework {
 let package = Package(
     name: "Type4Me",
     platforms: [.macOS(.v14)],
+    products: [
+        .executable(name: "Type4Me", targets: ["Type4Me"]),
+        .library(name: "Type4MeUI", targets: ["Type4MeUI"]),
+    ],
     dependencies: [],
     targets: targets
 )

@@ -39,12 +39,12 @@
 ## 界面预览
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/80b7e36d-92a4-40fb-84d6-d0b9da49bbcc" width="400" />
-  <img src="https://github.com/user-attachments/assets/480df251-cd5f-462f-a574-ad0f5abd328a" width="400" />
+  <img src="docs/images/screenshot-1.webp" width="400" />
+  <img src="docs/images/screenshot-2.webp" width="400" />
 </p>
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/84a531be-b6d1-44e6-8dff-6763e9298ac1" width="400" />
-  <img src="https://github.com/user-attachments/assets/ab2eecbb-62f1-4895-bd7c-49c138ef6da0" width="400" />
+  <img src="docs/images/screenshot-3.webp" width="400" />
+  <img src="docs/images/screenshot-4.webp" width="400" />
 </p>
 
 
@@ -342,30 +342,79 @@ bash scripts/build-sherpa.sh
 # 3. (Optional) Setup Qwen3-ASR server (needs python3.12, Apple Silicon only)
 cd qwen3-asr-server && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt && cd ..
 
-# 4. Deploy (builds, bundles .app, signs, installs to /Applications, launches)
-bash scripts/deploy.sh
+# 4. Dev deploy (builds, signs, installs /Applications/Type4Me Dev.app, launches)
+# Complete the one-time Xcode signing setup below before the first run.
+bash scripts/dev-run.sh
 
 # Subsequent updates
-git pull && bash scripts/deploy.sh
+git pull && bash scripts/dev-run.sh
 ```
 
 Steps 2-3 are optional. Skipping them disables local ASR, but cloud ASR works fine.
 
 ### Code signing & permissions
 
-`deploy.sh` handles code signing automatically to **preserve macOS permissions across rebuilds**:
+Stable development signing is required to preserve Keychain, Accessibility, and
+Microphone permissions across rebuilds. Complete this one-time setup before the
+first Dev deploy:
 
-- **First deploy** auto-creates a self-signed certificate ("Type4Me Local", valid 10 years) if no signing identity exists. This may trigger a **Keychain password prompt** that requires human interaction.
-- **Subsequent deploys** reuse the same certificate. Accessibility/Microphone permissions persist, no re-grant needed.
-- After first launch, the user must grant **Accessibility permission** once (System Settings > Privacy & Security > Accessibility > enable Type4Me).
-- To override signing identity: `CODESIGN_IDENTITY="Your Cert" bash scripts/deploy.sh`
-- Fallback to ad-hoc signing: `CODESIGN_IDENTITY="-" bash scripts/deploy.sh` (Accessibility permission will reset each build)
+1. Install and open the full Xcode application. Xcode Command Line Tools alone
+   cannot configure the signing account.
+2. Open **Xcode > Settings > Accounts**, click **+**, choose **Apple Account**,
+   and sign in. A paid Apple Developer membership is not required; Xcode can use
+   the account's **Personal Team** for local development signing.
+3. Select the account and confirm that a Team is listed. You may create the
+   certificate manually through **Manage Certificates... > + > Apple
+   Development**, or let the repository setup script request it from Xcode:
+
+   ```bash
+   bash scripts/setup-dev-signing.sh
+   ```
+
+4. Confirm that macOS Keychain contains a valid signing identity:
+
+   ```bash
+   security find-identity -v -p codesigning
+   ```
+
+   The output must include an `Apple Development: ...` identity. If multiple
+   Xcode teams are configured, select one explicitly:
+
+   ```bash
+   DEVELOPMENT_TEAM=<team-id> bash scripts/setup-dev-signing.sh
+   ```
+
+5. Build and install the development app:
+
+   ```bash
+   bash scripts/dev-run.sh
+   ```
+
+`dev-run.sh` uses `/Applications/Type4Me Dev.app` and the dedicated
+`com.type4me.dev` bundle ID. On the first signed deploy it may ask once for the
+Login Keychain password to migrate existing Type4Me credential access from
+changing binary hashes to the stable Apple Team ID. The password is held in
+memory only and is never stored.
+
+After first launch, grant Microphone and Accessibility access to **Type4Me Dev**
+once in **System Settings > Privacy & Security**. Subsequent Dev builds reuse the
+same Apple identity, Team ID, bundle ID, and install path, so these permissions
+remain valid.
+
+> Here, "development/self signing" means an Xcode-managed **Apple Development**
+> certificate associated with the developer's Apple Account. It is not ad-hoc
+> signing (`-`). Dev deploys intentionally fail when no stable identity is
+> available. `ALLOW_ADHOC_SIGNING=1 bash scripts/dev-run.sh` is an emergency-only
+> fallback and may cause macOS to request permissions again after every rebuild.
+
+For non-Dev packaging, a signing identity can be supplied explicitly with
+`CODESIGN_IDENTITY="Your Cert" bash scripts/deploy.sh`.
 
 ### Key architecture points
 
 - **Swift Package Manager** project, no `.xcodeproj` needed
 - **Local ASR**: dual-engine design. SenseVoice (streaming partial results) + Qwen3-ASR (final calibration via MLX/Metal). Both run as Python WebSocket servers managed by `SenseVoiceServerManager`
-- **Cloud ASR**: 7 providers implemented (Volcano, OpenAI, Deepgram, AssemblyAI, Soniox, Bailian, Baidu)
+- **Cloud ASR**: 9 providers implemented (Volcano, StepFun batch, OpenAI, Deepgram, AssemblyAI, ElevenLabs, Soniox, Bailian, Baidu)
 - **Credentials**: stored at `~/Library/Application Support/Type4Me/credentials.json` (mode 0600), never in code or environment variables. GUI apps cannot read shell env vars from `~/.zshrc`
 - **ASR provider architecture**: plugin-based. To add a new provider: implement `ASRProviderConfig` + `SpeechRecognizer` protocol, register in `ASRProviderRegistry.all`. See `CLAUDE.md` for details
 - **Audio format**: 16kHz mono PCM16-LE, 200ms chunks (6400 bytes)
@@ -379,11 +428,11 @@ Steps 2-3 are optional. Skipping them disables local ASR, but cloud ASR works fi
 
 ## Star History
 
-<a href="https://star-history.com/#joewongjc/type4me&Date">
+<a href="https://star-history.dera.page/#joewongjc/type4me&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=joewongjc/type4me&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=joewongjc/type4me&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=joewongjc/type4me&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=joewongjc%2Ftype4me&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=joewongjc%2Ftype4me&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=joewongjc%2Ftype4me&type=date&legend=top-left" />
  </picture>
 </a>
 
