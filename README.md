@@ -1,5 +1,3 @@
-
-
 <p align="center">
   <a href="#中文">中文</a> | <a href="#english">English</a>
 </p>
@@ -16,22 +14,23 @@
 
 
 - **语音识别**：内置本地识别引擎、媲美云端引擎准确率；支持多家云端引擎厂商；支持流式识别、边说边出字，说完无需等待、快速输入；
-- **文本处理**：内置润色、Prompt优化、翻译功能，可自定义添加任意处理模版（比如改人设、改语气、小语种翻译等等）；
+- **8 种默认模式**：内置快速模式、智能感知、翻译、随便问、Mac 操作、语音润色、Prompt 优化与代办模式，可自定义添加任意处理模版；
 - **Intelli Sense（可选）**：根据当前 App、输入控件和有限上下文安全润色文字；还可按需学习稳定的纠错、表达和列表结构偏好；
 - **Ask Anything**：围绕选中文本直接提问，并把连续追问保存为会话，随时搜索、恢复或继续追问；
 - **统一翻译**：自动识别输入语言，支持 18 种目标语言翻译与输出校验重试；
+- **Mac 操作**：用语音直接执行常用 macOS 系统操作与 Type4Me 功能控制；
 - **语音改口**：刚打出的文字有误或想换个说法？按下快捷键直接语音说出修改指令，精准替换、局部微调、支持一键撤销；
 - **多快捷键**：每个模式可绑定多个全局快捷键，支持按住说话与点按开关；
 - **模型接入**：支持主流厂商API接入；文本处理支持使用Ollama接本地模型；
 - **词汇管理**：支持热词、映射词，2种模式。热词用于校正语音识别引擎，映射词可作为兜底或个性化场景使用（如 Web coding -> Vibe Coding, "我的邮箱地址" -> xxx@gmail.com）；
 - **历史记录**：存储所有历史识别记录，包括原始文本和处理后文本，支持导出CSV；
-- **配套Skill**：真正做到100%准确率，打造只属于你的输入法，[点这里安装Skill](https://github.com/joewongjc/type4me-vocab-skill)后跟你的agent说"Qwen3.5 不要识别成 Queen 3.5"，他就能自动帮你管理热词和映射词，同类错误不再犯 
+- **配套Skill**：真正做到100%准确率，打造只属于你的输入法，[点这里安装Skill](https://github.com/joewongjc/type4me-vocab-skill)后跟你的agent说"Qwen3.5 不要识别成 Queen 3.5"，他就能自动帮你管理热词和映射词，同类错误不再犯
 
 ## 立即体验
 
 **方式一：直接下载DMG（推荐）**
 
-两个版本，共享配置文件，可随时替换安装：  
+两个版本，共享配置文件，可随时替换安装：
 
 | 版本                                                         | 说明                                                         | 安装包大小   |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | ------ |
@@ -78,67 +77,398 @@
 
 ## 详细功能介绍
 
-### 文本处理与模式：需配置 API Key，效果受模型影响，可自行调整/添加 Prompt
+### 不只是语音转文字：8 种默认输入模式
 
-每个模式可以绑定独立的全局快捷键，支持「按住说话」和「按一下开始/再按停止」两种方式。
+Type4Me 不只是把语音识别成文字。
 
-| 模式           | 说明                                                         |
-| -------------- | ------------------------------------------------------------ |
-| **快速模式**   | 实时识别出文字，识别完成即输入，零延迟                       |
-| **语音润色**   | （简单说就是类似Typeless的体验吧- -）帮你优化表达、消除口头语、纠正等 |
-| **翻译**       | 自动识别输入语言，翻译为你选择的 18 种目标语言之一，并在输出不符时自动重试 |
-| **Prompt优化** | 说一句简单的原始prompt，帮你优化后直接粘贴                   |
-| **自定义**     | 自己写 prompt，用 LLM 做任何后处理                           |
+同一段语音，可以直接转写、智能整理、翻译、提问，也可以让 AI 帮你生成成品，甚至直接操作 Mac。
 
-#### Prompt 变量高级玩法
+v2.1.0 新安装默认提供 8 种模式：
 
-Prompt 模板支持三种变量，让语音输入从"听写"升级为"语音命令"：
+| 模式            | 适合做什么                | 默认快捷键                         |
+| ------------- | -------------------- | ----------------------------- |
+| **快速模式**      | 最快的纯语音输入，不经过 LLM 后处理 | `Fn`                          |
+| **智能感知**      | 日常主力输入，根据场景智能整理表达    | `Fn + Control` / `Option + 1` |
+| **翻译模式**      | 边说边翻译成指定语言           | `Fn + Shift` / `Option + 2`   |
+| **随便问**       | 对选中文字提问，或直接用语音问 AI   | `Fn + Space` / `Option + 3`   |
+| **Mac 操作**    | 用语音执行常用 macOS 操作     | `Option + 4`                  |
+| **语音润色**      | 把自然口语稳定整理成清晰书面文字     | `Option + 5`                  |
+| **Prompt 优化** | 把一句模糊需求扩展成高质量 Prompt | 默认未绑定                         |
+| **代办模式**      | 直接让 AI 根据口述需求交付成品    | 默认未绑定                         |
 
-| 变量          | 含义                     |
-| ------------- | ------------------------ |
-| `{text}`      | 语音识别的文字           |
-| `{selected}`  | 录音开始时光标选中的文字 |
-| `{clipboard}` | 录音开始时剪切板的内容   |
+所有快捷键均可自行修改。一个模式可以绑定**多个全局快捷键**，并且每个快捷键都可以独立设置为：
 
-**用法示例**：
-
-<img src="https://github.com/user-attachments/assets/4b431890-49aa-405c-b707-72ea093cfbc4" width="400" />
-
-#### 最终文本格式化
-
-最终文本可按需应用中英文盘古空格和中文直角引号；英文撇号会被保留。
-
-### Intelli Sense（可选）
-
-根据当前 App、输入控件和有限上下文安全润色文字；还可按需学习你稳定的纠错、表达和列表结构偏好。各项感知与学习能力可独立开启，默认不会静默学习。
-
-<p align="center">
-  <img src="docs/screenshots/screenshot-intelli-sense-history.png" width="480" alt="Intelli Sense 偏好与历史" />
-</p>
-
-### Ask Anything
-
-围绕选中文本直接提问，并把连续追问保存为会话；可在设置中搜索、恢复、重命名或删除历史会话，也可从历史会话继续语音追问。
-
-<p align="center">
-  <img src="docs/screenshots/screenshot-askit.png" width="480" alt="Ask Anything 会话历史" />
-</p>
-
-### 统一翻译模式
-
-自动识别输入语言，翻译为你选择的 18 种目标语言之一，并在输出语言不符时进行校验与一次重试。
-
-<!-- SCREENSHOT TODO (v2.1.0): 翻译目标语言选择器截图；在 v2.1.0 正式构建上截取并隐藏敏感信息 -->
-
-### 多快捷键与录音行为
-
-每个模式可绑定多个全局快捷键，并为每个快捷键选择「按住说话」或「按一下开始、再按一下停止」；录音期间也可用另一个模式的快捷键结束并按该模式处理。录音浮窗支持按需开启或隐藏实时转写内容。
+- **按住说话**：按住录音，松开结束
+- **开关模式**：按一下开始，再按一下结束
 
 <p align="center">
   <img src="docs/screenshots/screenshot-modes.png" width="480" alt="模式快捷键设置" />
 </p>
 
 <!-- SCREENSHOT TODO (v2.1.0): 多快捷键绑定配置截图（若需进一步展示多个 hold/toggle 快捷键细节） -->
+
+---
+
+### ⚡ 快速模式：只管说，最快出字
+
+这是最接近传统输入法的模式。
+
+语音识别完成后直接输入到当前光标位置，**不经过 LLM 文本处理**，因此延迟最低，也不会擅自修改你的表达。
+
+适合：
+
+- 搜索关键词
+- 聊天、短句输入
+- 输入网址、代码术语、专有名词
+- 已经想好怎么说，只希望快速打出来
+- 不希望 AI 改写原话的场景
+
+例如你说：
+
+> 明天下午三点开会记得把用户增长的数据也带上
+
+快速模式就直接输入识别结果，不负责重新组织你的表达。
+
+**一句话理解：传统语音输入法的增强版。**
+
+---
+
+### ✨ 智能感知：日常主力模式
+
+如果说快速模式负责“听清你说了什么”，那么智能感知负责的是：
+
+**听懂你想怎么表达。**
+
+它首先会像语音润色一样处理口语中的停顿、重复、改口、错别字和断句；开启相应的感知能力后，还可以进一步参考：
+
+- 当前正在使用的 App
+- 当前输入位置附近的上下文
+- 你的长期表达习惯
+- 你输入后经常手动修改的内容
+
+同一句话，在聊天框、邮件、文档里，可以采用不同程度的整理方式。
+
+例如你口述：
+
+> 嗯那个我觉得这个方案吧整体上没啥大问题但是上线时间可能还是得往后推一下因为测试这边还没跑完
+
+智能感知可能整理成：
+
+> 我觉得这个方案整体没什么问题，但上线时间可能还是要往后推一下，因为测试还没有跑完。
+
+它的目标不是“把所有话都改得像公文”，而是在**尽量保留你本人说话方式的前提下，让文字更像你认真打出来的内容**。
+
+适合：
+
+- 微信、Slack、飞书等日常聊天
+- 写邮件
+- 写文档
+- 写需求和 Issue
+- 日常几乎所有长句输入
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-intelli-sense-history.png" width="480" alt="Intelli Sense 偏好与历史" />
+</p>
+
+**一句话理解：如果你不知道该用哪个模式，优先用智能感知。**
+
+> 智能感知中的应用感知、上下文感知、表达习惯学习等能力可以单独开启或关闭，默认不会静默学习。
+
+---
+
+### 🌍 翻译模式：直接说，直接得到目标语言
+
+翻译模式不是简单地把识别结果逐字翻译，而是先理解你真正想表达的意思，再生成自然的目标语言。
+
+例如你说：
+
+> 我这周五临时有点事情，要不我们下周再约吧
+
+目标语言设为英语，可以直接得到：
+
+> Something came up this Friday. How about we reschedule for next week?
+
+它会自动处理：
+
+- 口语中的停顿和重复
+- “不是周五，周六”之类的中途改口
+- 明显的语音识别错误
+- 不同语言的自然表达习惯
+
+支持自动识别口述语言，并可选择 **18 种目标语言**，包括英语、简体中文、繁体中文、日语、韩语、西班牙语、法语、德语等。在输出语言不符时会自动进行校验与重试。
+
+新安装默认目标语言为**英语**。
+
+<!-- SCREENSHOT TODO (v2.1.0): 翻译目标语言选择器截图；在 v2.1.0 正式构建上截取并隐藏敏感信息 -->
+
+适合：
+
+- 中文直接说成英文
+- 英文直接说成中文
+- 写英文邮件和消息
+- 与海外同事沟通
+- 小语种输入
+
+**一句话理解：把“先语音输入，再复制去翻译”变成一个快捷键。**
+
+---
+
+### 💬 随便问：看到什么，直接问什么
+
+“随便问”不是输入模式，而更像一个随时可以通过语音唤出的 AI 问答窗口。
+
+你可以先选中屏幕上的一段文字，然后按快捷键直接提问：
+
+> 这段代码有什么问题？
+
+> 帮我总结一下
+
+> 这句话是什么意思？
+
+> 翻译成中文
+
+> 他的核心观点是什么？
+
+Type4Me 会把**选中的文字 + 你的语音问题**一起交给模型，并在独立窗口中返回答案。
+
+没有选中文字也没关系，可以直接问：
+
+> Python 的 list 和 tuple 有什么区别？
+
+> 帮我想三个产品名字
+
+> 这个报错一般是什么原因？
+
+它还支持连续追问，会保留当前问答的上下文；所有会话都会保存到历史记录中，支持在设置中搜索、恢复、重命名或删除。
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-askit.png" width="480" alt="Ask Anything 会话历史" />
+</p>
+
+这意味着你在浏览网页、看文档、读代码、看邮件时，不需要复制内容、打开 ChatGPT、粘贴、再打字提问。
+
+**选中 → 按快捷键 → 直接说。**
+
+**一句话理解：系统级的“选中内容问 AI”。**
+
+---
+
+### 🖥️ Mac 操作：用语音控制电脑
+
+Mac 操作模式不会把你的语音变成文字，而是尝试把它理解成一个 macOS 操作并直接执行。
+
+例如：
+
+> 打开 Safari
+
+> 音量调到 30
+
+> 切换深色模式
+
+> 截个图
+
+> 搜一下 SwiftUI 教程
+
+> 锁屏
+
+> 最小化窗口
+
+> 关闭这个窗口
+
+> 提醒我两分钟后检查邮件
+
+> 往下滚
+
+甚至可以操作 Type4Me 自己：
+
+> 打开热词
+
+> 打开片段替换
+
+> 把选中的词加到热词
+
+只有匹配到 Type4Me 已支持的操作时才会执行；它不是一个可以任意控制电脑的通用 Agent。
+
+**一句话理解：把一些原本要点几下鼠标的操作，变成一句话。**
+
+---
+
+### 📝 语音润色：稳定地把“说出来的话”变成“写出来的话”
+
+语音润色是一个更明确、更可预测的文字整理模式。
+
+它不会回答你说的问题，也不会替你继续创作，职责只有一个：
+
+**把语音识别得到的自然口语整理成清晰、可读的文字。**
+
+它会处理：
+
+- “嗯、啊、那个、就是说”等无意义口头语
+- 重复和废弃半句
+- 中途改口
+- 错别字和断句
+- 中文口述数字
+- 多个要点的结构化整理
+- 正式内容和日常聊天不同的排版方式
+
+例如你说：
+
+> 我们这周主要三个事情哦不两个事情第一把新版上线第二把那个文档补完
+
+可能整理为：
+
+> 这周主要有两件事：
+>
+> 1. 上线新版。
+> 2. 补完文档。
+
+和“智能感知”相比，**语音润色更像一套固定的文字整理规则**；智能感知则可以进一步结合当前场景和你的表达习惯。
+
+如果你希望输出风格稳定、可预测，或者正在写比较正式的内容，语音润色仍然非常好用。
+
+**一句话理解：忠实于原意的“口语 → 成文”。**
+
+---
+
+### 🧠 Prompt 优化：一句话变成高质量 Prompt
+
+有时候你知道自己想让 AI 做什么，但懒得写一大段 Prompt。
+
+直接说：
+
+> 帮我分析一下我们这个季度用户留存是不是有问题
+
+Prompt 优化不会直接回答这个问题，而是把它扩展成一个真正适合交给 LLM 执行的 Prompt，例如补充：
+
+- 专业角色
+- 分析维度
+- 执行步骤
+- 需要交叉验证的内容
+- 输出结构和格式
+
+对于简单任务，它会保持简单；对于研究、分析、方案类任务，则会主动补足专业框架。
+
+因此它尤其适合配合：
+
+- ChatGPT
+- Claude
+- Codex
+- Cursor
+- Claude Code
+- 各类 AI Agent
+
+工作流可以变成：
+
+**按快捷键 → 说一句需求 → Type4Me 生成完整 Prompt → 自动粘贴到当前 AI 对话框。**
+
+**一句话理解：你负责说“我要什么”，它负责把需求写专业。**
+
+---
+
+### 🚀 代办模式：别帮我写 Prompt，直接把东西做出来
+
+Prompt 优化负责“帮你写一份更好的任务说明”。
+
+代办模式更进一步：
+
+**不用给我 Prompt，直接给我结果。**
+
+比如你说：
+
+> 写封邮件跟供应商说我们付款流程出了点问题可能要晚三天麻烦他理解一下
+
+它会直接生成可以发送的邮件。
+
+你也可以说：
+
+> 回复老板，下午三点的周会我能参加
+
+> 写一个 Python 函数计算第 n 个斐波那契数
+
+> 把我选中的这句话翻译成自然的英文
+
+> 根据剪贴板里的内容帮我写个回复
+
+代办模式可以结合：
+
+- 你的语音需求
+- 当前选中的文字
+- 剪贴板内容
+
+直接生成最终可用的内容，并输入到当前应用。
+
+它和“随便问”的区别是：
+
+|      | 随便问           | 代办模式      |
+| ---- | ------------- | --------- |
+| 核心用途 | 问问题、理解内容、连续讨论 | 直接生成最终成品  |
+| 输出位置 | 独立问答窗口        | 当前输入位置    |
+| 支持追问 | 是             | 否，以单次交付为主 |
+| 典型场景 | “这段什么意思？”     | “帮我回复这段话” |
+
+**一句话理解：Prompt 优化是“帮我把任务说清楚”，代办模式是“你直接帮我做掉”。**
+
+---
+
+### 应该用哪个模式？
+
+懒得研究的话，记住这张表就够了：
+
+| 我现在想……                         | 用这个           |
+| ------------------------------ | ------------- |
+| 原样快速输入                         | **快速模式**      |
+| 日常聊天、邮件、文档输入                   | **智能感知**      |
+| 把口语稳定整理成书面文字                   | **语音润色**      |
+| 说一种语言、输出另一种语言                  | **翻译模式**      |
+| 看着一段内容问 AI                     | **随便问**       |
+| 用一句话控制 Mac                     | **Mac 操作**    |
+| 给 ChatGPT / Claude 写一个好 Prompt | **Prompt 优化** |
+| 不想写 Prompt，只想直接拿结果             | **代办模式**      |
+
+---
+
+### 还不够？自己创建模式
+
+除了默认模式之外，你还可以自己添加任意文本处理模式。
+
+例如：
+
+- “把我的话改成更正式的商务语气”
+- “自动翻译成日语”
+- “整理成小红书文案”
+- “转换成 GitHub Issue”
+- “把口述需求整理成产品需求文档”
+- “根据选中的代码生成 Commit Message”
+
+自定义 Prompt 可以使用三个变量：
+
+| 变量            | 内容           |
+| ------------- | ------------ |
+| `{text}`      | 本次语音识别得到的文字  |
+| `{selected}`  | 开始录音时选中的文字   |
+| `{clipboard}` | 开始录音时剪贴板中的内容 |
+
+例如：
+
+```text
+下面是用户当前选中的内容：
+
+{selected}
+
+用户通过语音说出的修改要求：
+
+{text}
+
+请按照用户要求修改选中的内容，只输出修改后的结果。
+```
+
+这样 Type4Me 就不再只是一个“语音输入法”，而是可以把任意 LLM 文本工作流绑定到一个全局快捷键上。
+
+#### 最终文本格式化
+
+最终文本可按需应用中英文盘古空格和中文直角引号；英文撇号会被保留。
+
+---
 
 ### 词汇管理与配套 Skill
 
@@ -150,6 +480,8 @@ Prompt 模板支持三种变量，让语音输入从"听写"升级为"语音命�
 <p align="center">
   <img src="docs/screenshots/screenshot-vocabulary.png" width="480" alt="词汇管理" />
 </p>
+
+---
 
 ### 语音改口（Revise）
 
@@ -226,10 +558,11 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 
 
 - **Speech Recognition**: Built-in local recognition engine with accuracy rivaling cloud engines; supports multiple cloud ASR providers; real-time streaming recognition with instant text output;
-- **Text Processing**: Built-in voice polish, prompt optimization, and translation; add any custom processing templates (persona, tone, minority language translation, etc.);
+- **8 Default Modes**: Built-in Quick Mode, Intelli Sense, Translation, Ask Anything, Mac Actions, Voice Polish, Prompt Optimization, and Task Delegation; fully customizable with user-defined templates;
 - **Intelli Sense (Optional)**: Safely polishes text using the current app, input control, and limited context; optionally learns stable corrections, expression preferences, and list structure;
 - **Ask Anything**: Ask questions about selected text, save follow-ups into conversation history, and search, resume, or continue conversations anytime;
 - **Unified Translation**: Automatically detects source language, translates into one of 18 selectable target languages, with output validation and retry;
+- **Mac Actions**: Execute common macOS system actions and Type4Me controls directly by voice;
 - **Voice Revise**: Made a typo or want to rephrase? Press a hotkey to speak revisions directly—precision replacement, local slot targeting, and one-click undo;
 - **Multiple Hotkeys**: Bind multiple global shortcuts per mode with hold-to-talk or toggle behavior;
 - **Model Integration**: Supports mainstream provider APIs; text processing works with Ollama local models;
@@ -310,67 +643,398 @@ And honestly, not everything you say needs to sound perfectly polished.
 
 ## Feature Details
 
-### Text Processing & Modes: Requires API Key. Quality depends on model choice. Prompts are fully customizable.
+### More Than Speech-to-Text: 8 Default Input Modes
 
-Each mode can have its own global hotkeys. Supports both "hold to talk" and "press to start / press to stop".
+Type4Me is more than just transcribing speech to text.
 
-| Mode | Description |
-| ---- | ----------- |
-| **Quick Mode** | Real-time transcription, injected instantly with zero delay |
-| **Voice Polish** | (Think Typeless-style experience) Refines your expression, removes filler words, corrects errors |
-| **Translation** | Automatically detects source language, translates into one of 18 selectable target languages, with output validation and retry |
-| **Prompt Optimize** | Say a rough prompt, get an optimized version pasted directly |
-| **Custom** | Write your own prompt, use LLM for any post-processing |
+From a single voice clip, you can transcribe directly, intelligently polish, translate, ask questions, have AI generate ready-to-use deliverables, or even execute macOS system actions.
 
-#### Advanced: Prompt Variables
+v2.1.0 provides 8 default modes out of the box:
 
-Prompt templates support three variables, upgrading voice input from "dictation" to "voice commands":
+| Mode | Best For | Default Shortcut |
+| ---- | -------- | ---------------- |
+| **Quick Mode** | Fastest raw speech input without LLM post-processing | `Fn` |
+| **Intelli Sense** | Daily primary input, adapts expression based on context | `Fn + Control` / `Option + 1` |
+| **Translation** | Real-time speech translation into target language | `Fn + Shift` / `Option + 2` |
+| **Ask Anything** | Ask about selected text or ask AI voice queries | `Fn + Space` / `Option + 3` |
+| **Mac Actions** | Execute common macOS actions by voice | `Option + 4` |
+| **Voice Polish** | Reliably refine natural speech into clear written prose | `Option + 5` |
+| **Prompt Optimization** | Turn vague ideas into high-quality LLM prompts | Unbound by default |
+| **Task Delegation** | Let AI deliver finished work directly from spoken requests | Unbound by default |
 
-| Variable | Description |
-| -------- | ----------- |
-| `{text}` | The recognized speech text |
-| `{selected}` | Text selected by cursor when recording started |
-| `{clipboard}` | Clipboard content when recording started |
+All shortcuts are fully customizable. Each mode can bind **multiple global shortcuts**, and each shortcut can be independently set to:
 
-**Example**:
-
-<img src="https://github.com/user-attachments/assets/4b431890-49aa-405c-b707-72ea093cfbc4" width="400" />
-
-#### Final Output Formatting
-
-Final output can optionally apply Pangu-style CJK/Latin spacing and Chinese corner quotes while preserving English apostrophes.
-
-### Intelli Sense (Optional)
-
-Safely polishes text using the current app, input control, and limited context. You can separately enable learning from stable corrections, expression preferences, and list structure; awareness and learning are not silently enabled by default.
-
-<p align="center">
-  <img src="docs/screenshots/screenshot-intelli-sense-history.png" width="480" alt="Intelli Sense Preferences & History" />
-</p>
-
-### Ask Anything
-
-Lets you ask about selected text and continue with spoken follow-ups. Saved conversations can be searched, reopened, renamed, deleted, or resumed from Settings.
-
-<p align="center">
-  <img src="docs/screenshots/screenshot-askit.png" width="480" alt="Ask Anything Conversation History" />
-</p>
-
-### Unified Translation
-
-Detects the source language automatically, translates into one of 18 selectable target languages, and validates the output language with one retry when needed.
-
-<!-- SCREENSHOT TODO (v2.1.0): Translation target-language selector; capture on the v2.1.0 build, redact credentials, and supply matching zh/en alt text. -->
-
-### Multiple Hotkeys & Recording Behavior
-
-Each mode can have multiple global shortcuts. Every shortcut can use hold-to-talk or press-to-start/press-again-to-stop, and another mode's shortcut can finish the active recording and process it with that mode. The recording floating bar supports toggling live transcript visibility on or off as needed.
+- **Push-to-Talk (Hold)**: Press and hold to record, release to finish
+- **Toggle Mode**: Press once to start, press again to finish
 
 <p align="center">
   <img src="docs/screenshots/screenshot-modes.png" width="480" alt="Mode Shortcut Settings" />
 </p>
 
 <!-- SCREENSHOT TODO (v2.1.0): Multiple hotkey bindings configuration screenshot (if needed to illustrate multiple hold/toggle shortcuts in detail). -->
+
+---
+
+### ⚡ Quick Mode: Just Speak, Fastest Text Output
+
+This is the mode closest to traditional input methods.
+
+Direct text injection into the current cursor position upon speech recognition completion, **bypassing LLM processing** for minimum latency without altering your wording.
+
+Best for:
+
+- Search keywords & queries
+- Instant messaging & short chats
+- Entering URLs, code terms, and proper nouns
+- When you already know exact phrasing and just want fast typing
+- Any scenario where AI rephrasing is unwanted
+
+For example, when you say:
+
+> Remember to bring the user growth data to tomorrow's 3 PM meeting
+
+Quick Mode injects the transcribed text directly without reorganizing your phrasing.
+
+**In a nutshell: A modern enhancement of traditional voice dictation.**
+
+---
+
+### ✨ Intelli Sense: Your Daily Workhorse
+
+If Quick Mode is responsible for "hearing what you said", Intelli Sense is responsible for:
+
+**Understanding how you want to express it.**
+
+It first handles pauses, filler words, repetitions, mid-sentence corrections, typos, and sentence breaking just like Voice Polish. When awareness features are enabled, it further references:
+
+- The active application
+- Context around the current cursor position
+- Your long-term expression preferences
+- Corrections you frequently make manually after typing
+
+The same sentence can be adapted with different levels of refinement across chat apps, emails, and technical documents.
+
+For example, when you say:
+
+> Um, so I think overall this proposal has no big issues, but the launch date might need to be pushed back a bit because testing hasn't finished running yet.
+
+Intelli Sense refines it to:
+
+> I think the proposal looks good overall, but we may need to push back the launch date as testing is still in progress.
+
+Its goal is not to make everything sound like rigid formal prose, but to **keep your personal voice while making the text look like something you carefully typed yourself**.
+
+Best for:
+
+- Daily messaging in Slack, Teams, WeChat, Lark
+- Drafting emails
+- Writing documentation
+- Authoring specs, PR descriptions, and GitHub issues
+- Almost all everyday long-form voice typing
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-intelli-sense-history.png" width="480" alt="Intelli Sense Preferences & History" />
+</p>
+
+**In a nutshell: If you're not sure which mode to use, default to Intelli Sense.**
+
+> App awareness, context awareness, and habit learning in Intelli Sense can be toggled independently and are never silently enabled by default.
+
+---
+
+### 🌍 Translation: Speak in One Language, Output in Another
+
+Translation mode does not simply translate word-by-word. It understands your underlying intent first, then generates natural, idiomatic phrasing in the target language.
+
+For example, when you say (in Chinese):
+
+> 我这周五临时有点事情，要不我们下周再约吧
+
+With English set as the target language, you directly get:
+
+> Something came up this Friday. How about we reschedule for next week?
+
+It automatically handles:
+
+- Oral pauses and filler repetitions
+- Mid-sentence corrections (e.g. "not Friday, Saturday")
+- Obvious ASR misrecognitions
+- Natural colloquial idioms across different languages
+
+Supports automatic source language detection and translating into **18 target languages**, including English, Simplified Chinese, Traditional Chinese, Japanese, Korean, Spanish, French, German, and more. If the output language does not match the target, it automatically validates and retries once.
+
+The default target language for new installations is **English**.
+
+<!-- SCREENSHOT TODO (v2.1.0): Translation target-language selector; capture on the v2.1.0 build, redact credentials, and supply matching zh/en alt text. -->
+
+Best for:
+
+- Speaking Chinese directly into English
+- Speaking English directly into Chinese
+- Writing foreign-language emails and messages
+- Communicating with international colleagues
+- Multilingual and minority language typing
+
+**In a nutshell: Turn "voice input → copy → paste into translator" into a single hotkey.**
+
+---
+
+### 💬 Ask Anything: See Anything, Ask Right Away
+
+"Ask Anything" is not a direct text injection mode; it is an on-demand voice AI Q&A window always ready to be invoked.
+
+You can select a snippet of text on screen, press the hotkey, and ask directly by voice:
+
+> What's wrong with this code?
+
+> Summarize this for me
+
+> What does this sentence mean?
+
+> Translate this to Chinese
+
+> What is the core takeaway here?
+
+Type4Me submits the **selected text + your spoken question** together to the model, returning the answer in a standalone floating window.
+
+It works great without selecting text too—just ask directly:
+
+> What's the difference between a Python list and tuple?
+
+> Give me 3 creative product names
+
+> What usually causes this error?
+
+It also supports continuous follow-ups, retaining full conversation context. All sessions are saved in history, allowing you to search, resume, rename, or delete past conversations from Settings.
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-askit.png" width="480" alt="Ask Anything Conversation History" />
+</p>
+
+This means when browsing web pages, reading documentation, reviewing code, or reading emails, you never need to copy text, open ChatGPT, paste, and type out your question.
+
+**Select → Press Hotkey → Speak.**
+
+**In a nutshell: System-wide "Select text & Ask AI".**
+
+---
+
+### 🖥️ Mac Actions: Control Your Mac by Voice
+
+Mac Actions mode does not turn your speech into text; it interprets your voice as a macOS system action and executes it directly.
+
+For example:
+
+> Open Safari
+
+> Set volume to 30
+
+> Toggle dark mode
+
+> Take a screenshot
+
+> Search for SwiftUI tutorials
+
+> Lock screen
+
+> Minimize window
+
+> Close this window
+
+> Remind me to check email in two minutes
+
+> Scroll down
+
+You can even control Type4Me itself:
+
+> Open hotwords
+
+> Open snippet replacement
+
+> Add selected word to hotwords
+
+Actions execute only when matched against supported Type4Me commands; it is a safe, focused assistant rather than an unconstrained arbitrary agent.
+
+**In a nutshell: Turn multi-click mouse operations into a single spoken phrase.**
+
+---
+
+### 📝 Voice Polish: Reliably Turn Spoken Words into Written Prose
+
+Voice Polish is a deterministic, predictable text formatting mode.
+
+It will not answer your questions or continue creative writing—its sole responsibility is:
+
+**Organizing conversational speech into clear, readable written text.**
+
+It handles:
+
+- Filler words like "um, uh, you know, like"
+- Repeated and abandoned half-sentences
+- Mid-sentence corrections
+- Typos and sentence segmentation
+- Spoken numbers into standard digits
+- Multi-point bullet structuring
+- Differentiated formatting for formal documents vs. casual chat
+
+For example, when you say:
+
+> We have mainly three things this week oh wait no two things first launch the new release second finish the documentation
+
+It organizes the text into:
+
+> We have two main tasks this week:
+>
+> 1. Launch the new release.
+> 2. Complete the documentation.
+
+Compared to Intelli Sense, **Voice Polish functions like a fixed set of text cleanup rules**; Intelli Sense further adapts to the active app and your personal habits.
+
+If you prefer consistent, highly predictable output, or are writing formal copy, Voice Polish is an excellent choice.
+
+**In a nutshell: Faithful "spoken words → written prose" transformation.**
+
+---
+
+### 🧠 Prompt Optimization: Turn a Single Sentence into a High-Quality Prompt
+
+Sometimes you know what you want AI to do, but don't feel like typing a lengthy, structured prompt.
+
+Just say:
+
+> Analyze whether we have a user retention issue this quarter
+
+Prompt Optimization does not answer the question directly. Instead, it expands your brief idea into a comprehensive prompt ready for LLM execution, adding:
+
+- Professional persona/role
+- Analytical dimensions
+- Step-by-step execution plan
+- Cross-validation checkpoints
+- Structured output format
+
+For simple tasks, it keeps things concise; for research, analysis, and architectural tasks, it injects structured domain frameworks.
+
+It is an ideal companion for:
+
+- ChatGPT
+- Claude
+- Codex
+- Cursor
+- Claude Code
+- Any AI Agent
+
+Your workflow becomes:
+
+**Press Hotkey → Speak your requirement → Type4Me generates a structured Prompt → Auto-pasted into your AI dialogue.**
+
+**In a nutshell: You specify "what you want"; it crafts the professional prompt.**
+
+---
+
+### 🚀 Task Delegation: Skip the Prompt, Deliver the Finished Result
+
+Prompt Optimization writes a better task specification for you.
+
+Task Delegation goes one step further:
+
+**Skip the prompt—give me the final deliverable directly.**
+
+For instance, say:
+
+> Write an email to the vendor explaining our payment process has a slight delay and will take 3 more days, asking for their understanding
+
+It directly generates the complete email ready to send.
+
+You can also say:
+
+> Reply to boss that I can make the 3 PM sync
+
+> Write a Python function calculating the nth Fibonacci number
+
+> Translate this selected sentence into natural English
+
+> Draft a reply based on what's in my clipboard
+
+Task Delegation combines:
+
+- Your spoken requirement
+- Text currently selected on screen
+- Clipboard contents
+
+It generates the finished product and injects it directly into your active application.
+
+Difference between Ask Anything and Task Delegation:
+
+| | Ask Anything | Task Delegation |
+| --- | --- | --- |
+| Core Purpose | Inquiries, understanding, multi-turn discussion | Direct delivery of final content |
+| Output Target | Dedicated floating Q&A window | Current cursor position |
+| Follow-ups | Yes, preserves conversation context | No (single-shot deliverable) |
+| Typical Scenario | "What does this mean?" | "Reply to this message" |
+
+**In a nutshell: Prompt Optimization says "help me explain the task"; Task Delegation says "just do it for me".**
+
+---
+
+### Which Mode Should I Use?
+
+If you want a quick decision guide, this table covers it all:
+
+| What I want to do right now... | Use this |
+| ----------------------------- | -------- |
+| Fast raw typing as-is | **Quick Mode** |
+| Daily chat, email, and document input | **Intelli Sense** |
+| Predictably polish spoken words into written prose | **Voice Polish** |
+| Speak in one language, output in another | **Translation** |
+| Ask AI about content on my screen | **Ask Anything** |
+| Control my Mac with a single phrase | **Mac Actions** |
+| Generate a professional prompt for ChatGPT / Claude | **Prompt Optimization** |
+| Skip the prompt and get the final result directly | **Task Delegation** |
+
+---
+
+### Need More? Create Your Own Custom Modes
+
+Beyond the 8 default modes, you can add any custom LLM text processing mode you need.
+
+For example:
+
+- "Rewrite my words into formal corporate tone"
+- "Auto-translate into Japanese"
+- "Format as social media post"
+- "Convert into a structured GitHub Issue"
+- "Turn spoken requirements into a Product Requirement Document (PRD)"
+- "Generate a Git Commit Message based on selected code"
+
+Custom Prompts support three template variables:
+
+| Variable | Description |
+| -------- | ----------- |
+| `{text}` | The recognized speech text from the current recording |
+| `{selected}` | Text selected on screen when recording started |
+| `{clipboard}` | Content in clipboard when recording started |
+
+Example template:
+
+```text
+Below is the text currently selected by the user:
+
+{selected}
+
+User's spoken modification instruction:
+
+{text}
+
+Please modify the selected content according to the user's instruction. Output only the revised result.
+```
+
+This transforms Type4Me from just a "voice input method" into a universal global hotkey trigger for any LLM text workflow.
+
+#### Final Output Formatting
+
+Final output can optionally apply Pangu-style CJK/Latin spacing and Chinese corner quotes while preserving English apostrophes.
+
+---
 
 ### Vocabulary Management & Companion Skill
 
@@ -382,6 +1046,8 @@ The companion Skill can use Type4Me vocabulary commands to open vocabulary manag
 <p align="center">
   <img src="docs/screenshots/screenshot-vocabulary.png" width="480" alt="Vocabulary Management" />
 </p>
+
+---
 
 ### Voice Revise
 

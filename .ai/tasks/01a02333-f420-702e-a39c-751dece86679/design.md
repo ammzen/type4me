@@ -53,23 +53,28 @@ Apply the same structure and feature order to both `# 中文` and `# English`:
 
 1. Keep the existing hero, download table, system requirements, architecture,
    development instructions, acknowledgements, and license.
-2. Replace the current terse top feature list with a v2.1-aware overview. Include:
-   speech recognition; configurable processing modes; Intelli Sense; Ask Anything;
-   unified translation; Voice Revise; vocabulary/companion Skill; multiple hotkeys;
+2. Replace the current top feature list with a v2.1-aware overview. Include:
+   speech recognition; 8 default modes & text processing; Intelli Sense; Ask Anything;
+   unified translation; Mac Actions; Voice Revise; vocabulary/companion Skill; multiple hotkeys;
    history; provider integration.
-3. Replace the old "英文翻译 / English Translation" row in the mode table with
-   "翻译 / Translation" and describe automatic source-language detection plus a
-   selectable target among 18 languages.
-4. Add focused subsections after the mode table, in this order:
-   - Intelli Sense
-   - Ask Anything
-   - Translation
-   - Multiple hotkeys and recording behavior (including live transcript visibility setting)
-   - Vocabulary management and companion Skill
-   - Voice Revise (retain and tighten the existing section)
-5. Add a short "Output formatting" paragraph under text processing rather than a
-   standalone major section.
-6. Keep feature prose user-oriented. Move implementation/module details to the
+3. Feature Details (详细功能介绍):
+   - Overview: Not just speech-to-text, 8 default input modes in v2.1.0 (Quick Mode,
+     Intelli Sense, Translation, Ask Anything, Mac Actions, Voice Polish, Prompt Optimization,
+     Task Delegation) with default shortcut table and hold/toggle shortcut flexibility.
+   - Mode 1: ⚡ 快速模式 (Quick Mode) — lowest latency raw ASR output without LLM processing.
+   - Mode 2: ✨ 智能感知 (Intelli Sense) — context-aware daily workhorse with opt-in learning.
+   - Mode 3: 🌍 翻译模式 (Translation) — intent-based translation across 18 target languages.
+   - Mode 4: 💬 随便问 (Ask Anything) — select text & ask AI floating Q&A with conversation history.
+   - Mode 5: 🖥️ Mac 操作 (Mac Actions) — execute macOS system and app actions by voice.
+   - Mode 6: 📝 语音润色 (Voice Polish) — deterministic oral-to-written prose cleanup rules.
+   - Mode 7: 🧠 Prompt 优化 (Prompt Optimization) — expand rough ideas into structured LLM prompts.
+   - Mode 8: 🚀 代办模式 (Task Delegation) — deliver finished output directly to cursor position.
+   - Decision matrix: "应该用哪个模式？" / "Which Mode Should I Use?".
+   - Custom modes: Create custom modes using `{text}`, `{selected}`, `{clipboard}` variables.
+   - Final output formatting: Optional Pangu CJK/Latin spacing and Chinese corner quotes.
+   - Vocabulary management and companion Skill.
+   - Voice Revise (retain and tighten the existing section).
+4. Keep feature prose user-oriented. Move implementation/module details to the
    existing architecture section instead of mixing them into feature descriptions.
 
 ### 2. Copy-ready README claims
