@@ -11,7 +11,7 @@ struct HomeDashboardView: View {
     @State private var hoveredMetric: Metric?
     @State private var isModesButtonHovered = false
 
-    private let historyStore = HistoryStore()
+    private let historyStore = HistoryStore.shared
     private let assumedTypingSpeed = 40.0
 
     /// Drive the list from the same live, observable source the menu bar reads
