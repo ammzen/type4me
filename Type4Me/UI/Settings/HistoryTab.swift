@@ -823,7 +823,7 @@ struct HistoryTab: View {
             Text("·")
                 .font(.system(size: 11))
                 .foregroundStyle(TF.settingsTextTertiary.opacity(0.4))
-            Text(L("\(count) 条", "\(count)"))
+            Text(L("\(count) 条", "\(count) rec"))
                 .font(.system(size: 10))
                 .foregroundStyle(TF.settingsTextTertiary.opacity(0.6))
             Text("·")
@@ -1035,12 +1035,14 @@ struct HistoryTab: View {
                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .foregroundStyle(TF.settingsTextSecondary)
                             .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         Text(String(format: "%.1fs", record.durationSeconds))
                             .font(.system(size: 9, weight: .medium, design: .rounded))
                             .foregroundStyle(TF.settingsTextTertiary)
                             .monospacedDigit()
                     }
-                    .frame(width: 48, alignment: .leading)
+                    .frame(width: 62, alignment: .leading)
 
                     VStack(alignment: .leading, spacing: 7) {
                         Text(record.finalText)
@@ -1059,9 +1061,13 @@ struct HistoryTab: View {
                             } else {
                                 Label(L("直接转写", "Transcription"), systemImage: "waveform")
                             }
+                            if let vendor = historyASRVendorDescription(record) {
+                                Label(vendor, systemImage: "mic")
+                            }
                         }
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(TF.settingsTextTertiary)
+                        .lineLimit(1)
 
                         if isExpanded {
                             expandedRecordDetails(record)
@@ -1220,6 +1226,16 @@ struct HistoryTab: View {
         let provider = record.asrProvider?.trimmingCharacters(in: .whitespacesAndNewlines)
         let source = model?.isEmpty == false ? model : (provider?.isEmpty == false ? provider : nil)
         return historySourceDescription(source, durationSeconds: record.asrDurationSeconds)
+    }
+
+    private func historyASRVendorDescription(_ record: HistoryRecord) -> String? {
+        let model = record.asrModel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = record.asrProvider?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let source = model?.isEmpty == false ? model : provider
+        return source?
+            .components(separatedBy: " · ")
+            .first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func historyLLMDescription(_ record: HistoryRecord) -> String? {
@@ -1624,12 +1640,15 @@ struct HistoryTab: View {
     }
 
     private func formatDuration(_ seconds: Double) -> String {
-        let hours = Int(seconds) / 3600
-        let minutes = (Int(seconds) % 3600) / 60
+        let totalSeconds = max(0, Int(seconds))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
         if hours > 0 {
             return String(format: L("%d小时%d分", "%dh %dm"), hours, minutes)
-        } else {
+        } else if minutes > 0 {
             return String(format: L("%d分钟", "%dm"), minutes)
+        } else {
+            return String(format: L("%d秒", "%ds"), totalSeconds)
         }
     }
 
