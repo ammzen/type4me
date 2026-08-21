@@ -577,6 +577,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.askAnythingCoordinator.prepareForExternalNewQuestion()
                     }
                 }
+                let recordingRequestedAt = ContinuousClock.now
                 NSLog("[Type4Me] >>> HOTKEY: Record START (mode: %@)", effectiveMode.name)
                 DebugFileLogger.log("hotkey record start mode=\(effectiveMode.name)")
                 Task { @MainActor in
@@ -590,7 +591,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         NSLog("[Type4Me] >>> HOTKEY: previous session did not reach idle in time")
                         DebugFileLogger.log("hotkey start: awaitIdle timed out")
                     }
-                    await self.session.startRecording(mode: effectiveMode)
+                    await self.session.startRecording(
+                        mode: effectiveMode,
+                        requestedAt: recordingRequestedAt
+                    )
                 }
             }
             let onStop: @Sendable () -> Void = { [weak self] in
@@ -794,6 +798,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let resolvedMode = ASRProviderRegistry.resolvedMode(for: .selectionAsk, provider: selectedProvider)
         let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
 
+        let recordingRequestedAt = ContinuousClock.now
         DebugFileLogger.log("selectionAsk follow-up start")
         let generation = selectionAskFollowUpStartGate.begin()
         appState.selectModeForRecording(effectiveMode)
@@ -815,7 +820,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             await self.session.setSelectionAskRequestContext(requestContext)
-            await self.session.startRecording(mode: effectiveMode)
+            await self.session.startRecording(
+                mode: effectiveMode,
+                requestedAt: recordingRequestedAt
+            )
         }
         return true
     }

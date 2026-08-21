@@ -6,21 +6,73 @@ import os
 /// Captured at recording start so `{selected}` reflects the user's selection
 /// before any text injection occurs.
 struct PromptContext: Sendable {
+    struct CaptureRequirements: OptionSet, Sendable {
+        let rawValue: UInt8
+
+        static let selected = CaptureRequirements(rawValue: 1 << 0)
+        static let clipboard = CaptureRequirements(rawValue: 1 << 1)
+
+        var logDescription: String {
+            var names: [String] = []
+            if contains(.selected) { names.append("selected") }
+            if contains(.clipboard) { names.append("clipboard") }
+            return names.isEmpty ? "none" : names.joined(separator: ",")
+        }
+    }
+
     let selectedText: String
     let clipboardText: String
 
-    /// Capture the current selected text (via Accessibility) and clipboard content.
-    /// Clipboard is read on MainActor (AppKit requirement).
-    /// AX calls run on a detached task with a short timeout.
-    static func capture() async -> PromptContext {
-        let clipboard = await MainActor.run {
-            NSPasteboard.general.string(forType: .string) ?? ""
+    static let empty = PromptContext(selectedText: "", clipboardText: "")
+
+    /// Return only the context fields referenced by a prompt. Some modes use
+    /// selection outside their prompt template and can request it explicitly.
+    static func captureRequirements(
+        for prompt: String,
+        requiresSelection: Bool = false
+    ) -> CaptureRequirements {
+        var requirements: CaptureRequirements = []
+        if requiresSelection || prompt.contains("{selected}") {
+            requirements.insert(.selected)
         }
-        let axSelectedText = await readSelectedTextAsync(timeoutMs: 500)
-        let selected = shouldUseTemporaryCopy(axSelectedText: axSelectedText)
-            ? await readSelectedTextByTemporaryCopy(timeoutMs: 250)
-            : (axSelectedText ?? "")
+        if prompt.contains("{clipboard}") {
+            requirements.insert(.clipboard)
+        }
+        return requirements
+    }
+
+    /// Capture only the requested fields. Clipboard is read before the
+    /// selected-text fallback because that fallback temporarily replaces it.
+    /// AX calls run on a detached task with a short timeout.
+    static func capture(
+        requirements: CaptureRequirements = [.selected, .clipboard]
+    ) async -> PromptContext {
+        guard !requirements.isEmpty else { return .empty }
+
+        let clipboard: String
+        if requirements.contains(.clipboard) {
+            clipboard = await MainActor.run {
+                NSPasteboard.general.string(forType: .string) ?? ""
+            }
+        } else {
+            clipboard = ""
+        }
+
+        var selected = ""
+        if requirements.contains(.selected) {
+            let axSelectedText = await readSelectedTextAsync(timeoutMs: 500)
+            selected = shouldUseTemporaryCopy(axSelectedText: axSelectedText)
+                ? await readSelectedTextByTemporaryCopy(timeoutMs: 250)
+                : (axSelectedText ?? "")
+        }
         return PromptContext(selectedText: selected, clipboardText: clipboard)
+    }
+
+    func merging(_ other: PromptContext) -> PromptContext {
+        PromptContext(
+            selectedText: other.selectedText.isEmpty ? selectedText : other.selectedText,
+            clipboardText: other.clipboardText.isEmpty ? clipboardText : other.clipboardText
+        )
     }
 
     /// An empty string is a successful AX result meaning the focused control has
