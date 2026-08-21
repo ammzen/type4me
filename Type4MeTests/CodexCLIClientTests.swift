@@ -68,12 +68,12 @@ final class CodexCLIClientTests: XCTestCase {
                 *'"method":"initialize"'*)
                     printf '{"id":%s,"result":{}}\n' "$request_id"
                     ;;
-                *'"method":"thread/start"'*)
+                *'"method":"thread/start"'*|*'"method":"thread\/start"'*)
                     thread_count=$((thread_count + 1))
                     current_thread="thread-$thread_count"
                     printf '{"id":%s,"result":{"thread":{"id":"%s"}}}\n' "$request_id" "$current_thread"
                     ;;
-                *'"method":"turn/start"'*)
+                *'"method":"turn/start"'*|*'"method":"turn\/start"'*)
                     turn_count=$((turn_count + 1))
                     printf '{"id":%s,"result":{}}\n' "$request_id"
                     printf '{"method":"item/completed","params":{"threadId":"%s","item":{"type":"agentMessage","text":"{\\"result\\":\\"%s-turn-%s\\"}"}}}\n' "$current_thread" "$current_thread" "$turn_count"
@@ -149,6 +149,31 @@ final class CodexCLIClientTests: XCTestCase {
             )
 
             XCTAssertEqual(result, marker, "live Codex CLI failed for \(model)")
+        }
+    }
+
+    func testLiveAppServerSessionReusesThenRotatesWithoutCrossTurnLeakage() async throws {
+        guard ProcessInfo.processInfo.environment["TYPE4ME_LIVE_CODEX_TEST"] == "1" else {
+            throw XCTSkip("Set TYPE4ME_LIVE_CODEX_TEST=1 to use the signed-in Codex account")
+        }
+
+        let client = CodexCLIClient()
+        do {
+            for index in 1...9 {
+                let marker = "TYPE4ME_APP_SERVER_TURN_\(index)_\(UUID().uuidString)"
+                let startedAt = ContinuousClock.now
+                let result = try await client.process(
+                    text: marker,
+                    prompt: "Return this source text exactly with no additions: {text}",
+                    config: LLMConfig(apiKey: "", model: "gpt-5.6-luna", baseURL: "codex-cli")
+                )
+                print("Live App Server turn \(index): \(ContinuousClock.now - startedAt)")
+                XCTAssertEqual(result, marker, "cross-turn leakage or protocol failure at turn \(index)")
+            }
+            await client.invalidate()
+        } catch {
+            await client.invalidate()
+            throw error
         }
     }
 }

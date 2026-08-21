@@ -15,6 +15,8 @@ actor CodexAppServerSession {
     private var inputHandle: FileHandle?
     private var outputHandle: FileHandle?
     private var errorHandle: FileHandle?
+    private var outputContinuation: AsyncStream<Data>.Continuation?
+    private var outputConsumptionTask: Task<Void, Never>?
     private var outputBuffer = Data()
     private var errorBuffer = Data()
     private var nextRequestID = 1
@@ -121,9 +123,21 @@ actor CodexAppServerSession {
         errorHandle = errorPipe.fileHandleForReading
         self.process = process
 
-        outputHandle?.readabilityHandler = { [weak self] handle in
+        let (outputStream, outputContinuation) = AsyncStream.makeStream(of: Data.self)
+        self.outputContinuation = outputContinuation
+        outputConsumptionTask = Task { [weak self] in
+            for await data in outputStream {
+                guard let self else { return }
+                await self.consumeOutput(data)
+            }
+        }
+        outputHandle?.readabilityHandler = { handle in
             let data = handle.availableData
-            Task { await self?.consumeOutput(data) }
+            if data.isEmpty {
+                outputContinuation.finish()
+            } else {
+                outputContinuation.yield(data)
+            }
         }
         errorHandle?.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
@@ -297,6 +311,8 @@ actor CodexAppServerSession {
         let processToStop = process
         outputHandle?.readabilityHandler = nil
         errorHandle?.readabilityHandler = nil
+        outputContinuation?.finish()
+        outputConsumptionTask?.cancel()
         processToStop?.terminationHandler = nil
         try? inputHandle?.close()
         try? outputHandle?.close()
@@ -305,6 +321,8 @@ actor CodexAppServerSession {
         inputHandle = nil
         outputHandle = nil
         errorHandle = nil
+        outputContinuation = nil
+        outputConsumptionTask = nil
         outputBuffer.removeAll(keepingCapacity: false)
         errorBuffer.removeAll(keepingCapacity: false)
         try? FileManager.default.removeItem(at: workspace)
