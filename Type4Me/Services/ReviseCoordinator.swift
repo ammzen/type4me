@@ -305,6 +305,11 @@ actor ReviseCoordinator {
         }
     }
 
+    func cancelActiveTransaction() {
+        guard transaction?.phase != .committing else { return }
+        transaction = nil
+    }
+
     // MARK: - Commit
 
     func commit(

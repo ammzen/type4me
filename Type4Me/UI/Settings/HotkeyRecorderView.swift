@@ -212,14 +212,7 @@ struct HotkeyRecorderView: View {
     }
 
     private func isModifierPressed(keyCode: Int, flags: NSEvent.ModifierFlags) -> Bool {
-        switch keyCode {
-        case 54, 55: return flags.contains(.command)
-        case 56, 60: return flags.contains(.shift)
-        case 58, 61: return flags.contains(.option)
-        case 59, 62: return flags.contains(.control)
-        case 63: return flags.contains(.function)
-        default: return false
-        }
+        ModeBinding.isModifierPressed(keyCode: keyCode, flags: CGEventFlags(rawValue: UInt64(flags.rawValue)))
     }
 
     // MARK: - Modifier Combo Helpers
