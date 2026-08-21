@@ -263,4 +263,84 @@ final class HotkeyConflictTests: XCTestCase {
         XCTAssertEqual(other.hotkeyBindings.count, 1)
         XCTAssertEqual(other.hotkeyBindings.first?.keyCode, 21)
     }
+
+    func testLeftAndRightCommandAreNotEquivalentHotkeys() {
+        XCTAssertFalse(
+            ModeBinding.hotkeysAreEquivalent(
+                keyCode: 55,
+                modifiers: 0,
+                otherKeyCode: 54,
+                otherModifiers: 0
+            )
+        )
+    }
+
+    func testLeftAndRightOptionAreNotEquivalentHotkeys() {
+        XCTAssertFalse(
+            ModeBinding.hotkeysAreEquivalent(
+                keyCode: 58,
+                modifiers: 0,
+                otherKeyCode: 61,
+                otherModifiers: 0
+            )
+        )
+    }
+
+    func testLeftAndRightShiftAreNotEquivalentHotkeys() {
+        XCTAssertFalse(
+            ModeBinding.hotkeysAreEquivalent(
+                keyCode: 56,
+                modifiers: 0,
+                otherKeyCode: 60,
+                otherModifiers: 0
+            )
+        )
+    }
+
+    func testLeftAndRightControlAreNotEquivalentHotkeys() {
+        XCTAssertFalse(
+            ModeBinding.hotkeysAreEquivalent(
+                keyCode: 59,
+                modifiers: 0,
+                otherKeyCode: 62,
+                otherModifiers: 0
+            )
+        )
+    }
+
+    func testModifierKeyCodesExtractionFromDeviceMasks() {
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+        let rightCmdRaw = ModeBinding.deviceRightCommandMask | CGEventFlags.maskCommand.rawValue
+        let bothCmdRaw = ModeBinding.deviceLeftCommandMask | ModeBinding.deviceRightCommandMask | CGEventFlags.maskCommand.rawValue
+
+        XCTAssertEqual(
+            ModeBinding.modifierKeyCodes(forRawFlags: leftCmdRaw, standardFlags: [.maskCommand]),
+            [55]
+        )
+        XCTAssertEqual(
+            ModeBinding.modifierKeyCodes(forRawFlags: rightCmdRaw, standardFlags: [.maskCommand]),
+            [54]
+        )
+        XCTAssertEqual(
+            ModeBinding.modifierKeyCodes(forRawFlags: bothCmdRaw, standardFlags: [.maskCommand]),
+            [55, 54]
+        )
+
+        let comboRaw = ModeBinding.deviceLeftShiftMask | CGEventFlags.maskShift.rawValue | CGEventFlags.maskSecondaryFn.rawValue
+        XCTAssertEqual(
+            ModeBinding.modifierKeyCodes(forRawFlags: comboRaw, standardFlags: [.maskShift, .maskSecondaryFn]),
+            [56, 63]
+        )
+    }
+
+    func testIsModifierPressedDistinguishesLeftAndRightSides() {
+        let leftCmdFlags = CGEventFlags(rawValue: ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue)
+        let rightCmdFlags = CGEventFlags(rawValue: ModeBinding.deviceRightCommandMask | CGEventFlags.maskCommand.rawValue)
+
+        XCTAssertTrue(ModeBinding.isModifierPressed(keyCode: 55, flags: leftCmdFlags))
+        XCTAssertFalse(ModeBinding.isModifierPressed(keyCode: 54, flags: leftCmdFlags))
+
+        XCTAssertTrue(ModeBinding.isModifierPressed(keyCode: 54, flags: rightCmdFlags))
+        XCTAssertFalse(ModeBinding.isModifierPressed(keyCode: 55, flags: rightCmdFlags))
+    }
 }

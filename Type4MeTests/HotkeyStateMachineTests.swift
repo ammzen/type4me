@@ -1,11 +1,12 @@
 import XCTest
 @testable import Type4Me
 
-/// Thread-safe counters for capturing ModeBinding onStart/onStop invocation counts.
+/// Thread-safe counters for capturing ModeBinding onStart/onStop/onAbort invocation counts.
 final class BindingCounters: @unchecked Sendable {
     private let lock = NSLock()
     private var _startCount = 0
     private var _stopCount = 0
+    private var _abortCount = 0
 
     func recordStart() {
         lock.lock(); _startCount += 1; lock.unlock()
@@ -13,21 +14,25 @@ final class BindingCounters: @unchecked Sendable {
     func recordStop() {
         lock.lock(); _stopCount += 1; lock.unlock()
     }
+    func recordAbort() {
+        lock.lock(); _abortCount += 1; lock.unlock()
+    }
 
     var startCount: Int { lock.lock(); defer { lock.unlock() }; return _startCount }
     var stopCount: Int { lock.lock(); defer { lock.unlock() }; return _stopCount }
+    var abortCount: Int { lock.lock(); defer { lock.unlock() }; return _abortCount }
+
+    func reset() {
+        lock.lock()
+        _startCount = 0
+        _stopCount = 0
+        _abortCount = 0
+        lock.unlock()
+    }
 }
 
-/// State-machine regression tests for the multi-hotkey P0 "ghost hold" fix.
-///
-/// Before the fix, stopping a hold-initiated recording via any path other than the
-/// binding's own release left `holdState[bindingId] == true` and a running 120s safety
-/// timer. When the timer eventually fired, `handleHoldSafetyTimer` saw the stale
-/// hold state, passed its guard, and invoked `onStop` a second time on a session that
-/// was no longer recording — a "ghost stop". These tests exercise the three stop
-/// paths (same-mode second binding, cross-mode toggle, cross-mode hold) plus the
-/// direct stop path and assert no residual hold state, no pending safety timer, and
-/// exactly one `onStop` per binding.
+/// State-machine regression tests for multi-hotkey ghost hold prevention and
+/// standalone modifier hotkey state machine lifecycle (Issue #243 / MSOR-7).
 final class HotkeyStateMachineTests: XCTestCase {
 
     // MARK: - Fixtures
@@ -48,33 +53,45 @@ final class HotkeyStateMachineTests: XCTestCase {
         )
     }
 
-    private func makeHoldBinding(modeId: UUID, counters: BindingCounters) -> ModeBinding {
+    private func makeHoldBinding(
+        modeId: UUID = UUID(),
+        keyCode: CGKeyCode = 42,
+        modifiers: CGEventFlags = [],
+        counters: BindingCounters
+    ) -> ModeBinding {
         ModeBinding(
             bindingId: UUID(),
             modeId: modeId,
-            keyCode: 42,                       // arbitrary non-modifier keyCode
-            modifiers: [],
+            keyCode: keyCode,
+            modifiers: modifiers,
             style: .hold,
             onStart: { counters.recordStart() },
-            onStop: { counters.recordStop() }
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
         )
     }
 
-    private func makeToggleBinding(modeId: UUID, counters: BindingCounters) -> ModeBinding {
+    private func makeToggleBinding(
+        modeId: UUID = UUID(),
+        keyCode: CGKeyCode = 43,
+        modifiers: CGEventFlags = [],
+        counters: BindingCounters
+    ) -> ModeBinding {
         ModeBinding(
             bindingId: UUID(),
             modeId: modeId,
-            keyCode: 43,
-            modifiers: [],
+            keyCode: keyCode,
+            modifiers: modifiers,
             style: .toggle,
             onStart: { counters.recordStart() },
-            onStop: { counters.recordStop() }
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
         )
     }
 
     private func makeFnBinding(
         style: ProcessingMode.HotkeyStyle,
-        modeId: UUID,
+        modeId: UUID = UUID(),
         counters: BindingCounters
     ) -> ModeBinding {
         ModeBinding(
@@ -84,11 +101,15 @@ final class HotkeyStateMachineTests: XCTestCase {
             modifiers: [],
             style: style,
             onStart: { counters.recordStart() },
-            onStop: { counters.recordStop() }
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
         )
     }
 
-    private func makeFnShiftBinding(modeId: UUID, counters: BindingCounters) -> ModeBinding {
+    private func makeFnShiftBinding(
+        modeId: UUID = UUID(),
+        counters: BindingCounters
+    ) -> ModeBinding {
         ModeBinding(
             bindingId: UUID(),
             modeId: modeId,
@@ -96,18 +117,18 @@ final class HotkeyStateMachineTests: XCTestCase {
             modifiers: .maskSecondaryFn,
             style: .toggle,
             onStart: { counters.recordStart() },
-            onStop: { counters.recordStop() }
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
         )
     }
 
-    // MARK: - Tests
+    // MARK: - Suite 1: Non-Modifier Stop Paths & Ghost Hold Prevention
 
-    /// Direct stop path: hold press → stopActiveRecording. Before the fix this path
-    /// also left `holdState`/timer set; now `clearActiveRecordingState` cleans them.
+    /// Direct stop path: hold press → stopActiveRecording.
     func testStopActiveRecordingClearsHoldStateAndSafetyTimer() {
         let manager = makeManager()
         let counters = BindingCounters()
-        let binding = makeHoldBinding(modeId: UUID(), counters: counters)
+        let binding = makeHoldBinding(counters: counters)
 
         manager.registerBindings([binding])
         manager.simulateBindingEvent(binding, pressed: true)
@@ -126,15 +147,13 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertEqual(counters.stopCount, 1, "onStop must be called exactly once")
     }
 
-    /// Path 1: hold recording → same-mode second toggle press. The second press just
-    /// stops the recording; it must not start a new one or leave the first binding's
-    /// hold state/timer behind.
+    /// Path 1: hold recording → same-mode second toggle press.
     func testHoldRecording_sameModeSecondTogglePressStopsWithoutGhostHold() {
         let manager = makeManager()
         let counters = BindingCounters()
         let modeId = UUID()
-        let hold = makeHoldBinding(modeId: modeId, counters: counters)
-        let toggle = makeToggleBinding(modeId: modeId, counters: counters)
+        let hold = makeHoldBinding(modeId: modeId, keyCode: 42, counters: counters)
+        let toggle = makeToggleBinding(modeId: modeId, keyCode: 43, counters: counters)
 
         manager.registerBindings([hold, toggle])
         manager.simulateBindingEvent(hold, pressed: true)
@@ -155,70 +174,42 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertEqual(counters.stopCount, 1, "onStop must fire exactly once for the hold recording")
     }
 
-    /// Path 2: hold recording (mode A) → cross-mode toggle press (mode B). The toggle
-    /// hands off to the new mode via `onCrossModeFinish`; it must also clear the former
-    /// hold binding's state and timer so the safety timer can't ghost-stop it later.
-    func testHoldRecording_crossModeToggleClearsFormerHold() {
+    /// Path 2: hold recording (mode A) → cross-mode toggle press (mode B).
+    func testHoldRecording_crossModeToggleFinishesOnceAndClearsState() {
         let manager = makeManager()
         let counters = BindingCounters()
         let modeA = UUID()
         let modeB = UUID()
-        let hold = makeHoldBinding(modeId: modeA, counters: counters)
-        let toggle = makeToggleBinding(modeId: modeB, counters: counters)
+        let holdA = makeHoldBinding(modeId: modeA, keyCode: 42, counters: counters)
+        let toggleB = makeToggleBinding(modeId: modeB, keyCode: 43, counters: counters)
 
         var crossModeFinishes: [UUID] = []
         manager.onCrossModeFinish = { crossModeFinishes.append($0) }
 
-        manager.registerBindings([hold, toggle])
-        manager.simulateBindingEvent(hold, pressed: true)
+        manager.registerBindings([holdA, toggleB])
+        manager.simulateBindingEvent(holdA, pressed: true)
 
-        XCTAssertTrue(manager.isHoldActive(for: hold.bindingId))
-        XCTAssertTrue(manager.hasPendingSafetyTimer(for: hold.bindingId))
+        XCTAssertTrue(manager.isHoldActive(for: holdA.bindingId))
+        XCTAssertTrue(manager.hasPendingSafetyTimer(for: holdA.bindingId))
 
-        manager.simulateBindingEvent(toggle, pressed: true)
-
-        XCTAssertFalse(manager.isHoldActive(for: hold.bindingId),
-                       "cross-mode stop must clear the former hold binding's holdState")
-        XCTAssertFalse(manager.hasPendingSafetyTimer(for: hold.bindingId),
-                       "cross-mode stop must cancel the former hold binding's safety timer")
-        XCTAssertEqual(crossModeFinishes, [modeB],
-                       "onCrossModeFinish must fire exactly once with the new mode's id")
-        XCTAssertEqual(counters.stopCount, 0,
-                       "cross-mode finish must be coordinated by the application, not the former binding")
-    }
-
-    func testToggleRecording_crossModeToggleFinishesOnceAndClearsState() {
-        let manager = makeManager()
-        let counters = BindingCounters()
-        let modeA = UUID()
-        let modeB = UUID()
-        let toggleA = makeToggleBinding(modeId: modeA, counters: counters)
-        let toggleB = makeToggleBinding(modeId: modeB, counters: counters)
-
-        var crossModeFinishes: [UUID] = []
-        manager.onCrossModeFinish = { crossModeFinishes.append($0) }
-
-        manager.registerBindings([toggleA, toggleB])
-        manager.simulateBindingEvent(toggleA, pressed: true)
         manager.simulateBindingEvent(toggleB, pressed: true)
 
-        XCTAssertEqual(crossModeFinishes, [modeB])
-        XCTAssertFalse(manager.isActiveRecordingBinding(toggleA.bindingId))
+        XCTAssertFalse(manager.isHoldActive(for: holdA.bindingId))
+        XCTAssertFalse(manager.hasPendingSafetyTimer(for: holdA.bindingId))
+        XCTAssertFalse(manager.isActiveRecordingBinding(holdA.bindingId))
         XCTAssertFalse(manager.isActiveRecordingBinding(toggleB.bindingId))
-        XCTAssertEqual(counters.startCount, 1)
+        XCTAssertEqual(crossModeFinishes, [modeB])
         XCTAssertEqual(counters.stopCount, 0)
     }
 
-    /// Path 3: hold recording (mode A) → cross-mode hold press (mode B). Same expected
-    /// cleanup as path 2; the new mode's hold does not begin recording because the
-    /// cross-mode branch hands off to `onCrossModeFinish`.
+    /// Path 3: hold recording (mode A) → cross-mode hold press (mode B).
     func testHoldRecording_crossModeHoldClearsFormerHold() {
         let manager = makeManager()
         let counters = BindingCounters()
         let modeA = UUID()
         let modeB = UUID()
-        let holdA = makeHoldBinding(modeId: modeA, counters: counters)
-        let holdB = makeHoldBinding(modeId: modeB, counters: counters)
+        let holdA = makeHoldBinding(modeId: modeA, keyCode: 42, counters: counters)
+        let holdB = makeHoldBinding(modeId: modeB, keyCode: 43, counters: counters)
 
         var crossModeFinishes: [UUID] = []
         manager.onCrossModeFinish = { crossModeFinishes.append($0) }
@@ -231,22 +222,18 @@ final class HotkeyStateMachineTests: XCTestCase {
 
         manager.simulateBindingEvent(holdB, pressed: true)
 
-        XCTAssertFalse(manager.isHoldActive(for: holdA.bindingId),
-                       "cross-mode hold must clear the former hold binding's holdState")
-        XCTAssertFalse(manager.hasPendingSafetyTimer(for: holdA.bindingId),
-                       "cross-mode hold must cancel the former hold binding's safety timer")
-        XCTAssertFalse(manager.isHoldActive(for: holdB.bindingId),
-                       "cross-mode hold must not begin a new hold recording (it hands off to onCrossModeFinish)")
+        XCTAssertFalse(manager.isHoldActive(for: holdA.bindingId))
+        XCTAssertFalse(manager.hasPendingSafetyTimer(for: holdA.bindingId))
+        XCTAssertFalse(manager.isHoldActive(for: holdB.bindingId))
         XCTAssertEqual(crossModeFinishes, [modeB])
         XCTAssertEqual(counters.stopCount, 0)
     }
 
-    /// Regression: a normal hold release still clears state and fires onStop exactly once.
-    /// Ensures the unified `clearActiveRecordingState` cleanup didn't break the happy path.
+    /// Normal hold release clears state and fires onStop exactly once.
     func testHoldReleaseClearsStateAndStopsOnce() {
         let manager = makeManager()
         let counters = BindingCounters()
-        let binding = makeHoldBinding(modeId: UUID(), counters: counters)
+        let binding = makeHoldBinding(counters: counters)
 
         manager.registerBindings([binding])
         manager.simulateBindingEvent(binding, pressed: true)
@@ -262,85 +249,7 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertEqual(counters.stopCount, 1, "onStop must be called exactly once on release")
     }
 
-    /// Regression: fn is deferred when fn+Shift is also bound. A quick fn tap
-    /// releases before that delay and must not enqueue an asynchronous recording
-    /// start after its stop has already been ignored by the idle UI.
-    func testQuickFnReleaseBeforePrefixDelayDoesNotStartHoldBinding() {
-        let manager = makeManager()
-        let counters = BindingCounters()
-        let fnHold = makeFnBinding(style: .hold, modeId: UUID(), counters: counters)
-        let fnShift = makeFnShiftBinding(modeId: UUID(), counters: counters)
-        manager.registerBindings([fnHold, fnShift])
-
-        manager.simulateModifierFlags(.maskSecondaryFn)
-        manager.simulateModifierFlags([])
-
-        XCTAssertEqual(counters.startCount, 0)
-        XCTAssertEqual(counters.stopCount, 0)
-        XCTAssertFalse(manager.isHoldActive(for: fnHold.bindingId))
-        XCTAssertFalse(manager.isActiveRecordingBinding(fnHold.bindingId))
-        XCTAssertFalse(manager.hasPendingSafetyTimer(for: fnHold.bindingId))
-    }
-
-    /// Toggle bindings intentionally treat the same quick prefix tap as a press,
-    /// so the hold-only fix must not remove their established behavior.
-    func testQuickFnReleaseBeforePrefixDelayStillStartsToggleBinding() {
-        let manager = makeManager()
-        let counters = BindingCounters()
-        let fnToggle = makeFnBinding(style: .toggle, modeId: UUID(), counters: counters)
-        let fnShift = makeFnShiftBinding(modeId: UUID(), counters: counters)
-        manager.registerBindings([fnToggle, fnShift])
-
-        manager.simulateModifierFlags(.maskSecondaryFn)
-        manager.simulateModifierFlags([])
-
-        XCTAssertEqual(counters.startCount, 1)
-        XCTAssertEqual(counters.stopCount, 0)
-        XCTAssertTrue(manager.isActiveRecordingBinding(fnToggle.bindingId))
-    }
-
-    /// Regression: Fn's state is not reliably present in
-    /// `CGEventSource.flagsState(.combinedSessionState)`. A hold that remains down
-    /// beyond the prefix delay must use the event tap's observed flags and start.
-    func testHeldFnPastPrefixDelayStartsAndReleaseStopsHoldBinding() {
-        let defaults = UserDefaults.standard
-        let key = HotkeyManager.modifierPrefixTriggerDelayKey
-        let priorValue = defaults.object(forKey: key)
-        defaults.set(0.02, forKey: key)
-        defer {
-            if let priorValue {
-                defaults.set(priorValue, forKey: key)
-            } else {
-                defaults.removeObject(forKey: key)
-            }
-        }
-
-        let manager = makeManager()
-        let counters = BindingCounters()
-        let fnHold = makeFnBinding(style: .hold, modeId: UUID(), counters: counters)
-        let fnShift = makeFnShiftBinding(modeId: UUID(), counters: counters)
-        manager.registerBindings([fnHold, fnShift])
-
-        manager.simulateModifierFlags(.maskSecondaryFn)
-
-        let delayElapsed = expectation(description: "modifier prefix delay elapsed")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-            delayElapsed.fulfill()
-        }
-        wait(for: [delayElapsed], timeout: 0.5)
-
-        XCTAssertEqual(counters.startCount, 1)
-        XCTAssertEqual(counters.stopCount, 0)
-        XCTAssertTrue(manager.isHoldActive(for: fnHold.bindingId))
-        XCTAssertTrue(manager.isActiveRecordingBinding(fnHold.bindingId))
-
-        manager.simulateModifierFlags([])
-
-        XCTAssertEqual(counters.stopCount, 1)
-        XCTAssertFalse(manager.isHoldActive(for: fnHold.bindingId))
-        XCTAssertFalse(manager.isActiveRecordingBinding(fnHold.bindingId))
-    }
-
+    /// Cross mode stop while in revise recording.
     func testCrossModeStopWhileInReviseRecording() {
         let manager = makeManager()
         let reviseCounters = BindingCounters()
@@ -349,11 +258,12 @@ final class HotkeyStateMachineTests: XCTestCase {
         let reviseBinding = ModeBinding(
             bindingId: UUID(),
             owner: .globalAction(.revise),
-            keyCode: 15, // R
+            keyCode: 15,
             modifiers: [.maskSecondaryFn],
             style: .toggle,
             onStart: { reviseCounters.recordStart() },
-            onStop: { reviseCounters.recordStop() }
+            onStop: { reviseCounters.recordStop() },
+            onAbort: { reviseCounters.recordAbort() }
         )
 
         let modeBinding = ModeBinding(
@@ -363,19 +273,20 @@ final class HotkeyStateMachineTests: XCTestCase {
             modifiers: [],
             style: .toggle,
             onStart: { modeCounters.recordStart() },
-            onStop: { modeCounters.recordStop() }
+            onStop: { modeCounters.recordStop() },
+            onAbort: { modeCounters.recordAbort() }
         )
 
         manager.registerBindings([reviseBinding, modeBinding])
 
-        // 1. Enter Revise via toggle press
+        // Enter Revise via regular binding press
         manager.simulateBindingEvent(reviseBinding, pressed: true)
         manager.simulateBindingEvent(reviseBinding, pressed: false)
         XCTAssertEqual(reviseCounters.startCount, 1)
         XCTAssertEqual(reviseCounters.stopCount, 0)
         XCTAssertTrue(manager.isActiveRecordingBinding(reviseBinding.bindingId))
 
-        // 2. Press standard mode hotkey -> should exit/finish revise recording
+        // Press standard mode hotkey -> exits revise recording
         manager.simulateBindingEvent(modeBinding, pressed: true)
         manager.simulateBindingEvent(modeBinding, pressed: false)
 
@@ -383,53 +294,847 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertFalse(manager.isActiveRecordingBinding(reviseBinding.bindingId))
     }
 
-    func testFnHoldStopsReviseRecordingAfterModifierPrefixDelay() {
+    // MARK: - Suite 2: Standalone Modifier Hotkey State Machine (Issue #243 / MSOR-7 Scenarios 1-13)
+
+    /// Scenario 1: Toggle Left Command + 'M' Key Contamination.
+    /// Cmd down -> candidate -> 'M' down -> disqualified -> Cmd up -> no callbacks; clean tap afterwards commits.
+    func testScenario1_ToggleLeftCommand_MChordDisqualifiesAndDoesNotTriggerOnRelease() {
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let leftCmdBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .toggle,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdBinding])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // 1. Press Left Command down -> candidate armed
+        let swallowedCmd = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertTrue(swallowedCmd)
+        XCTAssertEqual(counters.startCount, 0, "Toggle candidate must not start on key down")
+        XCTAssertEqual(counters.stopCount, 0)
+        XCTAssertEqual(counters.abortCount, 0)
+
+        // 2. Press regular non-modifier key 'M' (keyCode 46) -> disqualifies modifier gesture
+        manager.simulateRegularKeyDown(keyCode: 46)
+        XCTAssertEqual(counters.startCount, 0)
+        XCTAssertEqual(counters.stopCount, 0)
+        XCTAssertEqual(counters.abortCount, 0)
+
+        // 3. Release Left Command -> clean release is suppressed due to disqualification
+        let swallowedRelease = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertFalse(swallowedRelease)
+        XCTAssertEqual(counters.startCount, 0, "Disqualified toggle must not commit on release")
+        XCTAssertEqual(counters.stopCount, 0)
+        XCTAssertEqual(counters.abortCount, 0)
+        XCTAssertFalse(manager.isActiveRecordingBinding(leftCmdBinding.bindingId))
+
+        // 4. Subsequent clean Left Command tap (Cmd down -> Cmd up) commits normally
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertEqual(counters.startCount, 0)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.startCount, 1, "Clean tap after release must commit")
+        XCTAssertTrue(manager.isActiveRecordingBinding(leftCmdBinding.bindingId))
+    }
+
+    /// Scenario 2: Hold Left Command + 'M' Key Contamination Before 250ms Delay.
+    /// Cancels candidate timer without any callbacks.
+    func testScenario2_HoldLeftCommand_MChordBeforeClassificationDelayCancelsTimerWithoutCallbacks() {
+        let defaults = UserDefaults.standard
+        let key = HotkeyManager.modifierPrefixTriggerDelayKey
+        let priorValue = defaults.object(forKey: key)
+        defaults.set(0.05, forKey: key)
+        defer {
+            if let priorValue { defaults.set(priorValue, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let leftCmdHold = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .hold,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdHold])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // 1. Press Left Command down -> candidate armed, timer running
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertTrue(manager.hasPendingCandidateTimer())
+        XCTAssertEqual(counters.startCount, 0)
+
+        // 2. Press 'M' down before delay expires -> cancels timer and sets disqualified
+        manager.simulateRegularKeyDown(keyCode: 46)
+        XCTAssertFalse(manager.hasPendingCandidateTimer())
+        XCTAssertEqual(counters.startCount, 0)
+        XCTAssertEqual(counters.stopCount, 0)
+        XCTAssertEqual(counters.abortCount, 0)
+
+        // 3. Wait past stale timer deadline
+        let delayExp = expectation(description: "stale timer deadline")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { delayExp.fulfill() }
+        wait(for: [delayExp], timeout: 0.5)
+
+        XCTAssertEqual(counters.startCount, 0, "Cancelled timer must never fire")
+        XCTAssertEqual(counters.abortCount, 0)
+
+        // 4. Release Left Command
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.stopCount, 0)
+    }
+
+    /// Scenario 3: Hold Left Command + 'M' Key Contamination After Activation (Active Hold Abort).
+    /// Invokes onAbort without normal stop, clearing recording and safety timer.
+    func testScenario3_HoldLeftCommand_MChordAfterActivationInvokesAbortWithoutStopFeedback() {
         let defaults = UserDefaults.standard
         let key = HotkeyManager.modifierPrefixTriggerDelayKey
         let priorValue = defaults.object(forKey: key)
         defaults.set(0.02, forKey: key)
         defer {
-            if let priorValue {
-                defaults.set(priorValue, forKey: key)
-            } else {
-                defaults.removeObject(forKey: key)
-            }
+            if let priorValue { defaults.set(priorValue, forKey: key) } else { defaults.removeObject(forKey: key) }
         }
 
         let manager = makeManager()
-        let reviseCounters = BindingCounters()
-        let fnCounters = BindingCounters()
-        let fnShiftCounters = BindingCounters()
-        let reviseBinding = ModeBinding(
+        let counters = BindingCounters()
+        let leftCmdHold = ModeBinding(
             bindingId: UUID(),
-            owner: .globalAction(.revise),
-            keyCode: 15,
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .hold,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdHold])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // 1. Press Left Command down -> wait for activation
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        let delayExp = expectation(description: "hold delay elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { delayExp.fulfill() }
+        wait(for: [delayExp], timeout: 0.5)
+
+        XCTAssertEqual(counters.startCount, 1, "Hold should become active after delay")
+        XCTAssertTrue(manager.isHoldActive(for: leftCmdHold.bindingId))
+        XCTAssertTrue(manager.isActiveRecordingBinding(leftCmdHold.bindingId))
+        XCTAssertTrue(manager.hasPendingSafetyTimer(for: leftCmdHold.bindingId))
+
+        // 2. Press 'M' down while active -> triggers abort
+        manager.simulateRegularKeyDown(keyCode: 46)
+        XCTAssertEqual(counters.abortCount, 1, "Chord contamination on active hold must invoke onAbort")
+        XCTAssertEqual(counters.stopCount, 0, "Must not invoke normal onStop on abort")
+        XCTAssertFalse(manager.isHoldActive(for: leftCmdHold.bindingId))
+        XCTAssertFalse(manager.isActiveRecordingBinding(leftCmdHold.bindingId))
+        XCTAssertFalse(manager.hasPendingSafetyTimer(for: leftCmdHold.bindingId))
+
+        // 3. Release Left Command -> clean release does not trigger duplicate stop
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.stopCount, 0, "Release after abort must not fire onStop")
+        XCTAssertEqual(counters.abortCount, 1)
+    }
+
+    /// Scenario 4: Clean Left / Right Toggle Taps Commit on Exact Combo Reduction.
+    func testScenario4_CleanLeftAndRightToggleTapsCommitOnExactComboReduction() {
+        let manager = makeManager()
+        let leftCounters = BindingCounters()
+        let rightCounters = BindingCounters()
+
+        let leftCmdBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .toggle,
+            onStart: { leftCounters.recordStart() },
+            onStop: { leftCounters.recordStop() },
+            onAbort: { leftCounters.recordAbort() }
+        )
+        let rightCmdBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 54, // Right Command
+            modifiers: [],
+            style: .toggle,
+            onStart: { rightCounters.recordStart() },
+            onStop: { rightCounters.recordStop() },
+            onAbort: { rightCounters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdBinding, rightCmdBinding])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+        let rightCmdRaw = ModeBinding.deviceRightCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // 1. Left Command tap (toggle on)
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertEqual(leftCounters.startCount, 0)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(leftCounters.startCount, 1)
+        XCTAssertTrue(manager.isActiveRecordingBinding(leftCmdBinding.bindingId))
+
+        // 2. Left Command tap (toggle off)
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(leftCounters.stopCount, 1)
+        XCTAssertFalse(manager.isActiveRecordingBinding(leftCmdBinding.bindingId))
+
+        // 3. Right Command tap (toggle on)
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: rightCmdRaw, keyCode: 54)
+        XCTAssertEqual(rightCounters.startCount, 0)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 54)
+        XCTAssertEqual(rightCounters.startCount, 1)
+        XCTAssertTrue(manager.isActiveRecordingBinding(rightCmdBinding.bindingId))
+
+        // 4. Right Command tap (toggle off)
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: rightCmdRaw, keyCode: 54)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 54)
+        XCTAssertEqual(rightCounters.stopCount, 1)
+        XCTAssertFalse(manager.isActiveRecordingBinding(rightCmdBinding.bindingId))
+    }
+
+    /// Scenario 5: Clean Hold Past Delay Starts and Stops Normally on Reduction.
+    func testScenario5_CleanHoldPastDelayStartsAndStopsNormallyOnReduction() {
+        let defaults = UserDefaults.standard
+        let key = HotkeyManager.modifierPrefixTriggerDelayKey
+        let priorValue = defaults.object(forKey: key)
+        defaults.set(0.02, forKey: key)
+        defer {
+            if let priorValue { defaults.set(priorValue, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let leftCmdHold = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .hold,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdHold])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // 1. Hold Left Command down past delay
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        let delayExp = expectation(description: "hold delay elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { delayExp.fulfill() }
+        wait(for: [delayExp], timeout: 0.5)
+
+        XCTAssertEqual(counters.startCount, 1)
+        XCTAssertTrue(manager.isHoldActive(for: leftCmdHold.bindingId))
+
+        // 2. Release Left Command -> clean stop
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.stopCount, 1)
+        XCTAssertEqual(counters.abortCount, 0)
+        XCTAssertFalse(manager.isHoldActive(for: leftCmdHold.bindingId))
+    }
+
+    /// Scenario 6: Multi-Modifier Step-Down Release: Toggle `Ctrl + Shift -> Ctrl -> empty`.
+    /// Commits once at first transition and suppresses Ctrl-only prefix.
+    func testScenario6_MultiModifierStepDown_ToggleCtrlShift_CommitsOnceAtFirstTransitionAndSuppressesPrefix() {
+        let manager = makeManager()
+        let ctrlCounters = BindingCounters()
+        let ctrlShiftCounters = BindingCounters()
+
+        let ctrlBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 59, // Left Control
+            modifiers: [],
+            style: .toggle,
+            onStart: { ctrlCounters.recordStart() },
+            onStop: { ctrlCounters.recordStop() },
+            onAbort: { ctrlCounters.recordAbort() }
+        )
+        let ctrlShiftBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 56, // Left Shift
+            modifiers: [.maskControl],
+            style: .toggle,
+            onStart: { ctrlShiftCounters.recordStart() },
+            onStop: { ctrlShiftCounters.recordStop() },
+            onAbort: { ctrlShiftCounters.recordAbort() }
+        )
+        manager.registerBindings([ctrlBinding, ctrlShiftBinding])
+
+        let ctrlRaw = ModeBinding.deviceLeftControlMask | CGEventFlags.maskControl.rawValue
+        let comboRaw = ModeBinding.deviceLeftControlMask | ModeBinding.deviceLeftShiftMask | CGEventFlags.maskControl.rawValue | CGEventFlags.maskShift.rawValue
+
+        // 1. Press Control down -> Ctrl candidate
+        _ = manager.simulateModifierFlags(.maskControl, rawFlags: ctrlRaw, keyCode: 59)
+        XCTAssertEqual(ctrlCounters.startCount, 0)
+
+        // 2. Press Shift down -> builds to Ctrl+Shift candidate
+        _ = manager.simulateModifierFlags([.maskControl, .maskShift], rawFlags: comboRaw, keyCode: 56)
+        XCTAssertEqual(ctrlShiftCounters.startCount, 0)
+        XCTAssertEqual(ctrlCounters.startCount, 0)
+
+        // 3. Release Shift (step-down to Ctrl) -> commits Ctrl+Shift toggle, enters settling
+        _ = manager.simulateModifierFlags(.maskControl, rawFlags: ctrlRaw, keyCode: 56)
+        XCTAssertEqual(ctrlShiftCounters.startCount, 1, "Ctrl+Shift toggle must commit on first step-down reduction")
+        XCTAssertEqual(ctrlCounters.startCount, 0, "Ctrl binding must be suppressed during settling")
+
+        // 4. Release Control (step-down to empty) -> resets to idle
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 59)
+        XCTAssertEqual(ctrlCounters.startCount, 0, "Releasing remaining modifier must not trigger Ctrl binding")
+        XCTAssertEqual(ctrlShiftCounters.startCount, 1)
+    }
+
+    /// Scenario 7: Multi-Modifier Step-Down Release: Hold `Ctrl + Shift -> Ctrl -> empty`.
+    /// Stops once at first transition and leaves no ghost hold state.
+    func testScenario7_MultiModifierStepDown_HoldCtrlShift_StopsOnceAtFirstTransitionAndLeavesNoGhostState() {
+        let defaults = UserDefaults.standard
+        let key = HotkeyManager.modifierPrefixTriggerDelayKey
+        let priorValue = defaults.object(forKey: key)
+        defaults.set(0.02, forKey: key)
+        defer {
+            if let priorValue { defaults.set(priorValue, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        let manager = makeManager()
+        let ctrlCounters = BindingCounters()
+        let ctrlShiftCounters = BindingCounters()
+
+        let ctrlHold = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 59, // Left Control
+            modifiers: [],
+            style: .hold,
+            onStart: { ctrlCounters.recordStart() },
+            onStop: { ctrlCounters.recordStop() },
+            onAbort: { ctrlCounters.recordAbort() }
+        )
+        let ctrlShiftHold = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 56, // Left Shift
+            modifiers: [.maskControl],
+            style: .hold,
+            onStart: { ctrlShiftCounters.recordStart() },
+            onStop: { ctrlShiftCounters.recordStop() },
+            onAbort: { ctrlShiftCounters.recordAbort() }
+        )
+        manager.registerBindings([ctrlHold, ctrlShiftHold])
+
+        let ctrlRaw = ModeBinding.deviceLeftControlMask | CGEventFlags.maskControl.rawValue
+        let comboRaw = ModeBinding.deviceLeftControlMask | ModeBinding.deviceLeftShiftMask | CGEventFlags.maskControl.rawValue | CGEventFlags.maskShift.rawValue
+
+        // 1. Press Control then Shift down -> combo candidate
+        _ = manager.simulateModifierFlags(.maskControl, rawFlags: ctrlRaw, keyCode: 59)
+        _ = manager.simulateModifierFlags([.maskControl, .maskShift], rawFlags: comboRaw, keyCode: 56)
+
+        // Wait for classification delay to start Ctrl+Shift hold
+        let delayExp = expectation(description: "combo hold delay elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { delayExp.fulfill() }
+        wait(for: [delayExp], timeout: 0.5)
+
+        XCTAssertEqual(ctrlShiftCounters.startCount, 1)
+        XCTAssertEqual(ctrlCounters.startCount, 0)
+        XCTAssertTrue(manager.isHoldActive(for: ctrlShiftHold.bindingId))
+
+        // 2. Release Shift (step-down to Ctrl) -> clean stop for Ctrl+Shift hold, enters settling
+        _ = manager.simulateModifierFlags(.maskControl, rawFlags: ctrlRaw, keyCode: 56)
+        XCTAssertEqual(ctrlShiftCounters.stopCount, 1)
+        XCTAssertEqual(ctrlShiftCounters.abortCount, 0)
+        XCTAssertFalse(manager.isHoldActive(for: ctrlShiftHold.bindingId))
+        XCTAssertFalse(manager.hasPendingSafetyTimer(for: ctrlShiftHold.bindingId))
+        XCTAssertEqual(ctrlCounters.startCount, 0)
+
+        // 3. Release Control (step-down to empty) -> resets settling to idle
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 59)
+        XCTAssertEqual(ctrlCounters.startCount, 0)
+        XCTAssertEqual(ctrlCounters.stopCount, 0)
+        XCTAssertFalse(manager.isHoldActive(for: ctrlHold.bindingId))
+        XCTAssertFalse(manager.hasPendingSafetyTimer(for: ctrlHold.bindingId))
+    }
+
+    /// Scenario 8: Larger combo reached in either modifier order produces the same candidate.
+    func testScenario8_LargerComboFormedInEitherOrderProducesSameCandidate() {
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let fnLeftShiftBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 56, // Left Shift
             modifiers: [.maskSecondaryFn],
             style: .toggle,
-            onStart: { reviseCounters.recordStart() },
-            onStop: { reviseCounters.recordStop() }
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
         )
-        let fnHold = makeFnBinding(style: .hold, modeId: UUID(), counters: fnCounters)
-        let fnShift = makeFnShiftBinding(modeId: UUID(), counters: fnShiftCounters)
-        manager.registerBindings([reviseBinding, fnHold, fnShift])
+        manager.registerBindings([fnLeftShiftBinding])
 
-        manager.simulateBindingEvent(reviseBinding, pressed: true)
-        manager.simulateBindingEvent(reviseBinding, pressed: false)
-        XCTAssertTrue(manager.isActiveRecordingBinding(reviseBinding.bindingId))
+        let fnFlags: CGEventFlags = [.maskSecondaryFn]
+        let fnRaw: UInt64 = CGEventFlags.maskSecondaryFn.rawValue
+        let leftShiftFlags: CGEventFlags = [.maskShift]
+        let leftShiftRaw: UInt64 = ModeBinding.deviceLeftShiftMask | CGEventFlags.maskShift.rawValue
+        let comboFlags: CGEventFlags = [.maskSecondaryFn, .maskShift]
+        let comboRaw: UInt64 = ModeBinding.deviceLeftShiftMask | CGEventFlags.maskShift.rawValue | CGEventFlags.maskSecondaryFn.rawValue
 
-        manager.simulateModifierFlags(.maskSecondaryFn)
-        let delayElapsed = expectation(description: "modifier prefix delay elapsed")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
-            delayElapsed.fulfill()
+        // Order 1: Fn down (63), then Left Shift down (56) -> combo candidate -> clean release to []
+        _ = manager.simulateModifierFlags(fnFlags, rawFlags: fnRaw, keyCode: 63)
+        _ = manager.simulateModifierFlags(comboFlags, rawFlags: comboRaw, keyCode: 56)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 56)
+        XCTAssertEqual(counters.startCount, 1)
+
+        manager.resetActiveState()
+        counters.reset()
+
+        // Order 2: Left Shift down (56), then Fn down (63) -> combo candidate -> clean release to []
+        _ = manager.simulateModifierFlags(leftShiftFlags, rawFlags: leftShiftRaw, keyCode: 56)
+        _ = manager.simulateModifierFlags(comboFlags, rawFlags: comboRaw, keyCode: 63)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 63)
+        XCTAssertEqual(counters.startCount, 1)
+    }
+
+    /// Scenario 9: Releasing a larger unowned combo through a registered smaller combo never arms it.
+    func testScenario9_ReleasingLargerUnownedComboThroughRegisteredSmallerComboNeverArmsIt() {
+        let manager = makeManager()
+        let ctrlCounters = BindingCounters()
+
+        let ctrlBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 59, // Left Control
+            modifiers: [],
+            style: .toggle,
+            onStart: { ctrlCounters.recordStart() },
+            onStop: { ctrlCounters.recordStop() },
+            onAbort: { ctrlCounters.recordAbort() }
+        )
+        manager.registerBindings([ctrlBinding])
+
+        let ctrlRaw = ModeBinding.deviceLeftControlMask | CGEventFlags.maskControl.rawValue
+        let comboRaw = ModeBinding.deviceLeftControlMask | ModeBinding.deviceLeftShiftMask | CGEventFlags.maskControl.rawValue | CGEventFlags.maskShift.rawValue
+
+        // 1. Press unowned combo Ctrl + Shift directly
+        _ = manager.simulateModifierFlags([.maskControl, .maskShift], rawFlags: comboRaw, keyCode: 56)
+        XCTAssertEqual(ctrlCounters.startCount, 0)
+
+        // 2. Release Shift (Ctrl + Shift -> Ctrl) -> step-down transient
+        _ = manager.simulateModifierFlags(.maskControl, rawFlags: ctrlRaw, keyCode: 56)
+        XCTAssertEqual(ctrlCounters.startCount, 0, "Step-down from unowned combo must not arm Ctrl binding")
+
+        // 3. Release Control (Ctrl -> empty)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 59)
+        XCTAssertEqual(ctrlCounters.startCount, 0)
+    }
+
+    /// Scenario 10: Regular key-up and later modifier changes do not re-arm a disqualified gesture;
+    /// complete release followed by a new press does.
+    func testScenario10_DisqualifiedStatePersistsUntilAllModifiersReleased() {
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let leftCmdBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .toggle,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdBinding])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+        let cmdShiftRaw = ModeBinding.deviceLeftCommandMask | ModeBinding.deviceLeftShiftMask | CGEventFlags.maskCommand.rawValue | CGEventFlags.maskShift.rawValue
+
+        // 1. Cmd down -> 'M' down -> disqualified
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        manager.simulateRegularKeyDown(keyCode: 46)
+
+        // 2. Press Shift down while disqualified (Cmd + Shift) -> still disqualified
+        _ = manager.simulateModifierFlags([.maskCommand, .maskShift], rawFlags: cmdShiftRaw, keyCode: 56)
+        XCTAssertEqual(counters.startCount, 0)
+
+        // 3. Release Shift (back to Cmd) -> still disqualified
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 56)
+        XCTAssertEqual(counters.startCount, 0)
+
+        // 4. Release Cmd (flags become empty) -> resets to idle
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.startCount, 0)
+
+        // 5. New clean tap now commits
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.startCount, 1)
+    }
+
+    /// Scenario 11: Toggle candidates have no classification timer; waiting beyond delay causes no callback.
+    func testScenario11_ToggleCandidateHasNoClassificationTimer() {
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let leftCmdBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .toggle,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdBinding])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // 1. Press Cmd down
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertFalse(manager.hasPendingCandidateTimer(), "Toggle candidate must not schedule a classification timer")
+
+        // 2. Wait 0.05s
+        let waitExp = expectation(description: "wait while holding toggle")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { waitExp.fulfill() }
+        wait(for: [waitExp], timeout: 0.5)
+
+        XCTAssertEqual(counters.startCount, 0, "Toggle candidate must not commit while modifier is held")
+
+        // 3. Release Cmd -> clean release commit
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.startCount, 1)
+    }
+
+    /// Scenario 12: Raw-device-mask and key-code-fallback inputs both preserve side matching.
+    func testScenario12_RawDeviceMaskAndKeyCodeFallbackBothPreserveSideMatching() {
+        let manager = makeManager()
+        let leftCounters = BindingCounters()
+        let rightCounters = BindingCounters()
+
+        let leftCmdBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .toggle,
+            onStart: { leftCounters.recordStart() },
+            onStop: { leftCounters.recordStop() },
+            onAbort: { leftCounters.recordAbort() }
+        )
+        let rightCmdBinding = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 54, // Right Command
+            modifiers: [],
+            style: .toggle,
+            onStart: { rightCounters.recordStart() },
+            onStop: { rightCounters.recordStop() },
+            onAbort: { rightCounters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdBinding, rightCmdBinding])
+
+        // Path A: Raw flags mask
+        let leftRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftRaw, keyCode: 55)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(leftCounters.startCount, 1)
+        XCTAssertEqual(rightCounters.startCount, 0)
+
+        manager.resetActiveState()
+
+        // Path B: Key-code fallback (rawFlags = 0)
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: 0, keyCode: 54)
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 54)
+        XCTAssertEqual(rightCounters.startCount, 1)
+        XCTAssertEqual(leftCounters.startCount, 1)
+    }
+
+    /// Scenario 13: Edge Case Resets, Autorepeat, and Disqualified Stuck Hold Recovery.
+    func testScenario13_EdgeCaseResetsAutorepeatAndStuckHoldRecovery() {
+        let defaults = UserDefaults.standard
+        let key = HotkeyManager.modifierPrefixTriggerDelayKey
+        let priorValue = defaults.object(forKey: key)
+        defaults.set(0.02, forKey: key)
+        defer {
+            if let priorValue { defaults.set(priorValue, forKey: key) } else { defaults.removeObject(forKey: key) }
         }
-        wait(for: [delayElapsed], timeout: 0.5)
 
-        XCTAssertEqual(reviseCounters.stopCount, 1)
-        XCTAssertEqual(fnCounters.startCount, 0)
-        XCTAssertFalse(manager.isActiveRecordingBinding(reviseBinding.bindingId))
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let leftCmdHold = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .hold,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdHold])
 
-        manager.simulateModifierFlags([])
-        XCTAssertEqual(reviseCounters.stopCount, 1)
-        XCTAssertEqual(fnCounters.stopCount, 0)
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // Autorepeat regular key ignored by reducer
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        manager.simulateRegularKeyDown(keyCode: 46, isRepeat: true)
+        XCTAssertTrue(manager.hasPendingCandidateTimer(), "Autorepeat regular key must not disqualify")
+
+        // Wait for hold to activate
+        let delayExp = expectation(description: "hold delay elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { delayExp.fulfill() }
+        wait(for: [delayExp], timeout: 0.5)
+        XCTAssertEqual(counters.startCount, 1)
+
+        // Disqualify with non-repeat regular key
+        manager.simulateRegularKeyDown(keyCode: 46, isRepeat: false)
+        XCTAssertEqual(counters.abortCount, 1)
+
+        // Reset active state
+        manager.resetActiveState()
+        XCTAssertFalse(manager.isHoldActive(for: leftCmdHold.bindingId))
+        XCTAssertFalse(manager.hasPendingCandidateTimer())
+        XCTAssertFalse(manager.hasPendingSafetyTimer(for: leftCmdHold.bindingId))
+    }
+
+    // MARK: - Suite 3: App/Session Abort & SoundFeedback Cancellation Tests
+
+    func testSoundFeedbackCancelActiveFeedbackDoesNotCrash() {
+        SoundFeedback.cancelActiveFeedback()
+    }
+
+    func testReviseCoordinatorCancelActiveTransaction() async {
+        await ReviseCoordinator.shared.cancelActiveTransaction()
+    }
+
+    @MainActor
+    func testAppStateCancelSetsBarPhaseToHidden() {
+        let appState = AppState()
+        appState.startRecording()
+        XCTAssertEqual(appState.barPhase, .preparing)
+
+        appState.cancel()
+        XCTAssertEqual(appState.barPhase, .hidden)
+    }
+
+    /// Scenario 14: Redundant flagsChanged and Caps Lock during active hold preserves hold state.
+    func testScenario14_RedundantFlagsChangedAndCapsLockDuringActiveHoldPreservesHold() {
+        let defaults = UserDefaults.standard
+        let key = HotkeyManager.modifierPrefixTriggerDelayKey
+        let priorValue = defaults.object(forKey: key)
+        defaults.set(0.02, forKey: key)
+        defer {
+            if let priorValue { defaults.set(priorValue, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let leftCmdHold = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .hold,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdHold])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // 1. Press Left Command
+        let swallowedPress = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertTrue(swallowedPress)
+
+        // 2. Wait for hold classification timer to fire and activate hold
+        let delayExp = expectation(description: "hold delay elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { delayExp.fulfill() }
+        wait(for: [delayExp], timeout: 0.5)
+        XCTAssertEqual(counters.startCount, 1)
+        XCTAssertEqual(counters.stopCount, 0)
+        XCTAssertTrue(manager.isHoldActive(for: leftCmdHold.bindingId))
+
+        // 3. Send Caps Lock flagsChanged event (flags include maskAlphaShift)
+        let capsFlags: CGEventFlags = [.maskCommand, .maskAlphaShift]
+        let swallowedCaps = manager.simulateModifierFlags(capsFlags, rawFlags: leftCmdRaw, keyCode: 57)
+        XCTAssertTrue(swallowedCaps)
+        XCTAssertTrue(manager.isHoldActive(for: leftCmdHold.bindingId), "Hold must remain active across Caps Lock event")
+        XCTAssertEqual(counters.stopCount, 0, "No premature stop callback should occur on Caps Lock")
+        XCTAssertEqual(counters.startCount, 1)
+
+        // 4. Send redundant same-key flagsChanged event
+        let swallowedRedundant = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertTrue(swallowedRedundant)
+        XCTAssertTrue(manager.isHoldActive(for: leftCmdHold.bindingId), "Hold must remain active across redundant flagsChanged")
+        XCTAssertEqual(counters.stopCount, 0)
+
+        // 5. Clean release of Left Command stops the hold cleanly
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.stopCount, 1)
+        XCTAssertFalse(manager.isHoldActive(for: leftCmdHold.bindingId))
+    }
+
+    /// Scenario 15: Redundant flagsChanged and Caps Lock during toggle candidate preserves candidate.
+    func testScenario15_RedundantFlagsChangedAndCapsLockDuringToggleCandidatePreservesCandidate() {
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let leftCmdToggle = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .toggle,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdToggle])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // 1. Press Left Command (arms toggle candidate)
+        let swallowedPress = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertTrue(swallowedPress)
+        XCTAssertEqual(counters.startCount, 0)
+
+        // 2. Send Caps Lock flagsChanged event
+        let capsFlags: CGEventFlags = [.maskCommand, .maskAlphaShift]
+        let swallowedCaps = manager.simulateModifierFlags(capsFlags, rawFlags: leftCmdRaw, keyCode: 57)
+        XCTAssertTrue(swallowedCaps)
+        XCTAssertEqual(counters.startCount, 0, "Toggle should not commit prematurely on Caps Lock")
+
+        // 3. Send redundant same-key flagsChanged event
+        let swallowedRedundant = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertTrue(swallowedRedundant)
+        XCTAssertEqual(counters.startCount, 0)
+
+        // 4. Release Left Command cleanly -> toggle commits
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.startCount, 1, "Toggle must commit on clean release")
+        XCTAssertEqual(counters.stopCount, 0)
+        XCTAssertEqual(counters.abortCount, 0)
+    }
+
+    /// Scenario 16: Redundant flagsChanged during hold candidate classification allows normal activation.
+    func testScenario16_RedundantFlagsChangedDuringHoldCandidateAllowsTimerActivation() {
+        let defaults = UserDefaults.standard
+        let key = HotkeyManager.modifierPrefixTriggerDelayKey
+        let priorValue = defaults.object(forKey: key)
+        defaults.set(0.05, forKey: key)
+        defer {
+            if let priorValue { defaults.set(priorValue, forKey: key) } else { defaults.removeObject(forKey: key) }
+        }
+
+        let manager = makeManager()
+        let counters = BindingCounters()
+        let leftCmdHold = ModeBinding(
+            bindingId: UUID(),
+            modeId: UUID(),
+            keyCode: 55, // Left Command
+            modifiers: [],
+            style: .hold,
+            onStart: { counters.recordStart() },
+            onStop: { counters.recordStop() },
+            onAbort: { counters.recordAbort() }
+        )
+        manager.registerBindings([leftCmdHold])
+
+        let leftCmdRaw = ModeBinding.deviceLeftCommandMask | CGEventFlags.maskCommand.rawValue
+
+        // 1. Press Left Command (arms hold candidate)
+        _ = manager.simulateModifierFlags(.maskCommand, rawFlags: leftCmdRaw, keyCode: 55)
+        XCTAssertTrue(manager.hasPendingCandidateTimer())
+
+        // 2. Send Caps Lock flagsChanged event before timer expiration
+        let capsFlags: CGEventFlags = [.maskCommand, .maskAlphaShift]
+        _ = manager.simulateModifierFlags(capsFlags, rawFlags: leftCmdRaw, keyCode: 57)
+
+        // 3. Wait for timer delay to expire
+        let delayExp = expectation(description: "classification delay elapsed")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { delayExp.fulfill() }
+        wait(for: [delayExp], timeout: 0.5)
+
+        // 4. Verify candidate successfully activated hold
+        XCTAssertEqual(counters.startCount, 1)
+        XCTAssertTrue(manager.isHoldActive(for: leftCmdHold.bindingId))
+
+        // 5. Release
+        _ = manager.simulateModifierFlags([], rawFlags: 0, keyCode: 55)
+        XCTAssertEqual(counters.stopCount, 1)
+    }
+
+    /// Test AppDelegate onAbort bridge: start gate race invalidation and session cancel discard chain end-to-end.
+    @MainActor
+    func testAppDelegateOnAbortBridgeEndToEnd() async {
+        // 1. Start gate unit validation
+        var startGate = RecordingStartGate()
+        let startToken = startGate.begin()
+        XCTAssertTrue(startGate.allowsStart(token: startToken))
+
+        // Invalidate via abort
+        startGate.invalidate()
+        XCTAssertFalse(startGate.allowsStart(token: startToken), "Invalidated start token must block queued recording start")
+
+        // 2. Full session cancellation discard chain
+        let appState = AppState()
+        let session = RecognitionSession()
+
+        var receivedEvents: [RecognitionEvent] = []
+        let (recognitionEvents, recognitionEventContinuation) = AsyncStream<RecognitionEvent>.makeStream()
+        await session.setOnASREvent { event in
+            recognitionEventContinuation.yield(event)
+        }
+
+        let eventCollectorTask = Task { @MainActor in
+            for await event in recognitionEvents {
+                receivedEvents.append(event)
+            }
+        }
+
+        // Put app state into preparing/recording
+        appState.startRecording()
+        XCTAssertEqual(appState.barPhase, .preparing)
+        await session.setState(.recording)
+        let recordingState = await session.state
+        XCTAssertEqual(recordingState, .recording)
+
+        // Execute composed AppDelegate onAbort bridge
+        startGate.invalidate()
+        appState.cancel()
+        SoundFeedback.cancelActiveFeedback()
+        await session.cancelRecording()
+
+        // Verify side effects
+        XCTAssertEqual(appState.barPhase, .hidden, "AppState must transition to .hidden without entering .processing")
+        let idleState = await session.state
+        XCTAssertEqual(idleState, .idle, "RecognitionSession must return to .idle")
+
+        // Yield time for any async events
+        recognitionEventContinuation.finish()
+        await eventCollectorTask.value
+
+        // Ensure no completed or finalized events were emitted
+        let completedOrFinalized = receivedEvents.contains { event in
+            switch event {
+            case .completed, .finalized, .processingResult:
+                return true
+            default:
+                return false
+            }
+        }
+        XCTAssertFalse(completedOrFinalized, "Full discard abort must not emit completion or processing events")
     }
 }

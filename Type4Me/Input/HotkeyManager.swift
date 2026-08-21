@@ -24,6 +24,7 @@ struct ModeBinding: Sendable {
     let style: HotkeyStyle
     let onStart: @Sendable () -> Void
     let onStop: @Sendable () -> Void
+    let onAbort: @Sendable () -> Void
     var onBusyConflict: (@Sendable () -> Void)? = nil
 
     init(
@@ -34,6 +35,7 @@ struct ModeBinding: Sendable {
         style: HotkeyStyle,
         onStart: @escaping @Sendable () -> Void,
         onStop: @escaping @Sendable () -> Void,
+        onAbort: (@Sendable () -> Void)? = nil,
         onBusyConflict: (@Sendable () -> Void)? = nil
     ) {
         self.bindingId = bindingId
@@ -43,6 +45,7 @@ struct ModeBinding: Sendable {
         self.style = style
         self.onStart = onStart
         self.onStop = onStop
+        self.onAbort = onAbort ?? { @Sendable in }
         self.onBusyConflict = onBusyConflict
     }
 
@@ -54,6 +57,7 @@ struct ModeBinding: Sendable {
         style: HotkeyStyle,
         onStart: @escaping @Sendable () -> Void,
         onStop: @escaping @Sendable () -> Void,
+        onAbort: (@Sendable () -> Void)? = nil,
         onBusyConflict: (@Sendable () -> Void)? = nil
     ) {
         self.init(
@@ -64,6 +68,7 @@ struct ModeBinding: Sendable {
             style: style,
             onStart: onStart,
             onStop: onStop,
+            onAbort: onAbort,
             onBusyConflict: onBusyConflict
         )
     }
@@ -121,6 +126,89 @@ struct ModeBinding: Sendable {
 
     /// Check if a keyCode represents a media key.
     static func isMediaKeyCode(_ keyCode: Int) -> Bool { keyCode >= mediaKeyCodeBase }
+
+    // MARK: - Device-Specific Modifier Masks
+    //
+    // macOS IOKit / NSEvent device-dependent modifier flags in CGEvent.flags.rawValue
+    static let deviceLeftControlMask: UInt64   = 0x00000001
+    static let deviceLeftShiftMask: UInt64     = 0x00000002
+    static let deviceRightShiftMask: UInt64    = 0x00000004
+    static let deviceLeftCommandMask: UInt64   = 0x00000008
+    static let deviceRightCommandMask: UInt64  = 0x00000010
+    static let deviceLeftOptionMask: UInt64    = 0x00000020
+    static let deviceRightOptionMask: UInt64   = 0x00000040
+    static let deviceRightControlMask: UInt64  = 0x00002000
+    static let allDeviceModifierMasks: UInt64  = 0x0000207F
+
+    static func deviceModifierMask(for keyCode: Int) -> UInt64? {
+        switch keyCode {
+        case 54: return deviceRightCommandMask
+        case 55: return deviceLeftCommandMask
+        case 56: return deviceLeftShiftMask
+        case 60: return deviceRightShiftMask
+        case 58: return deviceLeftOptionMask
+        case 61: return deviceRightOptionMask
+        case 59: return deviceLeftControlMask
+        case 62: return deviceRightControlMask
+        default: return nil
+        }
+    }
+
+    static func isModifierPressed(keyCode: Int, flags: CGEventFlags) -> Bool {
+        let raw = flags.rawValue
+        switch keyCode {
+        case 54:
+            if raw & deviceRightCommandMask != 0 { return true }
+            if raw & deviceLeftCommandMask != 0 { return false }
+            return flags.contains(.maskCommand)
+        case 55:
+            if raw & deviceLeftCommandMask != 0 { return true }
+            if raw & deviceRightCommandMask != 0 { return false }
+            return flags.contains(.maskCommand)
+        case 56:
+            if raw & deviceLeftShiftMask != 0 { return true }
+            if raw & deviceRightShiftMask != 0 { return false }
+            return flags.contains(.maskShift)
+        case 60:
+            if raw & deviceRightShiftMask != 0 { return true }
+            if raw & deviceLeftShiftMask != 0 { return false }
+            return flags.contains(.maskShift)
+        case 58:
+            if raw & deviceLeftOptionMask != 0 { return true }
+            if raw & deviceRightOptionMask != 0 { return false }
+            return flags.contains(.maskAlternate)
+        case 61:
+            if raw & deviceRightOptionMask != 0 { return true }
+            if raw & deviceLeftOptionMask != 0 { return false }
+            return flags.contains(.maskAlternate)
+        case 59:
+            if raw & deviceLeftControlMask != 0 { return true }
+            if raw & deviceRightControlMask != 0 { return false }
+            return flags.contains(.maskControl)
+        case 62:
+            if raw & deviceRightControlMask != 0 { return true }
+            if raw & deviceLeftControlMask != 0 { return false }
+            return flags.contains(.maskControl)
+        case 63:
+            return flags.contains(.maskSecondaryFn)
+        default:
+            return false
+        }
+    }
+
+    static func modifierKeyCodes(forRawFlags rawFlags: UInt64, standardFlags: CGEventFlags) -> Set<Int> {
+        var keys = Set<Int>()
+        if rawFlags & deviceLeftCommandMask != 0 { keys.insert(55) }
+        if rawFlags & deviceRightCommandMask != 0 { keys.insert(54) }
+        if rawFlags & deviceLeftShiftMask != 0 { keys.insert(56) }
+        if rawFlags & deviceRightShiftMask != 0 { keys.insert(60) }
+        if rawFlags & deviceLeftOptionMask != 0 { keys.insert(58) }
+        if rawFlags & deviceRightOptionMask != 0 { keys.insert(61) }
+        if rawFlags & deviceLeftControlMask != 0 { keys.insert(59) }
+        if rawFlags & deviceRightControlMask != 0 { keys.insert(62) }
+        if standardFlags.contains(.maskSecondaryFn) { keys.insert(63) }
+        return keys
+    }
 
     static func isModifierKeyCode(_ keyCode: Int) -> Bool {
         modifierKeyCodes.contains(keyCode)
@@ -222,6 +310,16 @@ struct ModeBinding: Sendable {
     }
 }
 
+extension CGEventFlags {
+    func isSubset(of other: CGEventFlags) -> Bool {
+        self.intersection(other) == self
+    }
+
+    func isStrictSubset(of other: CGEventFlags) -> Bool {
+        self != other && self.isSubset(of: other)
+    }
+}
+
 final class HotkeyManager: NSObject {
 
     // MARK: - Configuration
@@ -248,19 +346,26 @@ final class HotkeyManager: NSObject {
     private var activeRecordingModeId: UUID?
     private var activeRecordingOwner: HotkeyOwner?
     var onBusyConflict: (() -> Void)?
-    private struct PendingModifierTrigger {
-        let binding: ModeBinding
-        let token: UUID
+
+    private enum ModifierGestureState: Equatable {
+        case idle
+        case tracking
+        case candidate(bindingId: UUID, expected: CGEventFlags, token: UUID?)
+        case activeHold(bindingId: UUID, expected: CGEventFlags)
+        case settling
+        case disqualified
     }
-    private var pendingModifierTriggers: [UUID: PendingModifierTrigger] = [:]
-    /// The modifier-only binding whose full flag combo is currently exactly held.
-    /// Modifier combos are matched by their complete set of flags (order-independent),
-    /// so we track the single exactly-active combo rather than per-key edge state.
-    private var activeModifierComboBindingId: UUID?
+
+    private var gestureState: ModifierGestureState = .idle
+    private var candidateToken: UUID?
+    private var candidateTimer: Timer?
+
     /// Normalized modifier flags observed on the previous flagsChanged event, used to
     /// distinguish building a combo up (a real press) from releasing a larger combo
     /// down through a smaller one (a transient we must not treat as a press).
     private var previousModifierFlags: CGEventFlags = []
+    /// Track currently-held physical modifier key codes (e.g. 54 for Right Cmd vs 55 for Left Cmd).
+    private var heldModifierKeyCodes: Set<Int> = []
 
     /// Maximum hold duration before auto-stop (seconds).
     private let maxHoldDuration: TimeInterval = 120
@@ -297,16 +402,16 @@ final class HotkeyManager: NSObject {
         for key in holdState.keys { holdState[key] = false }
         holdSafetyTimers.values.forEach { $0.invalidate() }
         holdSafetyTimers = [:]
-        cancelPendingModifierTriggers()
-        activeModifierComboBindingId = nil
+        cancelCandidateTimer()
+        gestureState = .idle
         previousModifierFlags = []
+        heldModifierKeyCodes.removeAll()
     }
 
     /// Called when recording is finished by a different mode's hotkey.
     /// The application decides whether the ending mode should replace the starting mode.
     var onCrossModeFinish: ((UUID) -> Void)?
 
-    /// Called when ESC is pressed during active recording or processing (abort).
     /// Called when ESC is pressed during active recording or processing (abort).
     /// Returns true if the abort was handled (ESC should be swallowed),
     /// false if the app is not actually in an active session (ESC should pass through).
@@ -331,9 +436,10 @@ final class HotkeyManager: NSObject {
         clearActiveRecordingState()
         holdSafetyTimers.values.forEach { $0.invalidate() }
         holdSafetyTimers = [:]
-        cancelPendingModifierTriggers()
-        activeModifierComboBindingId = nil
+        cancelCandidateTimer()
+        gestureState = .idle
         previousModifierFlags = []
+        heldModifierKeyCodes.removeAll()
         updateMediaKeySession()
     }
 
@@ -409,7 +515,10 @@ final class HotkeyManager: NSObject {
         clearActiveRecordingState()
         holdSafetyTimers.values.forEach { $0.invalidate() }
         holdSafetyTimers = [:]
-        cancelPendingModifierTriggers()
+        cancelCandidateTimer()
+        gestureState = .idle
+        previousModifierFlags = []
+        heldModifierKeyCodes.removeAll()
     }
 
     // MARK: - Health check
@@ -540,7 +649,10 @@ final class HotkeyManager: NSObject {
         // MARK: Keyboard events
         let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         if type == .keyDown {
-            cancelPendingModifierTriggers()
+            let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            if !isModifierKeyCode(keyCode) {
+                reduceRegularKeyDownBeforeDispatch(keyCode: keyCode, isRepeat: isRepeat)
+            }
         }
 
         // Modifier-only combos (fn, Ctrl+Shift, fn+Shift, …) are matched by their full
@@ -554,7 +666,11 @@ final class HotkeyManager: NSObject {
                     "hotkey flagsChanged keyCode=\(keyCode) rawFlags=\(normalizedModifierFlags(event.flags).rawValue) previousFlags=\(previousModifierFlags.rawValue)"
                 )
             }
-            let matchedCombo = evaluateModifierBindings(currentFlags: event.flags)
+            let matchedCombo = evaluateModifierBindings(
+                currentFlags: event.flags,
+                rawFlags: event.flags.rawValue,
+                keyCode: keyCode
+            )
             return matchedCombo ? nil : Unmanaged.passUnretained(event)
         }
 
@@ -756,6 +872,40 @@ final class HotkeyManager: NSObject {
         return bindings.first { $0.bindingId == id }
     }
 
+    // MARK: - Reducer
+
+    internal func reduceRegularKeyDownBeforeDispatch(keyCode: CGKeyCode, isRepeat: Bool) {
+        guard !isRepeat else { return }
+        guard !isModifierKeyCode(keyCode) else { return }
+
+        cancelCandidateTimer()
+
+        switch gestureState {
+        case .idle:
+            break
+        case .candidate:
+            gestureState = .disqualified
+        case .activeHold(let bindingId, _):
+            gestureState = .disqualified
+            if let binding = bindings.first(where: { $0.bindingId == bindingId }) {
+                abortActiveHold(binding: binding)
+            } else if let active = activeRecordingBinding() {
+                abortActiveHold(binding: active)
+            } else {
+                clearActiveRecordingState()
+            }
+        case .tracking, .settling:
+            gestureState = .disqualified
+        case .disqualified:
+            break
+        }
+    }
+
+    private func abortActiveHold(binding: ModeBinding) {
+        clearActiveRecordingState()
+        binding.onAbort()
+    }
+
     // MARK: - Test SPI (internal)
     //
     // Exposes a thin driver + read-only views of the state machine so unit tests can
@@ -771,8 +921,17 @@ final class HotkeyManager: NSObject {
     /// Drive the modifier-combo evaluator with synthetic flags. This covers the
     /// prefix-delay path used by modifier-only bindings such as fn and fn+Shift.
     @discardableResult
-    internal func simulateModifierFlags(_ flags: CGEventFlags) -> Bool {
-        evaluateModifierBindings(currentFlags: flags)
+    internal func simulateModifierFlags(
+        _ flags: CGEventFlags,
+        rawFlags: UInt64? = nil,
+        keyCode: CGKeyCode? = nil
+    ) -> Bool {
+        evaluateModifierBindings(currentFlags: flags, rawFlags: rawFlags, keyCode: keyCode)
+    }
+
+    /// Drive the regular-key pre-dispatch reducer with a synthetic regular key-down.
+    internal func simulateRegularKeyDown(keyCode: CGKeyCode, isRepeat: Bool = false) {
+        reduceRegularKeyDownBeforeDispatch(keyCode: keyCode, isRepeat: isRepeat)
     }
 
     /// Stop the active recording (same path as ESC / safety timer / reset).
@@ -795,141 +954,290 @@ final class HotkeyManager: NSObject {
         holdSafetyTimers[bindingId] != nil
     }
 
+    /// True if a candidate classification timer is currently scheduled.
+    internal func hasPendingCandidateTimer() -> Bool {
+        candidateTimer != nil
+    }
+
+    /// Read-only snapshot of current modifier gesture state for tests.
+    internal var currentModifierGestureStateDescription: String {
+        switch gestureState {
+        case .idle: return "idle"
+        case .tracking: return "tracking"
+        case .candidate(let id, _, let token): return "candidate(\(id), token: \(String(describing: token)))"
+        case .activeHold(let id, _): return "activeHold(\(id))"
+        case .settling: return "settling"
+        case .disqualified: return "disqualified"
+        }
+    }
+
     // MARK: - Modifier Combo Evaluation
 
     /// Order-independent evaluation of modifier-only combos (e.g. `fn`, `Ctrl+Shift`,
     /// `fn+Shift`). A combo is active when the full set of currently-held modifier flags
     /// exactly equals the combo's flags, regardless of the order the keys were pressed.
-    /// At most one combo matches at a time. Prefix combos (e.g. `fn` when `fn+Shift`
-    /// also exists) are deferred so the longer combo wins when both are being formed.
+    /// At most one combo matches at a time.
     /// - Returns: `true` when the current flags exactly match a registered combo, so the
     ///   caller can swallow the event and suppress the modifier's own system behavior.
     @discardableResult
-    private func evaluateModifierBindings(currentFlags: CGEventFlags) -> Bool {
+    private func evaluateModifierBindings(
+        currentFlags: CGEventFlags,
+        rawFlags: UInt64? = nil,
+        keyCode: CGKeyCode? = nil
+    ) -> Bool {
         let current = normalizedModifierFlags(currentFlags)
         let previous = previousModifierFlags
         previousModifierFlags = current
+
+        updateHeldModifierKeyCodes(currentFlags: current, rawFlags: rawFlags, keyCode: keyCode)
 
         let matched = bindings.first { b in
             guard isModifierKeyCode(b.keyCode), !b.isMouseButton, !b.isMediaKey,
                   let expected = ModeBinding.fullModifierFlags(
                       keyCode: Int(b.keyCode), modifiers: b.modifiers.rawValue)
             else { return false }
-            return expected == current
+            guard expected == current else { return false }
+            return heldModifierKeyCodes.contains(Int(b.keyCode))
         }
         let shouldSwallow = matched != nil
 
-        guard matched?.bindingId != activeModifierComboBindingId else { return shouldSwallow }
+        if current.isEmpty {
+            cancelCandidateTimer()
 
-        // Release the previously-active combo.
-        if let activeId = activeModifierComboBindingId,
-           let activeBinding = bindings.first(where: { $0.bindingId == activeId }) {
-            activeModifierComboBindingId = nil
-            let activeExpected = ModeBinding.fullModifierFlags(
-                keyCode: Int(activeBinding.keyCode), modifiers: activeBinding.modifiers.rawValue) ?? []
-            let buildingIntoLargerCombo = activeExpected != current && activeExpected.isSubset(of: current)
-            if buildingIntoLargerCombo, pendingModifierTriggers[activeId] != nil {
-                // We're extending a deferred prefix (e.g. fn → fn+Shift) into the longer
-                // combo. Drop the pending prefix trigger silently; do NOT fire it as a tap.
-                cancelPendingModifierTriggers()
-            } else if !consumePendingModifierRelease(for: activeBinding) {
-                handleBindingEvent(binding: activeBinding, pressed: false)
+            switch gestureState {
+            case .idle:
+                return false
+            case .tracking, .settling, .disqualified:
+                gestureState = .idle
+                return false
+            case .candidate(let candidateId, let expected, _):
+                gestureState = .idle
+                if previous == expected {
+                    if let candidateBinding = bindings.first(where: { $0.bindingId == candidateId }),
+                       candidateBinding.style == .toggle {
+                        handleTogglePress(binding: candidateBinding)
+                    }
+                }
+                return false
+            case .activeHold(let bindingId, let expected):
+                gestureState = .idle
+                if previous == expected {
+                    if let activeBinding = bindings.first(where: { $0.bindingId == bindingId }) {
+                        handleHoldRelease(binding: activeBinding)
+                    } else {
+                        stopActiveRecording()
+                    }
+                } else {
+                    stopActiveRecording()
+                }
+                return false
             }
         }
 
-        // Press the newly-active combo (if any).
-        guard let matched, !current.isEmpty,
-              let expected = ModeBinding.fullModifierFlags(
-                  keyCode: Int(matched.keyCode), modifiers: matched.modifiers.rawValue)
-        else { return shouldSwallow }
+        if gestureState == .disqualified {
+            return false
+        }
 
-        // Arriving here by releasing a *larger* combo down through this one (previous
-        // flags were a strict superset) is a release transient, not a deliberate press:
-        // don't trigger, and don't mark active so the following release is a clean no-op.
-        if expected != previous && expected.isSubset(of: previous) { return shouldSwallow }
+        if gestureState == .settling {
+            return false
+        }
 
-        activeModifierComboBindingId = matched.bindingId
-        if shouldDeferModifierTrigger(for: matched) {
-            schedulePendingModifierTrigger(for: matched)
+        let isBuilding = !previous.isEmpty && current != previous && !current.isStrictSubset(of: previous)
+
+        switch gestureState {
+        case .idle:
+            if let matched,
+               let expected = ModeBinding.fullModifierFlags(keyCode: Int(matched.keyCode), modifiers: matched.modifiers.rawValue) {
+                armCandidate(binding: matched, expected: expected)
+                return true
+            } else {
+                gestureState = .tracking
+                return false
+            }
+
+        case .tracking:
+            if isBuilding,
+               let matched,
+               let expected = ModeBinding.fullModifierFlags(keyCode: Int(matched.keyCode), modifiers: matched.modifiers.rawValue) {
+                armCandidate(binding: matched, expected: expected)
+                return true
+            }
+            return false
+
+        case .candidate(let candidateId, let expected, _):
+            let candidateBinding = bindings.first(where: { $0.bindingId == candidateId })
+
+            // Clean-release predicate:
+            // previous == expected && current != expected && current.isStrictSubset(of: expected)
+            if previous == expected && current != expected && current.isStrictSubset(of: expected) {
+                cancelCandidateTimer()
+                gestureState = current.isEmpty ? .idle : .settling
+
+                if let candidateBinding, candidateBinding.style == .toggle {
+                    handleTogglePress(binding: candidateBinding)
+                }
+                return false
+            }
+
+            if isBuilding {
+                if let matched,
+                   let newExpected = ModeBinding.fullModifierFlags(keyCode: Int(matched.keyCode), modifiers: matched.modifiers.rawValue),
+                   expected.isStrictSubset(of: newExpected) {
+                    cancelCandidateTimer()
+                    armCandidate(binding: matched, expected: newExpected)
+                    return true
+                } else if expected.isStrictSubset(of: current) {
+                    cancelCandidateTimer()
+                    gestureState = .tracking
+                    return false
+                }
+            }
+
+            if current.isStrictSubset(of: previous) {
+                cancelCandidateTimer()
+                gestureState = current.isEmpty ? .idle : .settling
+                return false
+            }
+
+            return shouldSwallow
+
+        case .activeHold(let bindingId, let expected):
+            let activeBinding = bindings.first(where: { $0.bindingId == bindingId })
+
+            // Clean-release predicate:
+            if previous == expected && current != expected && current.isStrictSubset(of: expected) {
+                gestureState = current.isEmpty ? .idle : .settling
+                if let activeBinding {
+                    handleHoldRelease(binding: activeBinding)
+                } else {
+                    stopActiveRecording()
+                }
+                return false
+            }
+
+            if isBuilding {
+                if let activeBinding {
+                    handleHoldRelease(binding: activeBinding)
+                } else {
+                    stopActiveRecording()
+                }
+
+                if let matched,
+                   let newExpected = ModeBinding.fullModifierFlags(keyCode: Int(matched.keyCode), modifiers: matched.modifiers.rawValue) {
+                    armCandidate(binding: matched, expected: newExpected)
+                    return true
+                } else {
+                    gestureState = .tracking
+                    return false
+                }
+            }
+
+            if current.isStrictSubset(of: previous) {
+                if let activeBinding {
+                    handleHoldRelease(binding: activeBinding)
+                } else {
+                    stopActiveRecording()
+                }
+                gestureState = current.isEmpty ? .idle : .settling
+                return false
+            }
+
+            return shouldSwallow
+
+        case .settling, .disqualified:
+            return false
+        }
+    }
+
+    private func armCandidate(binding: ModeBinding, expected: CGEventFlags) {
+        cancelCandidateTimer()
+        if binding.style == .hold {
+            let token = UUID()
+            gestureState = .candidate(bindingId: binding.bindingId, expected: expected, token: token)
+            candidateToken = token
+            let delay = modifierPrefixTriggerDelay
+            candidateTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+                self?.fireCandidateTimer(bindingId: binding.bindingId, token: token)
+            }
         } else {
-            cancelPendingModifierTriggers()
-            handleBindingEvent(binding: matched, pressed: true)
-        }
-        return shouldSwallow
-    }
-
-    // MARK: - Modifier Prefix Conflicts
-
-    private func shouldDeferModifierTrigger(for binding: ModeBinding) -> Bool {
-        guard isModifierKeyCode(binding.keyCode) else { return false }
-
-        return bindings.contains { other in
-            guard other.bindingId != binding.bindingId,
-                  !other.isMouseButton,
-                  !other.isMediaKey
-            else { return false }
-            return ModeBinding.modifierBindingIsPrefix(
-                modifierKeyCode: Int(binding.keyCode),
-                modifierModifiers: binding.modifiers.rawValue,
-                otherKeyCode: Int(other.keyCode),
-                otherModifiers: other.modifiers.rawValue
-            )
+            gestureState = .candidate(bindingId: binding.bindingId, expected: expected, token: nil)
         }
     }
 
-    private func schedulePendingModifierTrigger(for binding: ModeBinding) {
-        cancelPendingModifierTriggers(except: binding.bindingId)
-        let token = UUID()
-        pendingModifierTriggers[binding.bindingId] = PendingModifierTrigger(binding: binding, token: token)
-        DispatchQueue.main.asyncAfter(deadline: .now() + modifierPrefixTriggerDelay) { [weak self] in
-            self?.firePendingModifierTrigger(bindingId: binding.bindingId, token: token)
-        }
-    }
-
-    private func firePendingModifierTrigger(bindingId: UUID, token: UUID) {
-        guard let pending = pendingModifierTriggers[bindingId],
-              pending.token == token,
-              isExactModifierComboActive(for: pending.binding)
+    private func fireCandidateTimer(bindingId: UUID, token: UUID) {
+        guard case .candidate(let currentBindingId, let expected, let currentToken) = gestureState,
+              currentBindingId == bindingId,
+              currentToken == token,
+              let binding = bindings.first(where: { $0.bindingId == bindingId }),
+              binding.style == .hold
         else { return }
-        pendingModifierTriggers.removeValue(forKey: bindingId)
-        handleBindingEvent(binding: pending.binding, pressed: true)
+
+        guard previousModifierFlags == expected else { return }
+        guard heldModifierKeyCodes.contains(Int(binding.keyCode)) else { return }
+
+        cancelCandidateTimer()
+        gestureState = .activeHold(bindingId: bindingId, expected: expected)
+        holdState[bindingId] = true
+        startSafetyTimer(for: binding)
+        startRecording(with: binding)
     }
 
-    private func consumePendingModifierRelease(for binding: ModeBinding) -> Bool {
-        guard let pending = pendingModifierTriggers.removeValue(forKey: binding.bindingId) else { return false }
-
-        // A hold binding released before its prefix delay elapsed was never
-        // physically active. Starting and stopping it back-to-back is both
-        // useless and racy: onStart schedules the recording asynchronously,
-        // so onStop can run first and observe an idle UI, leaving the later
-        // recording start unstopped. A quick release should therefore cancel
-        // the pending hold entirely. Toggle bindings still need a synthesized
-        // press/release so a quick tap retains toggle semantics.
-        guard pending.binding.style == .toggle else { return true }
-        handleBindingEvent(binding: pending.binding, pressed: true)
-        handleBindingEvent(binding: pending.binding, pressed: false)
-        return true
+    private func cancelCandidateTimer() {
+        candidateToken = nil
+        candidateTimer?.invalidate()
+        candidateTimer = nil
     }
 
-    private func cancelPendingModifierTriggers(except bindingId: UUID? = nil) {
-        let ids = pendingModifierTriggers.keys.filter { $0 != bindingId }
-        for id in ids {
-            pendingModifierTriggers.removeValue(forKey: id)
+    private func updateHeldModifierKeyCodes(
+        currentFlags: CGEventFlags,
+        rawFlags: UInt64?,
+        keyCode: CGKeyCode?
+    ) {
+        if let rawFlags, rawFlags & ModeBinding.allDeviceModifierMasks != 0 {
+            heldModifierKeyCodes = ModeBinding.modifierKeyCodes(forRawFlags: rawFlags, standardFlags: currentFlags)
+            return
         }
-    }
 
-    private func isExactModifierComboActive(for binding: ModeBinding) -> Bool {
-        guard let expected = ModeBinding.fullModifierFlags(
-            keyCode: Int(binding.keyCode),
-            modifiers: binding.modifiers.rawValue
-        ) else { return false }
+        if currentFlags.isEmpty {
+            heldModifierKeyCodes.removeAll()
+            return
+        }
 
-        // `CGEventSource.flagsState` does not reliably report `.maskSecondaryFn`
-        // while Fn is held. The event tap has already observed the authoritative
-        // flagsChanged state, and updates `previousModifierFlags` before scheduling
-        // the prefix delay. Use that state so a deferred Fn hold can actually fire;
-        // a release event clears it before the pending trigger gets a chance to run.
-        return previousModifierFlags == expected
+        if let keyCode, isModifierKeyCode(keyCode) {
+            let kc = Int(keyCode)
+            if ModeBinding.isModifierPressed(keyCode: kc, flags: currentFlags) {
+                heldModifierKeyCodes.insert(kc)
+                if currentFlags.contains(.maskSecondaryFn) {
+                    heldModifierKeyCodes.insert(63)
+                }
+            } else {
+                heldModifierKeyCodes.remove(kc)
+                if let ownFlag = ModeBinding.modifierEventFlag(for: kc), !currentFlags.contains(ownFlag) {
+                    switch ownFlag {
+                    case .maskCommand: heldModifierKeyCodes.subtract([54, 55])
+                    case .maskShift: heldModifierKeyCodes.subtract([56, 60])
+                    case .maskAlternate: heldModifierKeyCodes.subtract([58, 61])
+                    case .maskControl: heldModifierKeyCodes.subtract([59, 62])
+                    case .maskSecondaryFn: heldModifierKeyCodes.remove(63)
+                    default: break
+                    }
+                }
+            }
+            return
+        }
+
+        if currentFlags.contains(.maskSecondaryFn) {
+            heldModifierKeyCodes.insert(63)
+        } else {
+            heldModifierKeyCodes.remove(63)
+        }
+        for binding in bindings where isModifierKeyCode(binding.keyCode) {
+            if let expected = ModeBinding.fullModifierFlags(
+                keyCode: Int(binding.keyCode), modifiers: binding.modifiers.rawValue),
+               expected == currentFlags {
+                heldModifierKeyCodes.insert(Int(binding.keyCode))
+            }
+        }
     }
 
     // MARK: - Safety Timer
@@ -989,12 +1297,20 @@ final class HotkeyManager: NSObject {
 
             if !stillDown {
                 NSLog("[HotkeyManager] Recovering stuck hold for binding %@", id.uuidString)
+                let wasDisqualified = gestureState == .disqualified
                 holdState[id] = false
                 cancelSafetyTimer(for: id)
-                if activeRecordingBindingId == id {
-                    stopActiveRecording()
+                if wasDisqualified {
+                    if activeRecordingBindingId == id {
+                        clearActiveRecordingState()
+                    }
+                    binding.onAbort()
                 } else {
-                    binding.onStop()
+                    if activeRecordingBindingId == id {
+                        stopActiveRecording()
+                    } else {
+                        binding.onStop()
+                    }
                 }
             }
         }
@@ -1021,14 +1337,7 @@ final class HotkeyManager: NSObject {
     }
 
     private func isModifierPressed(keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
-        switch keyCode {
-        case 54, 55: return flags.contains(.maskCommand)
-        case 56, 60: return flags.contains(.maskShift)
-        case 58, 61: return flags.contains(.maskAlternate)
-        case 59, 62: return flags.contains(.maskControl)
-        case 63: return flags.contains(.maskSecondaryFn)
-        default: return false
-        }
+        ModeBinding.isModifierPressed(keyCode: Int(keyCode), flags: flags)
     }
 
     // MARK: - Media Session (prevent Apple Music auto-launch)

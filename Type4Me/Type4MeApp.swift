@@ -88,6 +88,23 @@ struct SelectionAskFollowUpStartGate {
     }
 }
 
+struct RecordingStartGate {
+    private(set) var generation = 0
+
+    mutating func begin() -> Int {
+        generation &+= 1
+        return generation
+    }
+
+    mutating func invalidate() {
+        generation &+= 1
+    }
+
+    func allowsStart(token: Int) -> Bool {
+        token == generation
+    }
+}
+
 // MARK: - App Delegate
 
 @MainActor
@@ -112,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeyManager = HotkeyManager()
     private let session = RecognitionSession()
     private var selectionAskFollowUpStartGate = SelectionAskFollowUpStartGate()
+    private var recordingStartGate = RecordingStartGate()
     private var recognitionEventTask: Task<Void, Never>?
     private var recognitionEventContinuation: AsyncStream<RecognitionEvent>.Continuation?
 
@@ -577,10 +595,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.askAnythingCoordinator.prepareForExternalNewQuestion()
                     }
                 }
+                let startToken = MainActor.assumeIsolated { self.recordingStartGate.begin() }
                 let recordingRequestedAt = ContinuousClock.now
                 NSLog("[Type4Me] >>> HOTKEY: Record START (mode: %@)", effectiveMode.name)
                 DebugFileLogger.log("hotkey record start mode=\(effectiveMode.name)")
                 Task { @MainActor in
+                    guard self.recordingStartGate.allowsStart(token: startToken) else { return }
                     self.appState.selectModeForRecording(effectiveMode)
                     self.appState.startRecording()
                 }
@@ -590,6 +610,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if !ready {
                         NSLog("[Type4Me] >>> HOTKEY: previous session did not reach idle in time")
                         DebugFileLogger.log("hotkey start: awaitIdle timed out")
+                    }
+                    let canStart = await MainActor.run {
+                        self.recordingStartGate.allowsStart(token: startToken)
+                    }
+                    guard canStart else {
+                        NSLog("[Type4Me] >>> HOTKEY: start aborted by start gate token invalidation")
+                        DebugFileLogger.log("hotkey start aborted by start gate token invalidation")
+                        return
                     }
                     await self.session.startRecording(
                         mode: effectiveMode,
@@ -623,6 +651,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Task { await self.session.stopRecording() }
                 }
             }
+            let onAbort: @Sendable () -> Void = { [weak self] in
+                guard let self else { return }
+
+                if capturedMode.executionKind == .selectionAsk {
+                    let isAskVisible = MainActor.assumeIsolated { self.selectionAskController?.isVisible == true }
+                    let isFollowUp = MainActor.assumeIsolated { self.selectionAskController?.isRecordingFollowUp == true }
+                    if isAskVisible && isFollowUp {
+                        _ = MainActor.assumeIsolated {
+                            self.selectionAskController?.handleActiveRecordingAction(.cancel)
+                        }
+                        return
+                    }
+
+                    let isCoordinatorFollowUp = MainActor.assumeIsolated { self.askAnythingCoordinator.isRecordingFollowUp }
+                    if isCoordinatorFollowUp {
+                        _ = MainActor.assumeIsolated {
+                            self.askAnythingCoordinator.cancelActiveFollowUp()
+                        }
+                        return
+                    }
+                }
+
+                NSLog("[Type4Me] >>> HOTKEY: Record ABORT (full discard)")
+                DebugFileLogger.log("hotkey record abort: full discard")
+
+                MainActor.assumeIsolated {
+                    self.recordingStartGate.invalidate()
+                    self.selectionAskFollowUpStartGate.invalidate()
+                    self.appState.cancel()
+                }
+                SoundFeedback.cancelActiveFeedback()
+                Task {
+                    await self.session.cancelRecording()
+                }
+            }
 
             // Fan out: one ModeBinding per hotkey binding, all sharing this mode's callbacks.
             return mode.hotkeyBindings.map { hk in
@@ -633,7 +696,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     modifiers: CGEventFlags(rawValue: hk.modifiers ?? 0),
                     style: hk.style,
                     onStart: onStart,
-                    onStop: onStop
+                    onStop: onStop,
+                    onAbort: onAbort
                 )
             }
         }
@@ -643,8 +707,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let hk = reviseSettings.hotkey {
             let reviseOnStart: @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
+                let startToken = MainActor.assumeIsolated { self.recordingStartGate.begin() }
                 Task {
                     let prepResult = await ReviseCoordinator.shared.prepareForRecording()
+                    let canStart = await MainActor.run {
+                        self.recordingStartGate.allowsStart(token: startToken)
+                    }
+                    guard canStart else {
+                        if case .success(let prepared) = prepResult {
+                            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+                        }
+                        return
+                    }
                     switch prepResult {
                     case .success(let prepared):
                         await MainActor.run {
@@ -670,6 +744,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Task { await self.session.stopRecording() }
                 }
             }
+            let reviseOnAbort: @Sendable () -> Void = { [weak self] in
+                guard let self else { return }
+                NSLog("[Type4Me] >>> HOTKEY: Revise ABORT (full discard)")
+                DebugFileLogger.log("hotkey revise abort: full discard")
+
+                MainActor.assumeIsolated {
+                    self.recordingStartGate.invalidate()
+                    self.appState.cancel()
+                }
+                SoundFeedback.cancelActiveFeedback()
+                Task {
+                    await ReviseCoordinator.shared.cancelActiveTransaction()
+                    await self.session.cancelRecording()
+                }
+            }
             let reviseBinding = ModeBinding(
                 bindingId: hk.id,
                 owner: .globalAction(.revise),
@@ -678,6 +767,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 style: hk.style,
                 onStart: reviseOnStart,
                 onStop: reviseOnStop,
+                onAbort: reviseOnAbort,
                 onBusyConflict: { [weak self] in
                     Task { @MainActor [weak self] in
                         SoundFeedback.playError()

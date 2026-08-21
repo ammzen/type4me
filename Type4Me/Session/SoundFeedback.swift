@@ -148,6 +148,15 @@ enum SoundFeedback {
         playSound(errorSpec.label, volume: errorSpec.volume)
     }
 
+    /// Synchronously enqueues stopping all cached players on the sound queue.
+    static func cancelActiveFeedback() {
+        soundQueue.async {
+            for player in cachedPlayers.values {
+                player.stop()
+            }
+        }
+    }
+
     static func previewStartSound(_ style: StartSoundStyle) {
         switch style {
         case .off: return

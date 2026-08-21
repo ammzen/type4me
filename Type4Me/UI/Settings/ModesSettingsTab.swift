@@ -1542,9 +1542,7 @@ private struct HotkeyRecordingSheet: View {
     }
 
     private func isModifierPressed(keyCode: Int, flags: NSEvent.ModifierFlags) -> Bool {
-        if keyCode == 63 { return flags.contains(.function) }
-        guard let flag = modifierFlag(for: keyCode) else { return false }
-        return flags.contains(flag)
+        ModeBinding.isModifierPressed(keyCode: keyCode, flags: CGEventFlags(rawValue: UInt64(flags.rawValue)))
     }
 }
 
