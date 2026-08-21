@@ -1,0 +1,22 @@
+task: MSOR-6
+status: implementation
+
+requirement:
+  status: accepted
+
+design:
+  status: reviewed
+  artifact: design.md
+
+implementation:
+  status: in_progress
+  artifact: implementation.md
+
+review:
+  status: changes_requested
+  latest: reviews/001-design.md
+  blocking: 0
+  major: 1
+  minor: 3
+
+human_gate: null

@@ -17,7 +17,11 @@
 
 - **语音识别**：内置本地识别引擎、媲美云端引擎准确率；支持多家云端引擎厂商；支持流式识别、边说边出字，说完无需等待、快速输入；
 - **文本处理**：内置润色、Prompt优化、翻译功能，可自定义添加任意处理模版（比如改人设、改语气、小语种翻译等等）；
+- **Intelli Sense（可选）**：根据当前 App、输入控件和有限上下文安全润色文字；还可按需学习稳定的纠错、表达和列表结构偏好；
+- **Ask Anything**：围绕选中文本直接提问，并把连续追问保存为会话，随时搜索、恢复或继续追问；
+- **统一翻译**：自动识别输入语言，支持 18 种目标语言翻译与输出校验重试；
 - **语音改口**：刚打出的文字有误或想换个说法？按下快捷键直接语音说出修改指令，精准替换、局部微调、支持一键撤销；
+- **多快捷键**：每个模式可绑定多个全局快捷键，支持按住说话与点按开关；
 - **模型接入**：支持主流厂商API接入；文本处理支持使用Ollama接本地模型；
 - **词汇管理**：支持热词、映射词，2种模式。热词用于校正语音识别引擎，映射词可作为兜底或个性化场景使用（如 Web coding -> Vibe Coding, "我的邮箱地址" -> xxx@gmail.com）；
 - **历史记录**：存储所有历史识别记录，包括原始文本和处理后文本，支持导出CSV；
@@ -74,9 +78,7 @@
 
 ## 详细功能介绍
 
-### 语音识别（略）
-
-### 文本处理：需配置API Key，效果受模型影响，可自行调整/添加Prompt
+### 文本处理与模式：需配置 API Key，效果受模型影响，可自行调整/添加 Prompt
 
 每个模式可以绑定独立的全局快捷键，支持「按住说话」和「按一下开始/再按停止」两种方式。
 
@@ -84,7 +86,7 @@
 | -------------- | ------------------------------------------------------------ |
 | **快速模式**   | 实时识别出文字，识别完成即输入，零延迟                       |
 | **语音润色**   | （简单说就是类似Typeless的体验吧- -）帮你优化表达、消除口头语、纠正等 |
-| **英文翻译**   | 说中文，输出英文翻译                                         |
+| **翻译**       | 自动识别输入语言，翻译为你选择的 18 种目标语言之一，并在输出不符时自动重试 |
 | **Prompt优化** | 说一句简单的原始prompt，帮你优化后直接粘贴                   |
 | **自定义**     | 自己写 prompt，用 LLM 做任何后处理                           |
 
@@ -102,18 +104,61 @@ Prompt 模板支持三种变量，让语音输入从"听写"升级为"语音命�
 
 <img src="https://github.com/user-attachments/assets/4b431890-49aa-405c-b707-72ea093cfbc4" width="400" />
 
+#### 最终文本格式化
 
-### 词汇管理
+最终文本可按需应用中英文盘古空格和中文直角引号；英文撇号会被保留。
+
+### Intelli Sense（可选）
+
+根据当前 App、输入控件和有限上下文安全润色文字；还可按需学习你稳定的纠错、表达和列表结构偏好。各项感知与学习能力可独立开启，默认不会静默学习。
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-intelli-sense-history.png" width="480" alt="Intelli Sense 偏好与历史" />
+</p>
+
+### Ask Anything
+
+围绕选中文本直接提问，并把连续追问保存为会话；可在设置中搜索、恢复、重命名或删除历史会话，也可从历史会话继续语音追问。
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-askit.png" width="480" alt="Ask Anything 会话历史" />
+</p>
+
+### 统一翻译模式
+
+自动识别输入语言，翻译为你选择的 18 种目标语言之一，并在输出语言不符时进行校验与一次重试。
+
+<!-- SCREENSHOT TODO (v2.1.0): 翻译目标语言选择器截图；在 v2.1.0 正式构建上截取并隐藏敏感信息 -->
+
+### 多快捷键与录音行为
+
+每个模式可绑定多个全局快捷键，并为每个快捷键选择「按住说话」或「按一下开始、再按一下停止」；录音期间也可用另一个模式的快捷键结束并按该模式处理。录音浮窗支持按需开启或隐藏实时转写内容。
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-modes.png" width="480" alt="模式快捷键设置" />
+</p>
+
+<!-- SCREENSHOT TODO (v2.1.0): 多快捷键绑定配置截图（若需进一步展示多个 hold/toggle 快捷键细节） -->
+
+### 词汇管理与配套 Skill
 
 - **ASR 热词**：添加专有名词（如 `Claude`、`Kubernetes`），提升识别准确率
 - **片段替换**：语音说「我的邮箱」，自动替换为实际邮箱地址
 
-### 语音改口（Revise）
-
-刚输入的内容有错字、想换个时间或调整语气？无需手动选中文本，按下改口快捷键（默认 `Fn + R`），直接说出你想怎么改。
+配套 Skill 可通过 Type4Me 的词汇命令打开词汇管理并刷新词表，帮助把反复出现的专有名词错误固化为热词或片段替换规则。
 
 <p align="center">
-  <img src="docs/screenshots/prototype-revise.png" width="480" alt="Type4Me 语音改口" />
+  <img src="docs/screenshots/screenshot-vocabulary.png" width="480" alt="词汇管理" />
+</p>
+
+### 语音改口（Revise）
+
+对最近一次仍可可靠定位的 Type4Me 输入，按下改口快捷键（默认 `Fn + R`）并说出修改指令；Type4Me 只替换授权范围，目标已变化或无法定位时会安全失败。成功后可一键或语音撤销。
+
+<!-- SCREENSHOT TODO (v2.1.0): 真实 Revise 工作流截图（展示原文、改口状态与撤销效果）；目前暂时展示原型示意图 -->
+
+<p align="center">
+  <img src="docs/screenshots/prototype-revise.png" width="480" alt="Type4Me 语音改口（原型示意图）" />
 </p>
 
 - **智能槽位定位**：说「改成下午 2 点」、「不是 Jerry 是 Tom」，系统自动匹配修改目标并精准替换，其余内容保持不变；
@@ -134,6 +179,8 @@ Prompt 模板支持三种变量，让语音输入从"听写"升级为"语音命�
 | `Type4Me/Injection/` | 文本注入 (剪贴板 Cmd+V) |
 | `Type4Me/Bridge/` | SherpaOnnx C API Swift 桥接 (可选) |
 | `Type4Me/UI/` | SwiftUI 界面：浮窗 + 设置 |
+| `Type4MeIntelliSenseCore/` | Intelli Sense 上下文感知与偏好学习核心 |
+| `Type4MeReviseCore/` | 语音改口追踪、槽位定位与替换核心 |
 | `qwen3-asr-server/` | Python Qwen3-ASR 校准服务 (Apple Silicon, MLX) |
 
 ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭证字段）和 `SpeechRecognizer`（实现识别逻辑），注册到 `ASRProviderRegistry` 即可添加新引擎。
@@ -180,7 +227,11 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 
 - **Speech Recognition**: Built-in local recognition engine with accuracy rivaling cloud engines; supports multiple cloud ASR providers; real-time streaming recognition with instant text output;
 - **Text Processing**: Built-in voice polish, prompt optimization, and translation; add any custom processing templates (persona, tone, minority language translation, etc.);
+- **Intelli Sense (Optional)**: Safely polishes text using the current app, input control, and limited context; optionally learns stable corrections, expression preferences, and list structure;
+- **Ask Anything**: Ask questions about selected text, save follow-ups into conversation history, and search, resume, or continue conversations anytime;
+- **Unified Translation**: Automatically detects source language, translates into one of 18 selectable target languages, with output validation and retry;
 - **Voice Revise**: Made a typo or want to rephrase? Press a hotkey to speak revisions directly—precision replacement, local slot targeting, and one-click undo;
+- **Multiple Hotkeys**: Bind multiple global shortcuts per mode with hold-to-talk or toggle behavior;
 - **Model Integration**: Supports mainstream provider APIs; text processing works with Ollama local models;
 - **Vocabulary Management**: Two modes: hotwords and snippet replacements. Hotwords improve ASR accuracy for proper nouns; snippets enable personalized substitutions (e.g., "Web coding" -> "Vibe Coding", "my email" -> xxx@gmail.com);
 - **History**: Stores all recognition records including raw and processed text, with CSV export;
@@ -259,17 +310,15 @@ And honestly, not everything you say needs to sound perfectly polished.
 
 ## Feature Details
 
-### Speech Recognition (See above)
+### Text Processing & Modes: Requires API Key. Quality depends on model choice. Prompts are fully customizable.
 
-### Text Processing: Requires API Key. Quality depends on model choice. Prompts are fully customizable.
-
-Each mode can have its own global hotkey. Supports both "hold to talk" and "press to start / press to stop".
+Each mode can have its own global hotkeys. Supports both "hold to talk" and "press to start / press to stop".
 
 | Mode | Description |
 | ---- | ----------- |
 | **Quick Mode** | Real-time transcription, injected instantly with zero delay |
 | **Voice Polish** | (Think Typeless-style experience) Refines your expression, removes filler words, corrects errors |
-| **English Translation** | Speak Chinese, output English translation |
+| **Translation** | Automatically detects source language, translates into one of 18 selectable target languages, with output validation and retry |
 | **Prompt Optimize** | Say a rough prompt, get an optimized version pasted directly |
 | **Custom** | Write your own prompt, use LLM for any post-processing |
 
@@ -287,18 +336,61 @@ Prompt templates support three variables, upgrading voice input from "dictation"
 
 <img src="https://github.com/user-attachments/assets/4b431890-49aa-405c-b707-72ea093cfbc4" width="400" />
 
+#### Final Output Formatting
 
-### Vocabulary Management
+Final output can optionally apply Pangu-style CJK/Latin spacing and Chinese corner quotes while preserving English apostrophes.
+
+### Intelli Sense (Optional)
+
+Safely polishes text using the current app, input control, and limited context. You can separately enable learning from stable corrections, expression preferences, and list structure; awareness and learning are not silently enabled by default.
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-intelli-sense-history.png" width="480" alt="Intelli Sense Preferences & History" />
+</p>
+
+### Ask Anything
+
+Lets you ask about selected text and continue with spoken follow-ups. Saved conversations can be searched, reopened, renamed, deleted, or resumed from Settings.
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-askit.png" width="480" alt="Ask Anything Conversation History" />
+</p>
+
+### Unified Translation
+
+Detects the source language automatically, translates into one of 18 selectable target languages, and validates the output language with one retry when needed.
+
+<!-- SCREENSHOT TODO (v2.1.0): Translation target-language selector; capture on the v2.1.0 build, redact credentials, and supply matching zh/en alt text. -->
+
+### Multiple Hotkeys & Recording Behavior
+
+Each mode can have multiple global shortcuts. Every shortcut can use hold-to-talk or press-to-start/press-again-to-stop, and another mode's shortcut can finish the active recording and process it with that mode. The recording floating bar supports toggling live transcript visibility on or off as needed.
+
+<p align="center">
+  <img src="docs/screenshots/screenshot-modes.png" width="480" alt="Mode Shortcut Settings" />
+</p>
+
+<!-- SCREENSHOT TODO (v2.1.0): Multiple hotkey bindings configuration screenshot (if needed to illustrate multiple hold/toggle shortcuts in detail). -->
+
+### Vocabulary Management & Companion Skill
 
 - **ASR Hotwords**: Add proper nouns (e.g., `Claude`, `Kubernetes`) to improve recognition accuracy
 - **Snippet Replacement**: Say "my email" and it auto-replaces with your actual email address
 
-### Voice Revise
-
-Made a typo, want to reschedule, or tweak your phrasing? No need to select text manually—press the Revise hotkey (default `Fn + R`) and simply say what you want to change.
+The companion Skill can use Type4Me vocabulary commands to open vocabulary management and reload the vocabulary, helping turn recurring proper-name errors into hotword or snippet-replacement rules.
 
 <p align="center">
-  <img src="docs/screenshots/prototype-revise.png" width="480" alt="Type4Me Voice Revise" />
+  <img src="docs/screenshots/screenshot-vocabulary.png" width="480" alt="Vocabulary Management" />
+</p>
+
+### Voice Revise
+
+For the most recent Type4Me insertion that can still be located reliably, press the Revise shortcut (default `Fn + R`) and speak an edit instruction. Type4Me limits changes to the authorized scope and fails safely when the target changed or cannot be found. Successful revisions can be undone by button or voice.
+
+<!-- SCREENSHOT TODO (v2.1.0): Real Revise workflow screenshot showing source text, revise status, and undo result; currently showing prototype mockup. -->
+
+<p align="center">
+  <img src="docs/screenshots/prototype-revise.png" width="480" alt="Type4Me Voice Revise (Prototype)" />
 </p>
 
 - **Smart Slot Targeting**: Say "change it to 2 PM" or "Tom instead of Jerry"—the engine automatically targets and replaces only the intended slot while preserving the rest of your text;
@@ -319,6 +411,8 @@ Made a typo, want to reschedule, or tweak your phrasing? No need to select text 
 | `Type4Me/Injection/` | Text injection (clipboard Cmd+V) |
 | `Type4Me/Bridge/` | SherpaOnnx C API Swift bridge (optional) |
 | `Type4Me/UI/` | SwiftUI interface: floating window + settings |
+| `Type4MeIntelliSenseCore/` | Intelli Sense context awareness and preference learning core |
+| `Type4MeReviseCore/` | Voice Revise tracking, slot targeting, and replacement core |
 | `qwen3-asr-server/` | Python Qwen3-ASR calibration service (Apple Silicon, MLX) |
 
 The ASR provider architecture is fully pluggable: implement `ASRProviderConfig` (define credential fields) and `SpeechRecognizer` (implement recognition logic), register with `ASRProviderRegistry`, and you have a new engine.
