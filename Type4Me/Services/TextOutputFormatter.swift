@@ -39,21 +39,82 @@ enum TrailingPunctuationMode: String {
     case all
 }
 
+enum ModePunctuationMode: String, Codable, CaseIterable, Sendable {
+    case inherit
+    case preserve
+    case stripTrailing
+    case questionsAndExclamationsOnly
+    case removeAll
+
+    fileprivate var override: OutputPunctuationMode? {
+        switch self {
+        case .inherit: nil
+        case .preserve: .preserve
+        case .stripTrailing: .stripTrailing
+        case .questionsAndExclamationsOnly: .questionsAndExclamationsOnly
+        case .removeAll: .removeAll
+        }
+    }
+}
+
+enum OutputPunctuationMode: Equatable {
+    case preserve
+    case stripPeriods
+    case stripTrailing
+    case questionsAndExclamationsOnly
+    case removeAll
+}
+
 struct TextOutputFormattingOptions: Equatable {
     var cjkSpacingMode: CJKSpacingMode
     var usesCornerQuotes: Bool
-    var trailingPunctuationMode: TrailingPunctuationMode
+    var punctuationMode: OutputPunctuationMode
 
-    static func current(userDefaults: UserDefaults = .standard) -> Self {
+    init(
+        cjkSpacingMode: CJKSpacingMode,
+        usesCornerQuotes: Bool,
+        punctuationMode: OutputPunctuationMode
+    ) {
+        self.cjkSpacingMode = cjkSpacingMode
+        self.usesCornerQuotes = usesCornerQuotes
+        self.punctuationMode = punctuationMode
+    }
+
+    /// Compatibility initializer for callers that still express the global
+    /// trailing-punctuation preference directly.
+    init(
+        cjkSpacingMode: CJKSpacingMode,
+        usesCornerQuotes: Bool,
+        trailingPunctuationMode: TrailingPunctuationMode
+    ) {
+        self.init(
+            cjkSpacingMode: cjkSpacingMode,
+            usesCornerQuotes: usesCornerQuotes,
+            punctuationMode: Self.outputMode(for: trailingPunctuationMode)
+        )
+    }
+
+    static func current(
+        userDefaults: UserDefaults = .standard,
+        modePunctuation: ModePunctuationMode = .inherit
+    ) -> Self {
         let usesCornerQuotes = userDefaults.object(forKey: CornerQuotePreference.storageKey) as? Bool
             ?? CornerQuotePreference.defaultValue
-        let punctuation = userDefaults.string(forKey: "tf_stripTrailingPunctuation")
+        let trailing = userDefaults.string(forKey: "tf_stripTrailingPunctuation")
             .flatMap(TrailingPunctuationMode.init(rawValue:)) ?? .off
         return Self(
             cjkSpacingMode: CJKSpacingMode.current(userDefaults: userDefaults),
             usesCornerQuotes: usesCornerQuotes,
-            trailingPunctuationMode: punctuation
+            punctuationMode: modePunctuation.override ?? outputMode(for: trailing)
         )
+    }
+
+    private static func outputMode(for mode: TrailingPunctuationMode) -> OutputPunctuationMode {
+        switch mode {
+        case .off: .preserve
+        case .period: .stripPeriods
+        case .all: .stripTrailing
+        }
     }
 }
 
@@ -71,7 +132,20 @@ enum TextOutputFormatter {
         case .remove:
             result = removingSpacesAdjacentToHan(in: result)
         }
-        return strippingTrailingPunctuation(from: result, mode: options.trailingPunctuationMode)
+        result = applyingPunctuationMode(options.punctuationMode, to: result)
+
+        // Removing punctuation can create a new CJK/Latin boundary that did not
+        // exist during the spacing pass. Stabilize that boundary inside the
+        // punctuation stage so formatting remains idempotent.
+        if options.cjkSpacingMode == .pangu {
+            switch options.punctuationMode {
+            case .questionsAndExclamationsOnly, .removeAll:
+                result = PanguSpacing.spacingText(result)
+            case .preserve, .stripPeriods, .stripTrailing:
+                break
+            }
+        }
+        return result
     }
 
     static func format(_ text: String, userDefaults: UserDefaults = .standard) -> String {
@@ -122,26 +196,49 @@ enum TextOutputFormatter {
         return result
     }
 
-    private static func strippingTrailingPunctuation(
-        from text: String,
-        mode: TrailingPunctuationMode
+    private static let cjkPunctuation = CharacterSet(charactersIn:
+        "\u{3002}\u{FF0C}\u{FF01}\u{FF1F}\u{FF1B}\u{FF1A}\u{3001}\u{2026}\u{2014}\u{FF5E}\u{00B7}" +
+        "\u{300C}\u{300D}\u{300E}\u{300F}\u{3010}\u{3011}\u{FF08}\u{FF09}\u{300A}\u{300B}" +
+        "\u{201C}\u{201D}\u{2018}\u{2019}"
+    )
+    private static let punctuation = CharacterSet.punctuationCharacters.union(cjkPunctuation)
+    private static let questionAndExclamationMarks = CharacterSet(charactersIn: "!?！？")
+
+    private static func applyingPunctuationMode(
+        _ mode: OutputPunctuationMode,
+        to text: String
     ) -> String {
-        guard mode != .off, !text.isEmpty else { return text }
-        var result = text
-        if mode == .period {
+        guard !text.isEmpty else { return text }
+
+        switch mode {
+        case .preserve:
+            return text
+        case .stripPeriods:
+            var result = text
             while result.hasSuffix("。") || result.hasSuffix(".") {
                 result.removeLast()
             }
             return result
+        case .stripTrailing:
+            var result = text
+            while let last = result.unicodeScalars.last, punctuation.contains(last) {
+                result.unicodeScalars.removeLast()
+            }
+            return result
+        case .questionsAndExclamationsOnly:
+            return removingPunctuation(from: text, preserving: questionAndExclamationMarks)
+        case .removeAll:
+            return removingPunctuation(from: text, preserving: nil)
         }
+    }
 
-        let cjkPunctuation = "\u{3002}\u{FF0C}\u{FF01}\u{FF1F}\u{FF1B}\u{FF1A}\u{3001}\u{2026}\u{2014}\u{FF5E}\u{00B7}\u{300C}\u{300D}\u{300E}\u{300F}\u{3010}\u{3011}\u{FF08}\u{FF09}\u{300A}\u{300B}\u{201C}\u{201D}\u{2018}\u{2019}"
-        let trailing = CharacterSet.punctuationCharacters
-            .union(CharacterSet(charactersIn: cjkPunctuation))
-        while let last = result.unicodeScalars.last, trailing.contains(last) {
-            result.unicodeScalars.removeLast()
-        }
-        return result
+    private static func removingPunctuation(
+        from text: String,
+        preserving preserved: CharacterSet?
+    ) -> String {
+        String(text.unicodeScalars.filter { scalar in
+            !punctuation.contains(scalar) || preserved?.contains(scalar) == true
+        })
     }
 }
 

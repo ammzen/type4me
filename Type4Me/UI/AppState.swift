@@ -186,6 +186,9 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     /// BCP 47 target code used only by the built-in Translation mode. Keeping
     /// this as a String preserves future codes written by newer app versions.
     var translationTargetLanguageCode: String?
+    /// Per-mode punctuation behavior. `.inherit` preserves the existing global
+    /// output-formatting preference for backwards compatibility.
+    var punctuationMode: ModePunctuationMode
 
     enum HotkeyStyle: String, Codable, CaseIterable {
         case hold    // press and hold to record
@@ -221,7 +224,8 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         hotkeyBindings: [HotkeyBinding] = [],
         shortTextExemption: Int = 0,
         executionKind: ExecutionKind = .recording,
-        translationTargetLanguageCode: String? = nil
+        translationTargetLanguageCode: String? = nil,
+        punctuationMode: ModePunctuationMode = .inherit
     ) {
         self.id = id
         self.name = name
@@ -233,11 +237,13 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         self.shortTextExemption = shortTextExemption
         self.executionKind = executionKind
         self.translationTargetLanguageCode = translationTargetLanguageCode
+        self.punctuationMode = punctuationMode
     }
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, prompt, isBuiltin, processingLabel
         case hotkeyBindings, shortTextExemption, executionKind, translationTargetLanguageCode
+        case punctuationMode
         // Legacy single-hotkey keys, decoded for backward compatibility only.
         case hotkeyCode, hotkeyModifiers, hotkeyStyle
     }
@@ -271,6 +277,12 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             String.self,
             forKey: .translationTargetLanguageCode
         )
+        let punctuationRawValue = try? container.decodeIfPresent(
+            String.self,
+            forKey: .punctuationMode
+        )
+        punctuationMode = punctuationRawValue
+            .flatMap(ModePunctuationMode.init(rawValue:)) ?? .inherit
     }
 
     func encode(to encoder: Encoder) throws {
@@ -289,6 +301,7 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
             translationTargetLanguageCode,
             forKey: .translationTargetLanguageCode
         )
+        try container.encode(punctuationMode.rawValue, forKey: .punctuationMode)
     }
 
     // MARK: - Built-in Mode IDs (stable, never change)
@@ -408,6 +421,13 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
     }
 
     var isSmartDirect: Bool { id == Self.smartDirectId }
+
+    /// Only modes whose result is pasted into the target application expose
+    /// per-mode output formatting. Ask Anything renders in its own panel, while
+    /// Mac Action executes a tool call instead of producing pasted text.
+    var supportsOutputFormatting: Bool {
+        executionKind == .recording && id != Self.macActionId
+    }
 
     // MARK: - Default Custom Mode IDs (stable, for fresh installs)
     static let promptOptimizeId = UUID(uuidString: "5D0A24D4-ECE9-4C13-9FC5-F9C81BD6B1C3")!

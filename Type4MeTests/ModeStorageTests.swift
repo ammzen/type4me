@@ -35,6 +35,77 @@ final class ModeStorageTests: XCTestCase {
         XCTAssertTrue(savedJSON.contains("\"description\""))
     }
 
+    func testMissingAndUnknownPunctuationModesDefaultToInherit() throws {
+        let id = UUID()
+        let missing = """
+        {"id":"\(id.uuidString)","name":"Legacy","prompt":"Do {text}","isBuiltin":false,"processingLabel":"处理中"}
+        """
+        let unknown = """
+        {"id":"\(id.uuidString)","name":"Future","prompt":"Do {text}","isBuiltin":false,"processingLabel":"处理中","punctuationMode":"future-mode"}
+        """
+
+        XCTAssertEqual(
+            try JSONDecoder().decode(ProcessingMode.self, from: Data(missing.utf8)).punctuationMode,
+            .inherit
+        )
+        XCTAssertEqual(
+            try JSONDecoder().decode(ProcessingMode.self, from: Data(unknown.utf8)).punctuationMode,
+            .inherit
+        )
+    }
+
+    func testPunctuationModePersistsAcrossBuiltinMigrationsAndCustomModes() throws {
+        let suite = "ModeStorageTests.Punctuation.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "tf_agentModeSeeded")
+        defaults.set(true, forKey: "tf_shortTextExemptionMigrated")
+
+        let styles: [ModePunctuationMode] = [
+            .preserve,
+            .stripTrailing,
+            .questionsAndExclamationsOnly,
+            .removeAll,
+            .preserve,
+            .stripTrailing,
+        ]
+        var modes = ProcessingMode.builtins
+        for index in modes.indices {
+            modes[index].punctuationMode = styles[index]
+        }
+        let custom = ProcessingMode(
+            id: UUID(),
+            name: "Casual",
+            prompt: "Do {text}",
+            isBuiltin: false,
+            punctuationMode: .removeAll
+        )
+        modes.append(custom)
+
+        let storage = ModeStorage(fileURL: testURL, userDefaults: defaults)
+        try storage.save(modes)
+        let loaded = storage.load()
+
+        for (index, mode) in modes.dropLast().enumerated() {
+            XCTAssertEqual(
+                loaded.first(where: { $0.id == mode.id })?.punctuationMode,
+                styles[index],
+                mode.name
+            )
+        }
+        XCTAssertEqual(loaded.first(where: { $0.id == custom.id })?.punctuationMode, .removeAll)
+    }
+
+    func testOutputFormattingCapabilityMatchesModeBehavior() {
+        XCTAssertTrue(ProcessingMode.direct.supportsOutputFormatting)
+        XCTAssertTrue(ProcessingMode.intelliSense.supportsOutputFormatting)
+        XCTAssertTrue(ProcessingMode.translation().supportsOutputFormatting)
+        XCTAssertTrue(ProcessingMode.formalWriting.supportsOutputFormatting)
+        XCTAssertTrue(ProcessingMode.agentMode.supportsOutputFormatting)
+        XCTAssertFalse(ProcessingMode.selectionAsk.supportsOutputFormatting)
+        XCTAssertFalse(ProcessingMode.macAction.supportsOutputFormatting)
+    }
+
     func testReorderedModesKeepExactOrderAcrossRestartLoad() throws {
         let preferenceKeys = [
             "tf_translateToChineseModeSeeded",

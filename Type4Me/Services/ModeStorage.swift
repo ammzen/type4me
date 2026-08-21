@@ -42,12 +42,14 @@ struct ModeStorage {
                 var d = ProcessingMode.direct
                 d.hotkeyBindings = mode.hotkeyBindings
                 d.shortTextExemption = mode.shortTextExemption
+                d.punctuationMode = mode.punctuationMode
                 return d
             }
             if mode.id == ProcessingMode.intelliSenseId {
                 var d = ProcessingMode.intelliSense
                 d.hotkeyBindings = mode.hotkeyBindings
                 d.shortTextExemption = mode.shortTextExemption
+                d.punctuationMode = mode.punctuationMode
                 return d
             }
             if mode.id == ProcessingMode.smartDirectId {
@@ -70,6 +72,7 @@ struct ModeStorage {
                 d.hotkeyBindings = mode.hotkeyBindings
                 d.description = mode.description
                 d.shortTextExemption = mode.shortTextExemption
+                d.punctuationMode = mode.punctuationMode
                 // If user customized the prompt, keep theirs
                 if !isLegacy {
                     d.name = mode.name
@@ -81,6 +84,7 @@ struct ModeStorage {
             if mode.id == ProcessingMode.selectionAskId {
                 var d = ProcessingMode.selectionAsk
                 d.hotkeyBindings = mode.hotkeyBindings
+                d.punctuationMode = mode.punctuationMode
                 if mode.prompt != ProcessingMode.selectionAsk.prompt,
                    !selectionAskPromptIsLegacy(mode.prompt) {
                     d.name = mode.name
@@ -92,11 +96,13 @@ struct ModeStorage {
             if mode.id == ProcessingMode.macActionId {
                 var d = ProcessingMode.macAction
                 d.hotkeyBindings = mode.hotkeyBindings
+                d.punctuationMode = mode.punctuationMode
                 return d
             }
             if mode.id == ProcessingMode.translationModeId {
                 var canonical = ProcessingMode.translation()
                 canonical.hotkeyBindings = mode.hotkeyBindings
+                canonical.punctuationMode = mode.punctuationMode
                 let storedCode = mode.translationTargetLanguageCode?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 canonical.translationTargetLanguageCode =
@@ -112,6 +118,7 @@ struct ModeStorage {
                     var migrated = ProcessingMode.promptOptimize
                     migrated.hotkeyBindings = mode.hotkeyBindings
                     migrated.description = mode.description
+                    migrated.punctuationMode = mode.punctuationMode
                     return migrated
                 }
                 return mode
@@ -211,6 +218,7 @@ struct ModeStorage {
         }
         migrated.hotkeyBindings = mode.hotkeyBindings
         migrated.shortTextExemption = mode.shortTextExemption
+        migrated.punctuationMode = mode.punctuationMode
         migrated.isBuiltin = false
         return migrated
     }
