@@ -145,6 +145,22 @@ actor RecognitionSession {
         await promptForCurrentMode(text: text)
     }
 
+    /// Pure formatting seam used to verify that every session completion path
+    /// resolves punctuation from the mode selected for processing.
+    static func formattedOutputText(
+        _ text: String,
+        mode: ProcessingMode,
+        userDefaults: UserDefaults = .standard
+    ) -> String {
+        TextOutputFormatter.format(
+            text,
+            options: .current(
+                userDefaults: userDefaults,
+                modePunctuation: mode.punctuationMode
+            )
+        )
+    }
+
     // MARK: - Dependencies
 
     private let audioEngine = AudioCaptureEngine()
@@ -1849,7 +1865,7 @@ actor RecognitionSession {
                 }
             }
 
-            finalText = TextOutputFormatter.format(finalText)
+            finalText = formattedOutputText(finalText)
 
             state = .injecting
             let defaults = UserDefaults.standard
@@ -2169,7 +2185,11 @@ actor RecognitionSession {
     }
 
     private func normalizedRecoveryText(_ text: String) -> String {
-        TextOutputFormatter.format(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        formattedOutputText(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func formattedOutputText(_ text: String) -> String {
+        Self.formattedOutputText(text, mode: currentMode)
     }
 
     private func injectRecoveryPartial(_ text: String) {

@@ -176,6 +176,97 @@ final class TextOutputFormatterTests: XCTestCase {
         )
     }
 
+    func testPerModePunctuationStrategiesCoverCJKAndASCII() {
+        let input = "你好，world. 真的？Yes, really! 太棒了！"
+
+        XCTAssertEqual(
+            TextOutputFormatter.format(
+                input,
+                options: .init(
+                    cjkSpacingMode: .off,
+                    usesCornerQuotes: false,
+                    punctuationMode: .preserve
+                )
+            ),
+            input
+        )
+        XCTAssertEqual(
+            TextOutputFormatter.format(
+                "真的吗？当然可以……",
+                options: .init(
+                    cjkSpacingMode: .off,
+                    usesCornerQuotes: false,
+                    punctuationMode: .stripTrailing
+                )
+            ),
+            "真的吗？当然可以"
+        )
+        XCTAssertEqual(
+            TextOutputFormatter.format(
+                input,
+                options: .init(
+                    cjkSpacingMode: .off,
+                    usesCornerQuotes: false,
+                    punctuationMode: .questionsAndExclamationsOnly
+                )
+            ),
+            "你好world 真的？Yes really! 太棒了！"
+        )
+        XCTAssertEqual(
+            TextOutputFormatter.format(
+                "第一项：Codex CLI——完成！\n第二项：继续？🚀",
+                options: .init(
+                    cjkSpacingMode: .off,
+                    usesCornerQuotes: false,
+                    punctuationMode: .removeAll
+                )
+            ),
+            "第一项Codex CLI完成\n第二项继续🚀"
+        )
+    }
+
+    func testPerModePunctuationRunsAfterQuotesAndSpacingAndIsIdempotent() {
+        let options = TextOutputFormattingOptions(
+            cjkSpacingMode: .pangu,
+            usesCornerQuotes: true,
+            punctuationMode: .questionsAndExclamationsOnly
+        )
+        let once = TextOutputFormatter.format("他说“版本3”，真的吗？！", options: options)
+
+        XCTAssertEqual(once, "他说版本 3 真的吗？！")
+        XCTAssertEqual(TextOutputFormatter.format(once, options: options), once)
+    }
+
+    func testModePunctuationOverrideResolvesAgainstLegacyGlobalSetting() throws {
+        let suite = "TextOutputFormatterTests.Punctuation.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(CJKSpacingMode.off.rawValue, forKey: CJKSpacingMode.storageKey)
+        defaults.set("period", forKey: "tf_stripTrailingPunctuation")
+
+        XCTAssertEqual(
+            TextOutputFormatter.format(
+                "你好！。",
+                options: .current(userDefaults: defaults, modePunctuation: .inherit)
+            ),
+            "你好！"
+        )
+        XCTAssertEqual(
+            TextOutputFormatter.format(
+                "你好！。",
+                options: .current(userDefaults: defaults, modePunctuation: .preserve)
+            ),
+            "你好！。"
+        )
+        XCTAssertEqual(
+            TextOutputFormatter.format(
+                "你好！。",
+                options: .current(userDefaults: defaults, modePunctuation: .stripTrailing)
+            ),
+            "你好"
+        )
+    }
+
     func testSpacingPreferenceMigration() throws {
         let suite = "TextOutputFormatterTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

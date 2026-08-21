@@ -191,4 +191,63 @@ final class RecognitionSessionTests: XCTestCase {
         ))
     }
 
+    func testSessionFormattingUsesTheSelectedModeAcrossOutputKinds() throws {
+        let suite = "RecognitionSessionTests.Formatting.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(CJKSpacingMode.off.rawValue, forKey: CJKSpacingMode.storageKey)
+        defaults.set(TrailingPunctuationMode.period.rawValue, forKey: "tf_stripTrailingPunctuation")
+
+        var quick = ProcessingMode.direct
+        quick.punctuationMode = .inherit
+        XCTAssertEqual(
+            RecognitionSession.formattedOutputText("快速模式。", mode: quick, userDefaults: defaults),
+            "快速模式"
+        )
+
+        var polished = ProcessingMode.formalWriting
+        polished.punctuationMode = .removeAll
+        XCTAssertEqual(
+            RecognitionSession.formattedOutputText("润色：完成！", mode: polished, userDefaults: defaults),
+            "润色完成"
+        )
+
+        var intelliSense = ProcessingMode.intelliSense
+        intelliSense.punctuationMode = .questionsAndExclamationsOnly
+        XCTAssertEqual(
+            RecognitionSession.formattedOutputText("智能，完成？Yes!", mode: intelliSense, userDefaults: defaults),
+            "智能完成？Yes!"
+        )
+
+        var translation = ProcessingMode.translation(target: .english)
+        translation.punctuationMode = .stripTrailing
+        XCTAssertEqual(
+            RecognitionSession.formattedOutputText("Translation complete?!", mode: translation, userDefaults: defaults),
+            "Translation complete"
+        )
+    }
+
+    func testCrossModeFinishFormatsWithTheEndingMode() throws {
+        let suite = "RecognitionSessionTests.CrossModeFormatting.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(CJKSpacingMode.off.rawValue, forKey: CJKSpacingMode.storageKey)
+
+        var startingMode = ProcessingMode.direct
+        startingMode.punctuationMode = .preserve
+        var endingMode = ProcessingMode.formalWriting
+        endingMode.punctuationMode = .removeAll
+        let processingMode = CrossModeFinishPreference.processingMode(
+            startingMode: startingMode,
+            endingMode: endingMode,
+            isEnabled: true
+        )
+
+        XCTAssertEqual(processingMode.id, endingMode.id)
+        XCTAssertEqual(
+            RecognitionSession.formattedOutputText("跨模式，完成！", mode: processingMode, userDefaults: defaults),
+            "跨模式完成"
+        )
+    }
+
 }

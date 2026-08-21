@@ -425,15 +425,21 @@ struct ModesSettingsTab: View {
         if mode.id == ProcessingMode.translationModeId {
             translationModeDetail(mode)
         } else if mode.id == ProcessingMode.intelliSenseId {
-            IntelliSenseModeDetail(
-                mode: mode,
-                onEditBinding: { editBinding(mode, $0) },
-                onDeleteBinding: { deleteBinding(mode.id, $0) },
-                onAddBinding: { addBinding(mode) }
-            )
+            VStack(alignment: .leading, spacing: 18) {
+                IntelliSenseModeDetail(
+                    mode: mode,
+                    onEditBinding: { editBinding(mode, $0) },
+                    onDeleteBinding: { deleteBinding(mode.id, $0) },
+                    onAddBinding: { addBinding(mode) }
+                )
+                PunctuationModeSection(selection: punctuationModeBinding(for: mode.id))
+            }
         } else if mode.isBuiltin && mode.id != ProcessingMode.formalWritingId {
             VStack(alignment: .leading, spacing: 18) {
                 builtinModeDetail(mode)
+                if mode.supportsOutputFormatting {
+                    PunctuationModeSection(selection: punctuationModeBinding(for: mode.id))
+                }
                 HotkeySectionView(
                     bindings: mode.hotkeyBindings,
                     onEdit: { editBinding(mode, $0) },
@@ -594,6 +600,8 @@ struct ModesSettingsTab: View {
                 }
             }
 
+            PunctuationModeSection(selection: punctuationModeBinding(for: mode.id))
+
             HotkeySectionView(
                 bindings: mode.hotkeyBindings,
                 onEdit: { editBinding(mode, $0) },
@@ -627,6 +635,21 @@ struct ModesSettingsTab: View {
                 )
             }
         }
+    }
+
+    private func punctuationModeBinding(for modeId: UUID) -> Binding<ModePunctuationMode> {
+        Binding(
+            get: {
+                modes.first(where: { $0.id == modeId })?.punctuationMode ?? .inherit
+            },
+            set: { newValue in
+                guard let index = modes.firstIndex(where: { $0.id == modeId }),
+                      modes[index].supportsOutputFormatting
+                else { return }
+                modes[index].punctuationMode = newValue
+                persistModes()
+            }
+        )
     }
 
     private var selectionAskDescription: some View {
@@ -1525,6 +1548,68 @@ private struct HotkeyRecordingSheet: View {
     }
 }
 
+// MARK: - Output Formatting
+
+private struct PunctuationModeSection: View {
+    @Binding var selection: ModePunctuationMode
+
+    private let options: [(ModePunctuationMode, String)] = [
+        (.inherit, L("跟随通用设置", "Follow General Settings")),
+        (.preserve, L("保留全部标点", "Keep All Punctuation")),
+        (.stripTrailing, L("去掉句末标点", "Remove Trailing Punctuation")),
+        (.questionsAndExclamationsOnly, L("仅保留问号和感叹号", "Keep Only ? and !")),
+        (.removeAll, L("去掉全部标点", "Remove All Punctuation")),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L("输出格式", "Output Format").uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(TF.settingsTextTertiary)
+
+            Text(L("标点处理", "Punctuation"))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(TF.settingsTextSecondary)
+
+            Menu {
+                ForEach(options, id: \.0) { option in
+                    Button {
+                        selection = option.0
+                    } label: {
+                        if option.0 == selection {
+                            Label(option.1, systemImage: "checkmark")
+                        } else {
+                            Text(option.1)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(options.first(where: { $0.0 == selection })?.1 ?? selection.rawValue)
+                        .font(.system(size: 13))
+                        .foregroundStyle(TF.settingsText)
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+                .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt))
+            }
+            .buttonStyle(.plain)
+
+            Text(L(
+                "仅覆盖当前模式；“跟随通用设置”会继续使用通用设置中的句末标点规则。",
+                "Applies only to this mode. Follow General Settings keeps using the global trailing-punctuation preference."
+            ))
+            .font(.system(size: 10))
+            .foregroundStyle(TF.settingsTextTertiary)
+            .lineSpacing(2)
+        }
+    }
+}
+
 // MARK: - Mode Detail Inner
 
 private struct ModeDetailInner: View {
@@ -1541,6 +1626,7 @@ private struct ModeDetailInner: View {
     @State private var modeDescription = ""
     @State private var processingLabel = ""
     @State private var prompt = ""
+    @State private var punctuationMode: ModePunctuationMode = .inherit
     @State private var saveStatus: SaveStatus = .clean
 
     private enum SaveStatus: Equatable {
@@ -1553,6 +1639,7 @@ private struct ModeDetailInner: View {
             || processingLabel != mode.processingLabel
             || prompt != mode.prompt
             || (Int(shortTextExemption) ?? 0) != mode.shortTextExemption
+            || punctuationMode != mode.punctuationMode
     }
 
     private let exemptionOptions: [(value: String, label: String)] = [
@@ -1632,6 +1719,7 @@ private struct ModeDetailInner: View {
                     updated.processingLabel = processingLabel
                     updated.prompt = prompt
                     updated.shortTextExemption = Int(shortTextExemption) ?? 0
+                    updated.punctuationMode = punctuationMode
                     onSave(updated)
                     withAnimation { saveStatus = .saved }
                     onDraftChange(updated, false)
@@ -1688,6 +1776,11 @@ private struct ModeDetailInner: View {
                 }
                 .frame(width: 176)
             }
+
+            if mode.supportsOutputFormatting {
+                PunctuationModeSection(selection: $punctuationMode)
+            }
+
             HotkeySectionView(
                 bindings: mode.hotkeyBindings,
                 onEdit: onEditBinding,
@@ -1722,6 +1815,7 @@ private struct ModeDetailInner: View {
         .onChange(of: processingLabel) { _, _ in reportDraft() }
         .onChange(of: prompt) { _, _ in reportDraft() }
         .onChange(of: shortTextExemption) { _, _ in reportDraft() }
+        .onChange(of: punctuationMode) { _, _ in reportDraft() }
     }
 
     private func reportDraft() {
@@ -1732,6 +1826,7 @@ private struct ModeDetailInner: View {
         updated.processingLabel = processingLabel
         updated.prompt = prompt
         updated.shortTextExemption = Int(shortTextExemption) ?? 0
+        updated.punctuationMode = punctuationMode
         onDraftChange(updated, isDirty)
     }
 
@@ -1741,6 +1836,7 @@ private struct ModeDetailInner: View {
         processingLabel = mode.processingLabel
         prompt = mode.prompt
         shortTextExemption = String(mode.shortTextExemption)
+        punctuationMode = mode.punctuationMode
         saveStatus = .clean
         onDraftChange(mode, false)
     }
@@ -1762,6 +1858,7 @@ private struct FormalWritingDetailInner: View {
     @State private var modeDescription = ""
     @State private var processingLabel = ""
     @State private var prompt = ""
+    @State private var punctuationMode: ModePunctuationMode = .inherit
     @State private var saveStatus: SaveStatus = .clean
     @State private var promptBeforeUpdate: String?
 
@@ -1775,6 +1872,7 @@ private struct FormalWritingDetailInner: View {
             || processingLabel != mode.processingLabel
             || prompt != mode.prompt
             || (Int(shortTextExemption) ?? 0) != mode.shortTextExemption
+            || punctuationMode != mode.punctuationMode
     }
 
     private var isLatestPrompt: Bool {
@@ -1869,6 +1967,7 @@ private struct FormalWritingDetailInner: View {
                     updated.processingLabel = processingLabel
                     updated.prompt = prompt
                     updated.shortTextExemption = Int(shortTextExemption) ?? 0
+                    updated.punctuationMode = punctuationMode
                     onSave(updated)
                     promptBeforeUpdate = nil
                     withAnimation { saveStatus = .saved }
@@ -1929,6 +2028,8 @@ private struct FormalWritingDetailInner: View {
                 .frame(width: 176)
             }
 
+            PunctuationModeSection(selection: $punctuationMode)
+
             // Hotkeys
             HotkeySectionView(
                 bindings: mode.hotkeyBindings,
@@ -1964,6 +2065,7 @@ private struct FormalWritingDetailInner: View {
         .onChange(of: processingLabel) { _, _ in reportDraft() }
         .onChange(of: prompt) { _, _ in reportDraft() }
         .onChange(of: shortTextExemption) { _, _ in reportDraft() }
+        .onChange(of: punctuationMode) { _, _ in reportDraft() }
     }
 
     private func reportDraft() {
@@ -1974,6 +2076,7 @@ private struct FormalWritingDetailInner: View {
         updated.processingLabel = processingLabel
         updated.prompt = prompt
         updated.shortTextExemption = Int(shortTextExemption) ?? 0
+        updated.punctuationMode = punctuationMode
         onDraftChange(updated, isDirty)
     }
 
@@ -2014,6 +2117,7 @@ private struct FormalWritingDetailInner: View {
         processingLabel = mode.processingLabel
         prompt = mode.prompt
         shortTextExemption = String(mode.shortTextExemption)
+        punctuationMode = mode.punctuationMode
         saveStatus = .clean
         onDraftChange(mode, false)
     }
