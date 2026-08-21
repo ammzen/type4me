@@ -631,7 +631,7 @@ final class PostInjectionLearningCoordinator: NSObject {
     private let timing: UserEditObservationTiming
 
     init(
-        historyStore: HistoryStore = HistoryStore(),
+        historyStore: HistoryStore = .shared,
         timing: UserEditObservationTiming = .production
     ) {
         self.historyStore = historyStore

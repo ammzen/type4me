@@ -149,7 +149,7 @@ actor RecognitionSession {
 
     private let audioEngine = AudioCaptureEngine()
     private let injectionEngine = TextInjectionEngine()
-    let historyStore = HistoryStore()
+    let historyStore = HistoryStore.shared
     private var asrClient: (any SpeechRecognizer)?
     private var llmClientCache = LLMClientCache()
     private(set) var recordingPurpose: RecordingPurpose = .input(.direct)
