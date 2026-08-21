@@ -18,9 +18,7 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
     @State private var testTask: Task<Void, Never>?
     /// Tracks which credential fields are in "custom input" mode (value not in preset options).
     @State private var customModeFields: Set<String> = []
-    @State private var disableThinking: Bool = UserDefaults.standard.object(forKey: "tf_disableThinking") == nil
-        ? true
-        : UserDefaults.standard.bool(forKey: "tf_disableThinking")
+    @State private var disableThinking = LLMThinkingPreference.isDisabled(for: .doubao)
     @State private var fetchedModelOptions: [FieldOption] = []
     @State private var isFetchingModels = false
 
@@ -152,7 +150,7 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
             set: { newValue in
                 guard thinkingToggleAvailable else { return }
                 disableThinking = newValue
-                UserDefaults.standard.set(disableThinking, forKey: "tf_disableThinking")
+                LLMThinkingPreference.setDisabled(disableThinking, for: selectedLLMProvider)
             }
         )
     }
@@ -170,6 +168,8 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
             return L("发送 enable_thinking: false", "Sends enable_thinking: false")
         case .reasoningEffort:
             return L("发送 reasoning_effort: none", "Sends reasoning_effort: none")
+        case .reasoning:
+            return L("发送 reasoning.effort: none", "Sends reasoning.effort: none")
         case .think:
             return L("发送 think: false", "Sends think: false")
         case nil where selectedLLMProvider.needsReasoningSplit:
@@ -419,6 +419,7 @@ struct LLMSettingsCard: View, SettingsCardHelpers {
     private func loadLLMCredentialsForProvider(_ provider: LLMProvider) {
         testTask?.cancel()
         editedFields = []
+        disableThinking = LLMThinkingPreference.isDisabled(for: provider)
         if let values = KeychainService.loadLLMCredentials(for: provider) {
             llmCredentialValues = values
             savedLLMValues = values
