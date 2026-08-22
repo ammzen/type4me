@@ -12,6 +12,10 @@ xcuserdata/
 .vscode/
 .claude/
 
+# Local agent context
+.ai/
+.devlead/
+
 # macOS
 .DS_Store
 
