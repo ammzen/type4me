@@ -1,6 +1,17 @@
 {
-  "latest": "2.1.0",
+  "latest": "2.1.1",
   "releases": [
+    {
+      "version": "2.1.1",
+      "date": "2026-08-23",
+      "notes": "- 新增 Cartesia Ink-2 流式语音识别，并支持配置 Deepgram WebSocket 地址与自定义 OpenAI ASR Base URL\n- 会粘贴文本的处理模式可分别设置标点策略，包括保留全部、去掉句末、仅保留问号和感叹号或去掉全部标点\n- 复用 Codex App Server 会话以减少连续处理开销，并支持关闭 OpenRouter 推理输出\n- 历史记录显示实际识别与处理模型，同时修复 SQLite 句柄泄漏\n- 修复 USB 多缓冲音频设备刷新崩溃、上下文读取造成的录音启动等待，以及独立和左右侧修饰键识别问题",
+      "cloud_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v2.1.1/Type4Me-v2.1.1-cloud.dmg",
+      "cloud_dmg_size": 10598598,
+      "cloud_dmg_sha256": "6ad1a82257b59c68d5725ab58ea9a10bfe21f5161511a8fc714c1ee0110b599c",
+      "local_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v2.1.1/Type4Me-v2.1.1-local-apple-silicon.dmg",
+      "local_dmg_size": 716532080,
+      "local_dmg_sha256": "52a51a2ca64e0ba630424b1352de7e2b949b42ec6ee9960ef01955cb52b1fc31"
+    },
     {
       "version": "2.1.0",
       "date": "2026-08-18",
