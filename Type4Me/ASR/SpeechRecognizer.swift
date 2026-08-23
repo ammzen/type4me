@@ -66,6 +66,8 @@ struct RecognitionTranscript: Sendable, Equatable {
 enum InjectionOutcome: Sendable, Equatable {
     case inserted
     case copiedToClipboard
+    case notInserted
+    case discarded
 
     var completionMessage: String {
         switch self {
@@ -73,6 +75,10 @@ enum InjectionOutcome: Sendable, Equatable {
             return L("已完成", "Done")
         case .copiedToClipboard:
             return L("已粘贴到剪贴板", "Copied to clipboard")
+        case .notInserted:
+            return L("未找到可输入的位置", "No editable field found")
+        case .discarded:
+            return L("已取消", "Cancelled")
         }
     }
 }

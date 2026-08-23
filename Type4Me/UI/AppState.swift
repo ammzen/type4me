@@ -84,16 +84,6 @@ enum CrossModeFinishPreference {
     }
 }
 
-enum ClipboardInjectionPreference {
-    static func isEnabled(preserveClipboard: Bool) -> Bool {
-        !preserveClipboard
-    }
-
-    static func preserveClipboardValue(isEnabled: Bool) -> Bool {
-        !isEnabled
-    }
-}
-
 enum ModeSelectionPreference {
     static let storageKey = "tf_lastSelectedModeID"
 

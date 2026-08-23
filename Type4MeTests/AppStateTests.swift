@@ -397,11 +397,24 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(switchedMode.id, endingMode.id)
     }
 
-    func testClipboardInjectionPreferencePreservesLegacyInverseStorage() {
-        XCTAssertFalse(ClipboardInjectionPreference.isEnabled(preserveClipboard: true))
-        XCTAssertTrue(ClipboardInjectionPreference.isEnabled(preserveClipboard: false))
-        XCTAssertFalse(ClipboardInjectionPreference.preserveClipboardValue(isEnabled: true))
-        XCTAssertTrue(ClipboardInjectionPreference.preserveClipboardValue(isEnabled: false))
+    func testFinalizeShowsNoDestinationMessage() {
+        let appState = AppState()
+        appState.barPhase = .processing
+
+        appState.finalize(text: "测试文本", outcome: .notInserted)
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, InjectionOutcome.notInserted.completionMessage)
+    }
+
+    func testFinalizeShowsCancelledMessageWhenResultIsNotRetained() {
+        let appState = AppState()
+        appState.barPhase = .processing
+
+        appState.finalize(text: "测试文本", outcome: .discarded)
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, InjectionOutcome.discarded.completionMessage)
     }
 
     func testLocalASREngineSelectionNeverDisablesBothEngines() {

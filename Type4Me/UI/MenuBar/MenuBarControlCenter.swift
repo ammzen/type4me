@@ -243,12 +243,9 @@ final class MenuBarActionCoordinator {
         UserDefaults.standard.set(enabled, forKey: CornerQuotePreference.storageKey)
     }
 
-    func setCopyToClipboard(_ enabled: Bool) {
+    func setClipboardOutputPolicy(_ policy: ClipboardOutputPolicy) {
         guard appDelegate.menuBarRuntimeSettingsAreEditable else { return }
-        UserDefaults.standard.set(
-            ClipboardInjectionPreference.preserveClipboardValue(isEnabled: enabled),
-            forKey: "tf_preserveClipboard"
-        )
+        UserDefaults.standard.set(policy.rawValue, forKey: ClipboardOutputPolicy.storageKey)
     }
 
     func copyLatestResult() {
@@ -341,7 +338,8 @@ struct MenuBarControlCenterView: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage(LiveTranscriptDisplayPreference.storageKey)
     private var liveTranscriptEnabled = LiveTranscriptDisplayPreference.defaultValue
-    @AppStorage("tf_preserveClipboard") private var preserveClipboard = true
+    @AppStorage(ClipboardOutputPolicy.storageKey)
+    private var clipboardOutputPolicyRaw = ClipboardOutputPolicy.defaultValue.rawValue
     @AppStorage(CJKSpacingMode.storageKey) private var cjkSpacingRaw = CJKSpacingMode.defaultValue
     @AppStorage(CornerQuotePreference.storageKey) private var useCornerQuotes = CornerQuotePreference.defaultValue
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
@@ -557,13 +555,18 @@ struct MenuBarControlCenterView: View {
 
     private var outputFormattingMenu: some View {
         Menu(L("输出格式", "Output Formatting")) {
-            Toggle(
-                L("保留到剪贴板", "Copy to Clipboard"),
-                isOn: Binding(
-                    get: { ClipboardInjectionPreference.isEnabled(preserveClipboard: preserveClipboard) },
-                    set: { actions.setCopyToClipboard($0) }
-                )
-            )
+            Menu(L("剪贴板保留", "Clipboard Retention")) {
+                ForEach(ClipboardOutputPolicy.allCases) { policy in
+                    Button {
+                        actions.setClipboardOutputPolicy(policy)
+                    } label: {
+                        menuChoiceLabel(
+                            policy.displayName,
+                            isSelected: policy.rawValue == clipboardOutputPolicyRaw
+                        )
+                    }
+                }
+            }
             if appState.currentMode.supportsOutputFormatting {
                 punctuationMenu
             }

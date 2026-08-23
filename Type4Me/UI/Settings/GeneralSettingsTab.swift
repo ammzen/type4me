@@ -19,7 +19,8 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     @AppStorage("tf_volumeReduction") private var volumeReduction = -1
     @AppStorage(RecordingVisualStyle.storageKey) private var visualStyle = RecordingVisualStyle.defaultValue
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
-    @AppStorage("tf_preserveClipboard") private var preserveClipboard = true
+    @AppStorage(ClipboardOutputPolicy.storageKey)
+    private var clipboardOutputPolicyRaw = ClipboardOutputPolicy.defaultValue.rawValue
     @AppStorage("tf_showDockIcon") private var showDockIcon = true
     @AppStorage("tf_bypassProxy") private var bypassProxy = "off"
     @AppStorage("tf_stripTrailingPunctuation") private var stripTrailingPunctuation = "off"
@@ -627,14 +628,17 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     }
 
     private var preserveClipboardRow: some View {
-        settingsToggleRow(
-            L("注入剪贴板", "Copy to Clipboard"),
-            subtitle: L("开启后始终写入剪贴板", "Always copy recognized text to the clipboard"),
-            isOn: Binding(
-                get: { ClipboardInjectionPreference.isEnabled(preserveClipboard: preserveClipboard) },
-                set: { preserveClipboard = ClipboardInjectionPreference.preserveClipboardValue(isEnabled: $0) }
+        let policy = ClipboardOutputPolicy(rawValue: clipboardOutputPolicyRaw)
+            ?? ClipboardOutputPolicy.defaultValue
+        return settingsOptionRow(
+            L("剪贴板保留", "Clipboard Retention"),
+            subtitle: policy.detail
+        ) {
+            settingsDropdown(
+                selection: $clipboardOutputPolicyRaw,
+                options: ClipboardOutputPolicy.allCases.map { ($0.rawValue, $0.displayName) }
             )
-        )
+        }
     }
 
     private var dockIconRow: some View {
