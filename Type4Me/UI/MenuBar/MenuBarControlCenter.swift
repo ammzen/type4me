@@ -10,6 +10,21 @@ enum MicrophoneChoice: Equatable {
     case device(AudioInputDevice)
 }
 
+/// The two generic application-window entries in the menu bar. Specific
+/// workspace actions (History, Vocabulary, and so on) own their destinations
+/// separately.
+enum MenuBarApplicationDestination: Equatable {
+    case home
+    case settings
+
+    var settingsTab: SettingsTab {
+        switch self {
+        case .home: .general
+        case .settings: .preferences
+        }
+    }
+}
+
 struct MenuBarASRProviderItem: Identifiable, Equatable {
     let provider: ASRProvider
 
@@ -279,7 +294,19 @@ final class MenuBarActionCoordinator {
         appDelegate.presentSettings()
     }
 
+    /// The app-level entry point is deliberately deterministic: it always
+    /// opens the Home overview instead of restoring whichever workspace was
+    /// last visible in the window.
+    func openType4Me() {
+        openApplication(.home)
+    }
+
     func openSettings() {
+        openApplication(.settings)
+    }
+
+    private func openApplication(_ destination: MenuBarApplicationDestination) {
+        appDelegate.navigationModel.selectedTab = destination.settingsTab
         appDelegate.presentSettings()
     }
 
@@ -337,6 +364,7 @@ struct MenuBarControlCenterView: View {
         workspaceActions
         conditionalSystemActions
         Divider()
+        Button(L("打开 Type4Me", "Open Type4Me")) { actions.openType4Me() }
         Button(L("设置…", "Settings…")) { actions.openSettings() }
             .keyboardShortcut(",", modifiers: .command)
         Button(L("退出 Type4Me", "Quit Type4Me")) {

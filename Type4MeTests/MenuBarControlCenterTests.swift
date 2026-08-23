@@ -3,6 +3,11 @@ import XCTest
 
 final class MenuBarControlCenterTests: XCTestCase {
 
+    func testApplicationMenuDestinationsUseDeterministicTabs() {
+        XCTAssertEqual(MenuBarApplicationDestination.home.settingsTab, .general)
+        XCTAssertEqual(MenuBarApplicationDestination.settings.settingsTab, .preferences)
+    }
+
     func testReadyStatesAllowDictationStart() {
         XCTAssertTrue(MenuBarPresentation.canStartRecording(in: .hidden))
         XCTAssertTrue(MenuBarPresentation.canStartRecording(in: .done))

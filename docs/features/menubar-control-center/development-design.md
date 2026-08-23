@@ -169,6 +169,7 @@ final class MenuBarActionCoordinator {
     func openAskAnything()
     func openVocabulary()
     func openHistory()
+    func openType4Me()
     func openSettings()
     func openPermissionGuide()
     func performUpdateAction()
@@ -244,7 +245,7 @@ SenseVoice/Qwen3 菜单必须 `#if HAS_SHERPA_ONNX`，并遵守 `SenseVoiceServe
 
 ### 7.3 Settings 导航
 
-Coordinator 使用现有 `openWindow(id: "settings")` 和 `AppNavigationModel`/通知：History 继续使用 `.navigateToHistory`；Vocabulary 使用 `.navigateToVocabulary`；Ask Anything 设置 `navigationModel.selectedTab = .askAnything` 并遵守其活动会话语义。导航前激活应用，避免打开后台窗口。
+Coordinator 使用现有 `openWindow(id: "settings")` 和 `AppNavigationModel`/通知。应用级入口不恢复上次标签：`openType4Me()` 先设置 `selectedTab = .general`，`openSettings()` 先设置 `selectedTab = .preferences`。History、Vocabulary 和 Modes 分别设为自己的目标标签；Ask Anything 设置 `navigationModel.selectedTab = .askAnything` 并遵守其活动会话语义。导航前激活应用，避免打开后台窗口。
 
 ### 7.4 权限与更新
 
