@@ -1,0 +1,743 @@
+import AppKit
+import Foundation
+import Observation
+import SwiftUI
+
+/// A menu-specific choice. It intentionally does not replace the persisted
+/// priority-list model used by audio capture and Settings.
+enum MicrophoneChoice: Equatable {
+    case systemDefault
+    case device(AudioInputDevice)
+}
+
+struct MenuBarASRProviderItem: Identifiable, Equatable {
+    let provider: ASRProvider
+
+    var id: String { provider.rawValue }
+    var title: String { provider.displayName }
+}
+
+enum MenuBarPermissionIssue: Equatable {
+    case microphone
+    case accessibility
+
+    var title: String {
+        switch self {
+        case .microphone:
+            return L("麦克风权限未开启", "Microphone permission is off")
+        case .accessibility:
+            return L("辅助功能权限未开启", "Accessibility permission is off")
+        }
+    }
+}
+
+/// Converts independently-owned runtime state into small, privacy-safe menu
+/// values. It never stores dictated text or credential material.
+@MainActor
+@Observable
+final class MenuBarControlCenterModel {
+    private let appState: AppState
+    private var observers: [NSObjectProtocol] = []
+    private var historyRefreshTask: Task<Void, Never>?
+
+    private(set) var inputDevices: [AudioInputDevice] = []
+    private(set) var configuredASRProviders: [MenuBarASRProviderItem] = []
+    private(set) var canCopyLatestResult = false
+    private(set) var permissionIssue: MenuBarPermissionIssue?
+    private(set) var canStartRevise = false
+    private(set) var lastActionFeedback: String?
+
+    init(appState: AppState) {
+        self.appState = appState
+        observeChanges()
+        refresh()
+    }
+
+    var selectedMicrophoneLabel: String {
+        guard AudioInputDevicePreferenceStore.mode() == .priority else {
+            return L("跟随系统", "Follow System")
+        }
+        if let resolved = AudioInputDevicePreferenceStore.resolvedDevice(devices: inputDevices) {
+            return resolved.name
+        }
+        return AudioInputDevicePreferenceStore.priorityEntries().first?.name
+            ?? L("跟随系统", "Follow System")
+    }
+
+    var selectedProviderLabel: String {
+        KeychainService.selectedASRProvider.displayName
+    }
+
+    var translationMode: ProcessingMode? {
+        appState.availableModes.first(where: { $0.id == ProcessingMode.translationModeId })
+    }
+
+    var translationTarget: TranslationLanguage? {
+        guard let translationMode else { return nil }
+        let code = translationMode.translationTargetLanguageCode ?? TranslationLanguage.english.rawValue
+        return TranslationLanguage(rawValue: code)
+    }
+
+    func refresh() {
+        let cached = AudioInputDeviceMonitor.shared.currentDevices()
+        inputDevices = cached.isEmpty
+            ? AudioInputDeviceMonitor.shared.refreshSynchronously()
+            : cached
+        configuredASRProviders = MenuBarASRProviderAvailability.configuredItems()
+        permissionIssue = Self.currentPermissionIssue()
+        refreshHistoryAvailability()
+        refreshReviseAvailability()
+    }
+
+    func showActionFeedback(_ message: String) {
+        lastActionFeedback = message
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            self?.lastActionFeedback = nil
+        }
+    }
+
+    private func observeChanges() {
+        let names: [Notification.Name] = [
+            .audioInputDevicesDidChange,
+            .asrProviderDidChange,
+            .modesDidChange,
+            .historyStoreDidChange,
+            .reviseSettingsDidChange,
+        ]
+        observers = names.map { name in
+            NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.refresh()
+                }
+            }
+        }
+    }
+
+    private func refreshHistoryAvailability() {
+        historyRefreshTask?.cancel()
+        historyRefreshTask = Task { [weak self] in
+            let latest = await HistoryStore.shared.latestCopyableFinalText()
+            guard !Task.isCancelled else { return }
+            self?.canCopyLatestResult = latest != nil
+        }
+    }
+
+    private func refreshReviseAvailability() {
+        Task { [weak self] in
+            let isAvailable = await ReviseCoordinator.shared.hasAvailableTarget()
+            guard !Task.isCancelled else { return }
+            self?.canStartRevise = isAvailable
+        }
+    }
+
+    private static func currentPermissionIssue() -> MenuBarPermissionIssue? {
+        if !PermissionManager.hasMicrophonePermission { return .microphone }
+        if !PermissionManager.hasAccessibilityPermission { return .accessibility }
+        return nil
+    }
+}
+
+enum MenuBarASRProviderAvailability {
+    static func configuredItems() -> [MenuBarASRProviderItem] {
+        ASRProvider.allCases.compactMap { provider in
+            guard ASRProviderRegistry.capabilities(for: provider).isAvailable else {
+                return nil
+            }
+            if provider.isLocal {
+                return MenuBarASRProviderItem(provider: provider)
+            }
+            guard KeychainService.loadASRConfig(for: provider)?.isValid == true else {
+                return nil
+            }
+            return MenuBarASRProviderItem(provider: provider)
+        }
+    }
+}
+
+/// Routes all menu side effects through AppDelegate's existing runtime
+/// ownership. The menu itself therefore never starts a second Session or
+/// writes a parallel preference store.
+@MainActor
+@Observable
+final class MenuBarActionCoordinator {
+    private unowned let appDelegate: AppDelegate
+    private let model: MenuBarControlCenterModel
+
+    init(appDelegate: AppDelegate, model: MenuBarControlCenterModel) {
+        self.appDelegate = appDelegate
+        self.model = model
+    }
+
+    func startRecording(modeID: UUID) {
+        appDelegate.requestMenuBarRecordingStart(modeID: modeID)
+    }
+
+    func finishRecording() {
+        appDelegate.requestMenuBarRecordingControl(.finish)
+    }
+
+    func cancelRecording() {
+        appDelegate.requestMenuBarRecordingControl(.cancel)
+    }
+
+    func setMicrophone(_ choice: MicrophoneChoice) {
+        guard appDelegate.menuBarRuntimeSettingsAreEditable else { return }
+        switch choice {
+        case .systemDefault:
+            AudioInputDevicePreferenceStore.resetToSystemDefault()
+        case .device(let device):
+            AudioInputDevicePreferenceStore.savePriorityEntries([
+                AudioInputDevicePreferenceEntry(uid: device.uid, name: device.name)
+            ])
+        }
+        model.refresh()
+    }
+
+    func setASRProvider(_ provider: ASRProvider) {
+        appDelegate.selectASRProviderFromMenu(provider)
+        model.refresh()
+    }
+
+    func setTranslationTarget(_ language: TranslationLanguage) {
+        appDelegate.setTranslationTargetFromMenu(language)
+        model.refresh()
+    }
+
+    func setLiveTranscript(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: LiveTranscriptDisplayPreference.storageKey)
+    }
+
+    func setPunctuationMode(_ mode: ModePunctuationMode) {
+        appDelegate.setCurrentModePunctuationFromMenu(mode)
+        model.refresh()
+    }
+
+    func setCJKSpacing(_ mode: CJKSpacingMode) {
+        guard appDelegate.menuBarRuntimeSettingsAreEditable else { return }
+        UserDefaults.standard.set(mode.rawValue, forKey: CJKSpacingMode.storageKey)
+    }
+
+    func setCornerQuotes(_ enabled: Bool) {
+        guard appDelegate.menuBarRuntimeSettingsAreEditable else { return }
+        UserDefaults.standard.set(enabled, forKey: CornerQuotePreference.storageKey)
+    }
+
+    func setCopyToClipboard(_ enabled: Bool) {
+        guard appDelegate.menuBarRuntimeSettingsAreEditable else { return }
+        UserDefaults.standard.set(
+            ClipboardInjectionPreference.preserveClipboardValue(isEnabled: enabled),
+            forKey: "tf_preserveClipboard"
+        )
+    }
+
+    func copyLatestResult() {
+        Task { [weak self] in
+            guard let text = await HistoryStore.shared.latestCopyableFinalText() else {
+                await MainActor.run {
+                    self?.model.refresh()
+                }
+                return
+            }
+            await MainActor.run {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                self?.model.showActionFeedback(L("已复制上一条结果", "Copied last result"))
+            }
+        }
+    }
+
+    func startRevise() {
+        appDelegate.requestMenuBarReviseStart()
+    }
+
+    func undoLatestRevise() {
+        appDelegate.appState.performReviseUndo()
+    }
+
+    func openAskAnything() {
+        appDelegate.presentAskAnything(sessionID: nil)
+    }
+
+    func openVocabulary() {
+        appDelegate.navigationModel.selectedTab = .vocabulary
+        appDelegate.presentSettings()
+    }
+
+    func openHistory() {
+        appDelegate.navigationModel.selectedTab = .history
+        appDelegate.presentSettings()
+    }
+
+    func openModes() {
+        appDelegate.navigationModel.selectedTab = .modes
+        appDelegate.presentSettings()
+    }
+
+    func openSettings() {
+        appDelegate.presentSettings()
+    }
+
+    func openPermissionGuide() {
+        appDelegate.presentPermissionGuide()
+    }
+
+    func performUpdateAction() {
+        let updater = appDelegate.appUpdater
+        switch updater.state {
+        case .idle:
+            if let release = appDelegate.appState.availableUpdates.first {
+                updater.downloadUpdate(release: release)
+            }
+        case .downloading:
+            updater.cancelDownload()
+        case .readyToInstall:
+            updater.installAndRestart()
+        case .failed:
+            updater.retryDownload()
+        case .verifying, .installing:
+            break
+        }
+    }
+}
+
+struct MenuBarControlCenterView: View {
+    @Environment(AppState.self) private var appState
+    @Environment(AppUpdater.self) private var appUpdater
+    @Environment(MenuBarActionCoordinator.self) private var actions
+    @Environment(MenuBarControlCenterModel.self) private var model
+    @AppStorage(LiveTranscriptDisplayPreference.storageKey)
+    private var liveTranscriptEnabled = LiveTranscriptDisplayPreference.defaultValue
+    @AppStorage("tf_preserveClipboard") private var preserveClipboard = true
+    @AppStorage(CJKSpacingMode.storageKey) private var cjkSpacingRaw = CJKSpacingMode.defaultValue
+    @AppStorage(CornerQuotePreference.storageKey) private var useCornerQuotes = CornerQuotePreference.defaultValue
+
+    var body: some View {
+        statusSection
+        Divider()
+
+        switch appState.barPhase {
+        case .preparing, .recording:
+            activeRecordingActions
+        case .processing, .recovering:
+            processingActions
+        case .hidden, .done, .error:
+            readyActions
+        }
+
+        Divider()
+        runtimeControls
+        Divider()
+        workspaceActions
+        conditionalSystemActions
+        Divider()
+        Button(L("设置…", "Settings…")) { actions.openSettings() }
+            .keyboardShortcut(",", modifiers: .command)
+        Button(L("退出 Type4Me", "Quit Type4Me")) {
+            NSApplication.shared.terminate(nil)
+        }
+        .keyboardShortcut("q", modifiers: .command)
+
+        let _ = registerGlobalOpenActions()
+    }
+
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 7, height: 7)
+                Text(statusTitle)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            Text(statusSubtitle)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
+    @ViewBuilder
+    private var readyActions: some View {
+        startDictationMenu
+        if appState.latestReviseUndoTicketID != nil {
+            Button(L("撤销刚才的改口", "Undo last revision")) {
+                actions.undoLatestRevise()
+            }
+        } else if model.canStartRevise {
+            Button(L("改口上一条…", "Revise last result…")) {
+                actions.startRevise()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var activeRecordingActions: some View {
+        Button(L("完成录音", "Finish Recording")) {
+            actions.finishRecording()
+        }
+        Button(L("取消录音", "Cancel Recording")) {
+            actions.cancelRecording()
+        }
+        Divider()
+        Label(
+            "\(L("本轮模式", "Current mode"))：\(appState.currentMode.name)",
+            systemImage: "mic"
+        )
+        Label(
+            "\(L("麦克风", "Microphone"))：\(model.selectedMicrophoneLabel)",
+            systemImage: "mic.fill"
+        )
+        if appState.currentMode.id == ProcessingMode.translationModeId,
+           let target = model.translationTarget {
+            Label(
+                "\(L("翻译目标", "Translation target"))：\(target.displayName)",
+                systemImage: "character.book.closed"
+            )
+        }
+    }
+
+    private var processingActions: some View {
+        Group {
+            Label(L("本轮上下文已冻结", "Current session is frozen"), systemImage: "lock.fill")
+                .foregroundStyle(.secondary)
+            Label(
+                "\(L("本轮模式", "Current mode"))：\(appState.currentMode.name)",
+                systemImage: "mic"
+            )
+            Label(
+                "\(L("识别引擎", "Speech recognition"))：\(model.selectedProviderLabel)",
+                systemImage: "waveform"
+            )
+        }
+    }
+
+    private var startDictationMenu: some View {
+        Menu(L("开始口述", "Start Dictation")) {
+            ForEach(appState.availableModes) { mode in
+                Button {
+                    actions.startRecording(modeID: mode.id)
+                } label: {
+                    HStack {
+                        Text(modeMenuTitle(mode))
+                        Spacer()
+                        if let summary = hotkeySummary(for: mode) {
+                            Text(summary).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button(L("管理模式…", "Manage Modes…")) {
+                actions.openModes()
+            }
+        }
+        .disabled(!canStartRecording)
+    }
+
+    @ViewBuilder
+    private var runtimeControls: some View {
+        microphoneMenu
+        asrProviderMenu
+        if model.translationMode != nil {
+            translationTargetMenu
+        }
+        Toggle(
+            L("实时展示文本", "Live Transcript"),
+            isOn: Binding(
+                get: { liveTranscriptEnabled },
+                set: { actions.setLiveTranscript($0) }
+            )
+        )
+        outputFormattingMenu
+    }
+
+    private var microphoneMenu: some View {
+        Menu(L("麦克风", "Microphone")) {
+            Button {
+                actions.setMicrophone(.systemDefault)
+            } label: {
+                menuChoiceLabel(
+                    L("跟随系统", "Follow System"),
+                    isSelected: AudioInputDevicePreferenceStore.mode() == .systemDefault
+                )
+            }
+            if !model.inputDevices.isEmpty {
+                Divider()
+                ForEach(model.inputDevices) { device in
+                    Button {
+                        actions.setMicrophone(.device(device))
+                    } label: {
+                        menuChoiceLabel(device.name, isSelected: model.selectedMicrophoneLabel == device.name)
+                    }
+                }
+            }
+            Divider()
+            Button(L("管理麦克风优先级…", "Manage Microphone Priority…")) {
+                actions.openSettings()
+            }
+        }
+        .disabled(runtimeSettingsLocked)
+    }
+
+    private var asrProviderMenu: some View {
+        Menu(L("识别引擎", "Speech Recognition")) {
+            if model.configuredASRProviders.isEmpty {
+                Text(L("没有已配置的识别引擎", "No configured recognition engine"))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(model.configuredASRProviders) { item in
+                    Button {
+                        actions.setASRProvider(item.provider)
+                    } label: {
+                        menuChoiceLabel(
+                            item.title,
+                            isSelected: item.provider == KeychainService.selectedASRProvider
+                        )
+                    }
+                }
+            }
+            Divider()
+            Button(L("配置识别引擎…", "Configure Recognition…")) {
+                actions.openSettings()
+            }
+        }
+        .disabled(runtimeSettingsLocked)
+    }
+
+    private var translationTargetMenu: some View {
+        Menu(L("翻译目标", "Translation Target")) {
+            ForEach(TranslationLanguage.allCases) { language in
+                Button {
+                    actions.setTranslationTarget(language)
+                } label: {
+                    menuChoiceLabel(language.displayName, isSelected: language == model.translationTarget)
+                }
+            }
+        }
+        .disabled(runtimeSettingsLocked)
+    }
+
+    private var outputFormattingMenu: some View {
+        Menu(L("输出格式", "Output Formatting")) {
+            Toggle(
+                L("保留到剪贴板", "Copy to Clipboard"),
+                isOn: Binding(
+                    get: { ClipboardInjectionPreference.isEnabled(preserveClipboard: preserveClipboard) },
+                    set: { actions.setCopyToClipboard($0) }
+                )
+            )
+            if appState.currentMode.supportsOutputFormatting {
+                punctuationMenu
+            }
+            Menu(L("中英文间距", "CJK Spacing")) {
+                ForEach(CJKSpacingMode.allCases, id: \.rawValue) { mode in
+                    Button {
+                        actions.setCJKSpacing(mode)
+                    } label: {
+                        menuChoiceLabel(cjkSpacingTitle(mode), isSelected: mode.rawValue == cjkSpacingRaw)
+                    }
+                }
+            }
+            Toggle(
+                L("使用直角引号「」", "Use Corner Quotes 「」"),
+                isOn: Binding(
+                    get: { useCornerQuotes },
+                    set: { actions.setCornerQuotes($0) }
+                )
+            )
+            Divider()
+            Button(L("更多输出设置…", "More Output Settings…")) {
+                actions.openSettings()
+            }
+        }
+        .disabled(runtimeSettingsLocked)
+    }
+
+    private var punctuationMenu: some View {
+        Menu(L("当前模式标点", "Current Mode Punctuation")) {
+            ForEach(ModePunctuationMode.allCases, id: \.rawValue) { mode in
+                Button {
+                    actions.setPunctuationMode(mode)
+                } label: {
+                    menuChoiceLabel(
+                        punctuationTitle(mode),
+                        isSelected: mode == appState.currentMode.punctuationMode
+                    )
+                }
+            }
+        }
+    }
+
+    private var workspaceActions: some View {
+        Group {
+            if let feedback = model.lastActionFeedback {
+                Label(feedback, systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
+            Button(L("复制上一条结果", "Copy Last Result")) {
+                actions.copyLatestResult()
+            }
+            .disabled(!model.canCopyLatestResult)
+            Button(L("打开随便问…", "Open Ask Anything…")) {
+                actions.openAskAnything()
+            }
+            Button(L("词汇…", "Vocabulary…")) {
+                actions.openVocabulary()
+            }
+            Button(L("历史记录…", "History…")) {
+                actions.openHistory()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var conditionalSystemActions: some View {
+        if let issue = model.permissionIssue {
+            Divider()
+            Button {
+                actions.openPermissionGuide()
+            } label: {
+                Label(issue.title, systemImage: "exclamationmark.triangle.fill")
+            }
+        }
+        if shouldShowUpdate {
+            Divider()
+            Button(updateActionTitle) {
+                actions.performUpdateAction()
+            }
+        }
+    }
+
+    private var canStartRecording: Bool {
+        MenuBarPresentation.canStartRecording(in: appState.barPhase)
+    }
+
+    private var runtimeSettingsLocked: Bool {
+        MenuBarPresentation.locksRuntimeSettings(in: appState.barPhase)
+    }
+
+    private var shouldShowUpdate: Bool {
+        if !appState.availableUpdates.isEmpty { return true }
+        switch appUpdater.state {
+        case .idle: return false
+        case .downloading, .verifying, .readyToInstall, .installing, .failed: return true
+        }
+    }
+
+    private var updateActionTitle: String {
+        switch appUpdater.state {
+        case .idle:
+            if let release = appState.availableUpdates.first {
+                return L("有新版本 \(release.version)…", "Update \(release.version)…")
+            }
+            return L("检查更新…", "Check for Updates…")
+        case .downloading(let progress):
+            return L("取消更新下载（\(Int(progress * 100))%）", "Cancel Update Download (\(Int(progress * 100))%)")
+        case .verifying:
+            return L("正在验证更新…", "Verifying Update…")
+        case .readyToInstall:
+            return L("安装更新并重启", "Install Update and Restart")
+        case .installing:
+            return L("正在安装更新…", "Installing Update…")
+        case .failed:
+            return L("重试更新下载", "Retry Update Download")
+        }
+    }
+
+    private var statusColor: Color {
+        switch appState.barPhase {
+        case .preparing, .recording: return TF.recording
+        case .processing, .recovering: return TF.amber
+        case .done: return TF.success
+        case .error: return TF.settingsAccentRed
+        case .hidden: return .secondary.opacity(0.4)
+        }
+    }
+
+    private var statusTitle: String {
+        switch appState.barPhase {
+        case .preparing, .recording: return L("录制中", "Recording")
+        case .processing, .recovering: return appState.effectiveProcessingLabel
+        case .done: return appState.feedbackMessage
+        case .error: return appState.feedbackMessage
+        case .hidden: return L("就绪", "Ready")
+        }
+    }
+
+    private var statusSubtitle: String {
+        let mode = appState.currentMode.name
+        return "\(mode) · \(model.selectedProviderLabel) · \(model.selectedMicrophoneLabel)"
+    }
+
+    private func modeMenuTitle(_ mode: ProcessingMode) -> String {
+        guard mode.id == ProcessingMode.translationModeId,
+              let target = model.translationTarget
+        else { return mode.name }
+        return "\(mode.name) → \(target.displayName)"
+    }
+
+    private func hotkeySummary(for mode: ProcessingMode) -> String? {
+        guard !mode.hotkeyBindings.isEmpty else { return nil }
+        return mode.hotkeyBindings
+            .map { HotkeyRecorderView.keyDisplayName(keyCode: $0.keyCode, modifiers: $0.modifiers) }
+            .joined(separator: " / ")
+    }
+
+    @ViewBuilder
+    private func menuChoiceLabel(_ title: String, isSelected: Bool) -> some View {
+        HStack(spacing: 6) {
+            if isSelected {
+                Image(systemName: "checkmark")
+            } else {
+                Color.clear.frame(width: 14, height: 14)
+            }
+            Text(title)
+        }
+    }
+
+    private func punctuationTitle(_ mode: ModePunctuationMode) -> String {
+        switch mode {
+        case .inherit: return L("跟随通用设置", "Follow General Settings")
+        case .preserve: return L("保留标点", "Keep Punctuation")
+        case .stripTrailing: return L("去除句末标点", "Strip Trailing Punctuation")
+        case .questionsAndExclamationsOnly: return L("只保留问号和感叹号", "Keep ? and ! Only")
+        case .removeAll: return L("去除所有标点", "Remove All Punctuation")
+        }
+    }
+
+    private func cjkSpacingTitle(_ mode: CJKSpacingMode) -> String {
+        switch mode {
+        case .pangu: return L("盘古之白", "Pangu Spacing")
+        case .off: return L("保持原样", "Keep As Is")
+        case .remove: return L("移除空格", "Remove Spaces")
+        }
+    }
+
+    private func registerGlobalOpenActions() {
+        AppDelegate.openSettingsAction = { actions.openSettings() }
+        AppDelegate.openPermissionGuideAction = { actions.openPermissionGuide() }
+    }
+}
+
+enum MenuBarPresentation {
+    static func canStartRecording(in phase: FloatingBarPhase) -> Bool {
+        switch phase {
+        case .hidden, .done, .error:
+            return true
+        case .preparing, .recording, .processing, .recovering:
+            return false
+        }
+    }
+
+    static func locksRuntimeSettings(in phase: FloatingBarPhase) -> Bool {
+        phase == .preparing || phase == .recording
+    }
+}

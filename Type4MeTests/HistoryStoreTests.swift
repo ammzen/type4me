@@ -141,6 +141,27 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(all.last?.rawText, "old")
     }
 
+    func testLatestCopyableFinalTextUsesNewestCompletedNonEmptyRecord() async {
+        await store.insert(HistoryRecord(
+            id: "old-completed", createdAt: Date(timeIntervalSinceNow: -10), durationSeconds: 1,
+            rawText: "old", processingMode: nil, processedText: nil,
+            finalText: "old final", status: "completed", characterCount: 9, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "new-cancelled", createdAt: Date(), durationSeconds: 1,
+            rawText: "cancelled", processingMode: nil, processedText: nil,
+            finalText: "must not copy", status: "cancelled", characterCount: 13, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "new-empty", createdAt: Date(timeIntervalSinceNow: 1), durationSeconds: 1,
+            rawText: "empty", processingMode: nil, processedText: nil,
+            finalText: "   ", status: "completed", characterCount: 0, asrProvider: nil
+        ))
+
+        let latest = await store.latestCopyableFinalText()
+        XCTAssertEqual(latest, "old final")
+    }
+
     func testDeleteAll() async {
         for i in 0..<3 {
             await store.insert(HistoryRecord(

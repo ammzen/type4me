@@ -196,6 +196,27 @@ actor HistoryStore {
         return executeQuery(sql)
     }
 
+    /// Returns only the most recent completed final text for the menu-bar
+    /// recovery action. The caller deliberately does not receive a record or
+    /// any other history metadata, which keeps the menu snapshot free of
+    /// dictated content.
+    func latestCopyableFinalText() -> String? {
+        let sql = """
+        SELECT final_text FROM recognition_history
+        WHERE status = 'completed'
+          AND TRIM(final_text) != ''
+        ORDER BY created_at DESC
+        LIMIT 1;
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return nil
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return column(statement, 0)
+    }
+
     /// Cursor-based pagination with optional date range filter.
     /// Pass `cursor` for subsequent pages, `from`/`to` as ISO8601 strings for date filtering.
     func fetchPage(limit: Int, before cursor: String? = nil, from: String? = nil, to: String? = nil) -> [HistoryRecord] {

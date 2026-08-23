@@ -163,6 +163,22 @@ actor ReviseCoordinator {
         undoTicket = nil
     }
 
+    /// A privacy-safe readiness check for entry points such as the menu bar.
+    /// It intentionally verifies only the stored target's lifetime and whether
+    /// another revision owns the coordinator; accessibility validation remains
+    /// in `prepareForRecording()` immediately before recording starts.
+    func hasAvailableTarget() -> Bool {
+        guard settingsStore.isReviseActive(), transaction == nil, let target else {
+            return false
+        }
+        guard target.expiresAt > Date() else {
+            self.target = nil
+            undoTicket = nil
+            return false
+        }
+        return true
+    }
+
     // MARK: - Preparation for Recording
 
     func prepareForRecording() async -> Result<RevisePreparedTarget, ReviseFailure> {
