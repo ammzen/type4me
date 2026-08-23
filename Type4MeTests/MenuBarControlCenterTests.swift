@@ -1,11 +1,21 @@
 import XCTest
 @testable import Type4Me
 
+@MainActor
 final class MenuBarControlCenterTests: XCTestCase {
 
     func testApplicationMenuDestinationsUseDeterministicTabs() {
         XCTAssertEqual(MenuBarApplicationDestination.home.settingsTab, .general)
         XCTAssertEqual(MenuBarApplicationDestination.settings.settingsTab, .preferences)
+        XCTAssertEqual(MenuBarApplicationDestination.models.settingsTab, .models)
+    }
+
+    func testRefreshNotificationsIncludeApplicationActivationForPermissionChanges() {
+        XCTAssertTrue(
+            MenuBarControlCenterModel.refreshNotificationNames.contains(
+                NSApplication.didBecomeActiveNotification
+            )
+        )
     }
 
     func testReadyStatesAllowDictationStart() {

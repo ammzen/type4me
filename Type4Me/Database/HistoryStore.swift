@@ -196,16 +196,39 @@ actor HistoryStore {
         return executeQuery(sql)
     }
 
-    /// Returns only the most recent completed final text for the menu-bar
-    /// recovery action. The caller deliberately does not receive a record or
-    /// any other history metadata, which keeps the menu snapshot free of
-    /// dictated content.
+    /// Returns the effective final text of the most recent completed record
+    /// for the menu-bar recovery action. A later applied Voice Revise result
+    /// supersedes the record's original final text; an undone revision does
+    /// not. The caller deliberately does not receive a record or any other
+    /// history metadata, which keeps the menu snapshot free of dictated
+    /// content.
     func latestCopyableFinalText() -> String? {
         let sql = """
-        SELECT final_text FROM recognition_history
-        WHERE status = 'completed'
-          AND TRIM(final_text) != ''
-        ORDER BY created_at DESC
+        SELECT COALESCE(
+            (
+                SELECT revision.after_text
+                FROM recognition_revisions AS revision
+                WHERE revision.source_record_id = history.id
+                  AND revision.status = 'applied'
+                ORDER BY revision.sequence DESC
+                LIMIT 1
+            ),
+            history.final_text
+        )
+        FROM recognition_history AS history
+        WHERE history.status = 'completed'
+          AND TRIM(COALESCE(
+              (
+                  SELECT revision.after_text
+                  FROM recognition_revisions AS revision
+                  WHERE revision.source_record_id = history.id
+                    AND revision.status = 'applied'
+                  ORDER BY revision.sequence DESC
+                  LIMIT 1
+              ),
+              history.final_text
+          )) != ''
+        ORDER BY history.created_at DESC
         LIMIT 1;
         """
         var statement: OpaquePointer?

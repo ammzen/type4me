@@ -10,17 +10,19 @@ enum MicrophoneChoice: Equatable {
     case device(AudioInputDevice)
 }
 
-/// The two generic application-window entries in the menu bar. Specific
+/// The generic application-window entries in the menu bar. Specific
 /// workspace actions (History, Vocabulary, and so on) own their destinations
 /// separately.
 enum MenuBarApplicationDestination: Equatable {
     case home
     case settings
+    case models
 
     var settingsTab: SettingsTab {
         switch self {
         case .home: .general
         case .settings: .preferences
+        case .models: .models
         }
     }
 }
@@ -61,6 +63,18 @@ final class MenuBarControlCenterModel {
     private(set) var permissionIssue: MenuBarPermissionIssue?
     private(set) var canStartRevise = false
     private(set) var lastActionFeedback: String?
+
+    /// System permission APIs do not broadcast a Type4Me-specific change
+    /// event. Refresh whenever the application regains focus after Settings.
+    static let refreshNotificationNames: [Notification.Name] = [
+        .audioInputDevicesDidChange,
+        .audioInputDevicePreferenceDidChange,
+        .asrProviderDidChange,
+        .modesDidChange,
+        .historyStoreDidChange,
+        .reviseSettingsDidChange,
+        NSApplication.didBecomeActiveNotification,
+    ]
 
     init(appState: AppState) {
         self.appState = appState
@@ -123,15 +137,7 @@ final class MenuBarControlCenterModel {
     }
 
     private func observeChanges() {
-        let names: [Notification.Name] = [
-            .audioInputDevicesDidChange,
-            .audioInputDevicePreferenceDidChange,
-            .asrProviderDidChange,
-            .modesDidChange,
-            .historyStoreDidChange,
-            .reviseSettingsDidChange,
-        ]
-        observers = names.map { name in
+        observers = Self.refreshNotificationNames.map { name in
             NotificationCenter.default.addObserver(
                 forName: name,
                 object: nil,
@@ -310,6 +316,10 @@ final class MenuBarActionCoordinator {
 
     func openSettings() {
         openApplication(.settings)
+    }
+
+    func openModels() {
+        openApplication(.models)
     }
 
     private func openApplication(_ destination: MenuBarApplicationDestination) {
@@ -535,7 +545,7 @@ struct MenuBarControlCenterView: View {
             }
             Divider()
             Button(L("配置识别引擎…", "Configure Recognition…")) {
-                actions.openSettings()
+                actions.openModels()
             }
         }
         .disabled(runtimeSettingsLocked)

@@ -162,6 +162,67 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(latest, "old final")
     }
 
+    func testLatestCopyableFinalTextUsesLatestAppliedRevision() async {
+        await store.insert(HistoryRecord(
+            id: "revised", createdAt: Date(), durationSeconds: 1,
+            rawText: "original", processingMode: nil, processedText: nil,
+            finalText: "original final", status: "completed", characterCount: 14, asrProvider: nil
+        ))
+        let inserted = await store.insertRevision(RecognitionRevisionRecord(
+            sourceRecordID: "revised",
+            instructionText: "rewrite it",
+            beforeText: "original final",
+            afterText: "revised final",
+            intent: .rewrite,
+            scopeKind: .whole
+        ))
+        XCTAssertTrue(inserted)
+
+        let latest = await store.latestCopyableFinalText()
+
+        XCTAssertEqual(latest, "revised final")
+    }
+
+    func testLatestCopyableFinalTextFallsBackThroughUndoneRevisions() async {
+        await store.insert(HistoryRecord(
+            id: "revised", createdAt: Date(), durationSeconds: 1,
+            rawText: "original", processingMode: nil, processedText: nil,
+            finalText: "original final", status: "completed", characterCount: 14, asrProvider: nil
+        ))
+        let first = RecognitionRevisionRecord(
+            id: "revision-1",
+            sourceRecordID: "revised",
+            instructionText: "first rewrite",
+            beforeText: "original final",
+            afterText: "first revised final",
+            intent: .rewrite,
+            scopeKind: .whole
+        )
+        let second = RecognitionRevisionRecord(
+            id: "revision-2",
+            sourceRecordID: "revised",
+            instructionText: "second rewrite",
+            beforeText: "first revised final",
+            afterText: "second revised final",
+            intent: .rewrite,
+            scopeKind: .whole
+        )
+        let insertedFirst = await store.insertRevision(first)
+        let insertedSecond = await store.insertRevision(second)
+        XCTAssertTrue(insertedFirst)
+        XCTAssertTrue(insertedSecond)
+
+        let undidSecond = await store.markRevisionUndone(id: second.id)
+        XCTAssertTrue(undidSecond)
+        let afterSecondUndo = await store.latestCopyableFinalText()
+        XCTAssertEqual(afterSecondUndo, "first revised final")
+
+        let undidFirst = await store.markRevisionUndone(id: first.id)
+        XCTAssertTrue(undidFirst)
+        let afterFirstUndo = await store.latestCopyableFinalText()
+        XCTAssertEqual(afterFirstUndo, "original final")
+    }
+
     func testDeleteAll() async {
         for i in 0..<3 {
             await store.insert(HistoryRecord(

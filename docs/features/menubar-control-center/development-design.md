@@ -143,7 +143,7 @@ Snapshot 只保存菜单可展示的值；不得保存 API Key、历史正文、
 
 建议实现为 `@MainActor @Observable final class`，由 `AppDelegate` 在应用启动时创建并注入 `MenuBarContent`，生命周期与应用一致而不是每次展开菜单新建。
 
-职责：从 AppState 派生状态文案和模式列表；刷新设备、Provider、权限、更新与历史可复制标记；监听模式、Provider、设备和 History 通知；在异步查询完成后原子更新 Snapshot。它不负责开始/结束录音、写凭证、切 Provider 服务、注入文本或打开窗口。
+职责：从 AppState 派生状态文案和模式列表；刷新设备、Provider、权限、更新与历史可复制标记；监听模式、Provider、设备、History 通知及应用重新激活事件；在异步查询完成后原子更新 Snapshot。它不负责开始/结束录音、写凭证、切 Provider 服务、注入文本或打开窗口。
 
 刷新需去重：对设备事件和 UserDefaults 变化 debounce；History 只更新 `canCopyLatestResult`，不拉取正文；model deinit 时取消通知和任务。用显式领域通知优先于监听全部 `UserDefaults.didChangeNotification`。
 
@@ -243,7 +243,7 @@ SenseVoice/Qwen3 菜单必须 `#if HAS_SHERPA_ONNX`，并遵守 `SenseVoiceServe
 
 ### 7.1 History 与复制
 
-在 `HistoryStore` 增加窄接口，例如 `func latestCopyableFinalText() -> String?`。SQL 层负责排除空、取消和失败记录；最终文本选择逻辑只存在一处。Model 异步调用它来更新可用状态，Coordinator 再次查询并以 `NSPasteboard.general` 写入，避免把正文缓存入 Snapshot。复制后短时反馈由 Model 控制，不能记录正文。
+在 `HistoryStore` 增加窄接口，例如 `func latestCopyableFinalText() -> String?`。SQL 层负责排除空、取消和失败记录，并按 revision sequence 选择最新 `status = applied` 的 `after_text`；没有有效 revision 时才回退 `recognition_history.final_text`。最终文本选择逻辑只存在一处。Model 异步调用它来更新可用状态，Coordinator 再次查询并以 `NSPasteboard.general` 写入，避免把正文缓存入 Snapshot。复制后短时反馈由 Model 控制，不能记录正文。
 
 ### 7.2 Revise
 
@@ -251,11 +251,11 @@ SenseVoice/Qwen3 菜单必须 `#if HAS_SHERPA_ONNX`，并遵守 `SenseVoiceServe
 
 ### 7.3 Settings 导航
 
-Coordinator 使用现有 `openWindow(id: "settings")` 和 `AppNavigationModel`/通知。应用级入口不恢复上次标签：`openType4Me()` 先设置 `selectedTab = .general`，`openSettings()` 先设置 `selectedTab = .preferences`。History、Vocabulary 和 Modes 分别设为自己的目标标签；Ask Anything 设置 `navigationModel.selectedTab = .askAnything` 并遵守其活动会话语义。导航前激活应用，避免打开后台窗口。
+Coordinator 使用现有 `openWindow(id: "settings")` 和 `AppNavigationModel`/通知。应用级入口不恢复上次标签：`openType4Me()` 先设置 `selectedTab = .general`，`openSettings()` 先设置 `selectedTab = .preferences`。History、Vocabulary、Modes 和识别引擎配置分别设为自己的目标标签，其中“配置识别引擎…”必须设置 `selectedTab = .models`；Ask Anything 设置 `navigationModel.selectedTab = .askAnything` 并遵守其活动会话语义。导航前激活应用，避免打开后台窗口。
 
 ### 7.4 权限与更新
 
-权限 Snapshot 汇总麦克风和 Accessibility，按“阻断录音 > 会阻断注入 > 非阻断”排序。动作复用 `PermissionGuideView` 或当前系统授权流，菜单不自行复制授权代码。
+权限 Snapshot 汇总麦克风和 Accessibility，按“阻断录音 > 会阻断注入 > 非阻断”排序。动作复用 `PermissionGuideView` 或当前系统授权流，菜单不自行复制授权代码。由于系统授权不发送领域通知，Model 还必须监听 `NSApplication.didBecomeActiveNotification`，保证用户从系统设置返回后重新计算并清除过期告警。
 
 更新 Snapshot 映射 `appState.availableUpdates`、`isCheckingUpdate` 和 `AppUpdater` 的下载/安装状态；下载、取消和安装重启调用已有 updater API。没有更新且没有进行中任务时返回 `nil`。
 
