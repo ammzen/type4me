@@ -344,6 +344,7 @@ struct MenuBarControlCenterView: View {
     @AppStorage("tf_preserveClipboard") private var preserveClipboard = true
     @AppStorage(CJKSpacingMode.storageKey) private var cjkSpacingRaw = CJKSpacingMode.defaultValue
     @AppStorage(CornerQuotePreference.storageKey) private var useCornerQuotes = CornerQuotePreference.defaultValue
+    @AppStorage("tf_language") private var language = AppLanguage.systemDefault
 
     var body: some View {
         statusSection
@@ -417,7 +418,7 @@ struct MenuBarControlCenterView: View {
         }
         Divider()
         Label(
-            "\(L("本轮模式", "Current mode"))：\(appState.currentMode.name)",
+            "\(L("本轮模式", "Current mode"))：\(localizedModeName(appState.currentMode))",
             systemImage: "mic"
         )
         Label(
@@ -438,7 +439,7 @@ struct MenuBarControlCenterView: View {
             Label(L("本轮上下文已冻结", "Current session is frozen"), systemImage: "lock.fill")
                 .foregroundStyle(.secondary)
             Label(
-                "\(L("本轮模式", "Current mode"))：\(appState.currentMode.name)",
+                "\(L("本轮模式", "Current mode"))：\(localizedModeName(appState.currentMode))",
                 systemImage: "mic"
             )
             Label(
@@ -702,15 +703,22 @@ struct MenuBarControlCenterView: View {
     }
 
     private var statusSubtitle: String {
-        let mode = appState.currentMode.name
+        let mode = localizedModeName(appState.currentMode)
         return "\(mode) · \(model.selectedProviderLabel) · \(model.selectedMicrophoneLabel)"
     }
 
     private func modeMenuTitle(_ mode: ProcessingMode) -> String {
         guard mode.id == ProcessingMode.translationModeId,
               let target = model.translationTarget
-        else { return mode.name }
-        return "\(mode.name) → \(target.displayName)"
+        else { return localizedModeName(mode) }
+        return "\(localizedModeName(mode)) → \(target.displayName)"
+    }
+
+    private func localizedModeName(_ mode: ProcessingMode) -> String {
+        // MenuBarExtra can remain visible while language changes in Settings;
+        // reading the preference makes its labels refresh without a relaunch.
+        _ = language
+        return mode.localizedDisplayName
     }
 
     private func hotkeySummary(for mode: ProcessingMode) -> String? {

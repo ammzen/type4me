@@ -94,7 +94,7 @@ struct IntelliSenseModeDetail: View, SettingsCardHelpers {
                 Image(systemName: "sparkles")
                     .font(.system(size: 14))
                     .foregroundStyle(TF.settingsAccentAmber)
-                Text(mode.name)
+                Text(mode.localizedDisplayName)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(TF.settingsText)
                 Text(L("内置", "BUILT-IN"))
@@ -104,7 +104,7 @@ struct IntelliSenseModeDetail: View, SettingsCardHelpers {
                     .padding(.vertical, 2)
                     .background(Capsule().fill(TF.settingsCardAlt))
             }
-            Text(mode.description)
+            Text(mode.localizedDisplayDescription)
                 .font(.system(size: 12))
                 .foregroundStyle(TF.settingsTextSecondary)
                 .lineSpacing(3)

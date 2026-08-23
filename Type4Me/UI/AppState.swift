@@ -363,6 +363,137 @@ struct ProcessingMode: Codable, Identifiable, Equatable, Hashable {
         }
     }
 
+    /// Localized display copy for Type4Me-provided modes. Mode records keep
+    /// their original name so user-created names and user edits are never
+    /// overwritten when the interface language changes.
+    private struct BuiltinLocalizedName {
+        let chinese: String
+        let english: String
+
+        func matchesStoredName(_ name: String) -> Bool {
+            name == chinese || name == english
+        }
+
+        func value(for language: AppLanguage) -> String {
+            language == .zh ? chinese : english
+        }
+    }
+
+    private static func builtinLocalizedName(for id: UUID) -> BuiltinLocalizedName? {
+        switch id {
+        case directId:
+            return BuiltinLocalizedName(chinese: "快速模式", english: "Quick Mode")
+        case intelliSenseId:
+            return BuiltinLocalizedName(chinese: "智能感知", english: "Intelli Sense")
+        case smartDirectId:
+            return BuiltinLocalizedName(chinese: "智能模式", english: "Smart Mode")
+        case formalWritingId:
+            return BuiltinLocalizedName(chinese: "语音润色", english: "Voice Polish")
+        case promptOptimizeId:
+            return BuiltinLocalizedName(chinese: "Prompt优化", english: "Prompt Optimizer")
+        case defaultTranslateId, translateId:
+            return BuiltinLocalizedName(chinese: "英文翻译", english: "Translation")
+        case translateToChineseId:
+            return BuiltinLocalizedName(chinese: "中文翻译", english: "Translate to Chinese")
+        case translationModeId:
+            return BuiltinLocalizedName(chinese: "翻译模式", english: "Translation Mode")
+        case commandModeId:
+            return BuiltinLocalizedName(chinese: "命令模式", english: "Command Mode")
+        case agentModeId:
+            return BuiltinLocalizedName(chinese: "代办模式", english: "Handle It")
+        case macActionId:
+            return BuiltinLocalizedName(chinese: "Mac 操作", english: "Mac Action")
+        case selectionAskId:
+            return BuiltinLocalizedName(chinese: "随便问", english: "Ask Anything")
+        default:
+            return nil
+        }
+    }
+
+    private static func builtinLocalizedDescription(for id: UUID) -> BuiltinLocalizedName? {
+        switch id {
+        case directId:
+            return BuiltinLocalizedName(
+                chinese: "快速转写，不进行后处理",
+                english: "Fast transcription without post-processing"
+            )
+        case intelliSenseId:
+            return BuiltinLocalizedName(
+                chinese: "结合当前输入场景和你的表达习惯，智能整理口述内容",
+                english: "Polish dictation using context and your writing habits"
+            )
+        case smartDirectId:
+            return BuiltinLocalizedName(
+                chinese: "自动修正错别字和标点，保留原意",
+                english: "Correct typos and punctuation while preserving meaning"
+            )
+        case formalWritingId:
+            return BuiltinLocalizedName(
+                chinese: "将口语整理成清晰、可读的文字",
+                english: "Turn speech into clear, readable writing"
+            )
+        case promptOptimizeId:
+            return BuiltinLocalizedName(
+                chinese: "将口述需求优化成结构清晰的 Prompt",
+                english: "Turn spoken requests into structured prompts"
+            )
+        case defaultTranslateId, translateId:
+            return BuiltinLocalizedName(
+                chinese: "将中文口述自然翻译为英文",
+                english: "Translate spoken Chinese into natural English"
+            )
+        case translationModeId:
+            return BuiltinLocalizedName(
+                chinese: "自动识别口述语言并翻译为目标语言",
+                english: "Automatically detect spoken language and translate it to your target language"
+            )
+        case commandModeId:
+            return BuiltinLocalizedName(
+                chinese: "根据口述指令处理选中文本或剪贴板内容",
+                english: "Transform selected or clipboard text with spoken commands"
+            )
+        case agentModeId:
+            return BuiltinLocalizedName(
+                chinese: "说出需求，直接生成可用成品",
+                english: "Speak a request and get a ready-to-use result"
+            )
+        case macActionId:
+            return BuiltinLocalizedName(
+                chinese: "用语音触发常用 macOS 操作",
+                english: "Trigger common macOS actions with your voice"
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// The language-aware name for a mode shown by the UI. A supplied mode is
+    /// only localized when its persisted name still matches one of the two
+    /// shipped names; renamed and custom modes continue to display verbatim.
+    var localizedDisplayName: String {
+        localizedDisplayName(for: .current)
+    }
+
+    func localizedDisplayName(for language: AppLanguage) -> String {
+        guard let localizedName = Self.builtinLocalizedName(for: id),
+              localizedName.matchesStoredName(name)
+        else { return name }
+        return localizedName.value(for: language)
+    }
+
+    /// The language-aware system description for display. User-provided
+    /// descriptions are preserved just like user-provided mode names.
+    var localizedDisplayDescription: String {
+        localizedDisplayDescription(for: .current)
+    }
+
+    func localizedDisplayDescription(for language: AppLanguage) -> String {
+        guard let localizedDescription = Self.builtinLocalizedDescription(for: id),
+              localizedDescription.matchesStoredName(description)
+        else { return description }
+        return localizedDescription.value(for: language)
+    }
+
     static let selectionAskId = UUID(uuidString: "00000000-0000-0000-0000-000000000009")!
     static var direct: ProcessingMode {
         ProcessingMode(
