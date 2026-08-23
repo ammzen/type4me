@@ -544,42 +544,27 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     // MARK: - Revise Settings Rows
 
     private var reviseToggleRow: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L("启用改口功能", "Enable Revise"))
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(TF.settingsText)
-                Text(L("在刚输入的内容后按快捷键口述修改要求，直接原地修改", "Revise recent text in-place by speaking instructions with hotkey"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(TF.settingsTextTertiary)
-            }
-            Spacer()
-            Toggle("", isOn: Binding(
+        settingsToggleRow(
+            L("启用改口功能", "Enable Revise"),
+            subtitle: L(
+                "在刚输入的内容后按快捷键口述修改要求，直接原地修改",
+                "Revise recent text in-place by speaking instructions with hotkey"
+            ),
+            isOn: Binding(
                 get: { reviseSettings.enabled },
                 set: { newValue in
                     reviseSettings.enabled = newValue
-                    _ = try? ReviseSettingsStore.shared.save(reviseSettings)
-                    NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                    persistReviseSettings()
                 }
-            ))
-            .toggleStyle(.switch)
-            .labelsHidden()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+            )
+        )
     }
 
     private var reviseHotkeyRow: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L("改口快捷键", "Revise Hotkey"))
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(TF.settingsText)
-                Text(L("默认 fn + R", "Default: fn + R"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(TF.settingsTextTertiary)
-            }
-            Spacer()
+        settingsOptionRow(
+            L("改口快捷键", "Revise Hotkey"),
+            subtitle: L("默认 fn + R", "Default: fn + R")
+        ) {
             HotkeyRecorderView(
                 keyCode: Binding(
                     get: { reviseKeyCode },
@@ -590,8 +575,7 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
                             hk.keyCode = code
                             hk.modifiers = reviseModifiers
                             reviseSettings.hotkey = hk
-                            _ = try? ReviseSettingsStore.shared.save(reviseSettings)
-                            NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                            persistReviseSettings()
                         }
                     }
                 ),
@@ -604,47 +588,42 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
                             hk.keyCode = code
                             hk.modifiers = newMods
                             reviseSettings.hotkey = hk
-                            _ = try? ReviseSettingsStore.shared.save(reviseSettings)
-                            NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
+                            persistReviseSettings()
                         }
                     }
                 )
             )
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
     }
 
     private var reviseHotkeyStyleRow: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(L("触发方式", "Trigger Style"))
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(TF.settingsText)
-                Text(L("长按松开结束，或单击开始/结束", "Hold to speak, or tap to toggle"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(TF.settingsTextTertiary)
-            }
-            Spacer()
-            Picker("", selection: Binding(
-                get: { reviseSettings.hotkey?.style ?? .hold },
-                set: { newStyle in
-                    var hk = reviseSettings.hotkey ?? ReviseSettings.defaultHotkey
-                    hk.style = newStyle
-                    reviseSettings.hotkey = hk
-                    _ = try? ReviseSettingsStore.shared.save(reviseSettings)
-                    NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
-                }
-            )) {
-                Text(L("长按", "Hold")).tag(HotkeyStyle.hold)
-                Text(L("单击切换", "Toggle")).tag(HotkeyStyle.toggle)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 140)
-            .labelsHidden()
+        settingsOptionRow(
+            L("触发方式", "Trigger Style"),
+            subtitle: L("长按松开结束，或单击开始/结束", "Hold to speak, or tap to toggle")
+        ) {
+            settingsSegmentedPicker(
+                selection: Binding(
+                    get: { (reviseSettings.hotkey?.style ?? .hold).rawValue },
+                    set: { rawValue in
+                        guard let newStyle = HotkeyStyle(rawValue: rawValue) else { return }
+                        var hk = reviseSettings.hotkey ?? ReviseSettings.defaultHotkey
+                        hk.style = newStyle
+                        reviseSettings.hotkey = hk
+                        persistReviseSettings()
+                    }
+                ),
+                options: [
+                    (HotkeyStyle.hold.rawValue, L("长按", "Hold")),
+                    (HotkeyStyle.toggle.rawValue, L("单击切换", "Toggle")),
+                ]
+            )
+            .frame(width: 164)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+    }
+
+    private func persistReviseSettings() {
+        _ = try? ReviseSettingsStore.shared.save(reviseSettings)
+        NotificationCenter.default.post(name: .reviseSettingsDidChange, object: nil)
     }
 
     private var preserveClipboardRow: some View {

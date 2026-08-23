@@ -17,43 +17,36 @@ struct HotkeyRecorderView: View {
         HStack(spacing: 6) {
             // Display current hotkey
             Text(displayText)
-                .font(.system(size: 12))
-                .foregroundStyle(isRecording ? TF.settingsAccentRed : TF.settingsTextSecondary)
-                .frame(minWidth: 100, alignment: .leading)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+                .font(.system(size: 13))
+                .foregroundStyle(isRecording ? TF.settingsAccentRed : TF.settingsText)
+                .frame(minWidth: 106, minHeight: 36, alignment: .leading)
+                .padding(.horizontal, 12)
                 .background(
-                    RoundedRectangle(cornerRadius: 6).fill(TF.settingsBg)
+                    RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: 8)
                         .stroke(
                             isRecording
                                 ? TF.settingsAccentRed.opacity(0.5)
-                                : TF.settingsTextTertiary.opacity(0.2),
+                                : .clear,
                             lineWidth: 1
                         )
                 )
 
             if isRecording {
                 Button(L("取消", "Cancel")) { stopRecording() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(TF.settingsTextSecondary)
+                    .recorderControlButtonStyle()
             } else {
                 Button(L("录制", "Record")) { startRecording() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(TF.settingsTextSecondary)
+                    .recorderControlButtonStyle()
 
                 if keyCode != nil {
                     Button(L("清除", "Clear")) {
                         keyCode = nil
                         modifiers = nil
                     }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(TF.settingsTextTertiary)
+                    .recorderControlButtonStyle(isDestructive: true)
                 }
             }
         }
@@ -359,5 +352,20 @@ struct HotkeyRecorderView: View {
 
         guard status == noErr, length > 0 else { return nil }
         return String(utf16CodeUnits: chars, count: length).uppercased()
+    }
+}
+
+private extension View {
+    func recorderControlButtonStyle(isDestructive: Bool = false) -> some View {
+        self
+            .buttonStyle(.plain)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(isDestructive ? TF.settingsTextTertiary : TF.settingsText)
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(TF.settingsCardAlt)
+            )
     }
 }
