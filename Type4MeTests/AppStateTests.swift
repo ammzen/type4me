@@ -342,6 +342,32 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.feedbackMessage, "找不到麦克风")
     }
 
+    func testTransientNotificationUsesExistingCompletionPresentationWhenIdle() {
+        let appState = AppState()
+        var showCount = 0
+        appState.onShowPanel = { showCount += 1 }
+
+        appState.showTransientNotification("输入设备已切换至 AirPods Pro")
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, "输入设备已切换至 AirPods Pro")
+        XCTAssertEqual(showCount, 1)
+    }
+
+    func testTransientNotificationDefersUntilRecordingEnds() {
+        let appState = AppState()
+        appState.barPhase = .recording
+
+        appState.showTransientNotification("输入设备已切换至 AirPods Pro")
+
+        XCTAssertEqual(appState.barPhase, .recording)
+
+        appState.cancel()
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, "输入设备已切换至 AirPods Pro")
+    }
+
     func testReconcileCurrentModeKeepsSupportedCustomModeForQuickOnlyProvider() {
         let appState = AppState()
         let customMode = ProcessingMode(

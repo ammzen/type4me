@@ -69,14 +69,23 @@ final class MenuBarControlCenterModel {
     }
 
     var selectedMicrophoneLabel: String {
-        guard AudioInputDevicePreferenceStore.mode() == .priority else {
-            return L("跟随系统", "Follow System")
-        }
-        if let resolved = AudioInputDevicePreferenceStore.resolvedDevice(devices: inputDevices) {
-            return resolved.name
-        }
-        return AudioInputDevicePreferenceStore.priorityEntries().first?.name
-            ?? L("跟随系统", "Follow System")
+        effectiveInputDevice?.name ?? L("跟随系统", "Follow System")
+    }
+
+    var systemDefaultInputDevice: AudioInputDevice? {
+        AudioInputDeviceMonitor.shared.currentSnapshot().systemDefaultInput
+    }
+
+    var effectiveInputDevice: AudioInputDevice? {
+        AudioInputDevicePreferenceStore.activeInputDevice(
+            devices: inputDevices,
+            systemDefault: systemDefaultInputDevice
+        )
+    }
+
+    var selectedPriorityMicrophoneUID: String? {
+        guard AudioInputDevicePreferenceStore.mode() == .priority else { return nil }
+        return AudioInputDevicePreferenceStore.resolvedDevice(devices: inputDevices)?.uid
     }
 
     var selectedProviderLabel: String {
@@ -116,6 +125,7 @@ final class MenuBarControlCenterModel {
     private func observeChanges() {
         let names: [Notification.Name] = [
             .audioInputDevicesDidChange,
+            .audioInputDevicePreferenceDidChange,
             .asrProviderDidChange,
             .modesDidChange,
             .historyStoreDidChange,
@@ -345,15 +355,16 @@ struct MenuBarControlCenterView: View {
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
 
     var body: some View {
-        statusSection
-        Divider()
-
         switch appState.barPhase {
         case .preparing, .recording:
             activeRecordingActions
         case .processing, .recovering:
             processingActions
-        case .hidden, .done, .error:
+        case .error:
+            errorFeedback
+            Divider()
+            readyActions
+        case .hidden, .done:
             readyActions
         }
 
@@ -372,24 +383,6 @@ struct MenuBarControlCenterView: View {
         .keyboardShortcut("q", modifiers: .command)
 
         let _ = registerGlobalOpenActions()
-    }
-
-    private var statusSection: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 7, height: 7)
-                Text(statusTitle)
-                    .font(.system(size: 11, weight: .medium))
-            }
-            Text(statusSubtitle)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
     }
 
     @ViewBuilder
@@ -414,37 +407,21 @@ struct MenuBarControlCenterView: View {
         Button(L("取消录音", "Cancel Recording")) {
             actions.cancelRecording()
         }
-        Divider()
-        Label(
-            "\(L("本轮模式", "Current mode"))：\(localizedModeName(appState.currentMode))",
-            systemImage: "mic"
-        )
-        Label(
-            "\(L("麦克风", "Microphone"))：\(model.selectedMicrophoneLabel)",
-            systemImage: "mic.fill"
-        )
-        if appState.currentMode.id == ProcessingMode.translationModeId,
-           let target = model.translationTarget {
-            Label(
-                "\(L("翻译目标", "Translation target"))：\(target.displayName)",
-                systemImage: "character.book.closed"
-            )
-        }
     }
 
     private var processingActions: some View {
-        Group {
-            Label(L("本轮上下文已冻结", "Current session is frozen"), systemImage: "lock.fill")
-                .foregroundStyle(.secondary)
-            Label(
-                "\(L("本轮模式", "Current mode"))：\(localizedModeName(appState.currentMode))",
-                systemImage: "mic"
-            )
-            Label(
-                "\(L("识别引擎", "Speech recognition"))：\(model.selectedProviderLabel)",
-                systemImage: "waveform"
-            )
-        }
+        Label(
+            appState.effectiveProcessingLabel,
+            systemImage: appState.barPhase == .recovering
+                ? "arrow.triangle.2.circlepath"
+                : "circle.dotted"
+        )
+        .foregroundStyle(.secondary)
+    }
+
+    private var errorFeedback: some View {
+        Label(appState.feedbackMessage, systemImage: "exclamationmark.triangle.fill")
+            .foregroundStyle(TF.settingsAccentRed)
     }
 
     private var startDictationMenu: some View {
@@ -493,9 +470,20 @@ struct MenuBarControlCenterView: View {
                 actions.setMicrophone(.systemDefault)
             } label: {
                 menuChoiceLabel(
-                    L("跟随系统", "Follow System"),
+                    systemDefaultMicrophoneTitle,
                     isSelected: AudioInputDevicePreferenceStore.mode() == .systemDefault
                 )
+            }
+            if AudioInputDevicePreferenceStore.mode() == .priority,
+               let effectiveInputDevice = model.effectiveInputDevice {
+                Label(
+                    L(
+                        "当前使用：\(effectiveInputDevice.name)",
+                        "Currently using: \(effectiveInputDevice.name)"
+                    ),
+                    systemImage: "waveform"
+                )
+                .foregroundStyle(.secondary)
             }
             if !model.inputDevices.isEmpty {
                 Divider()
@@ -503,7 +491,10 @@ struct MenuBarControlCenterView: View {
                     Button {
                         actions.setMicrophone(.device(device))
                     } label: {
-                        menuChoiceLabel(device.name, isSelected: model.selectedMicrophoneLabel == device.name)
+                        menuChoiceLabel(
+                            device.name,
+                            isSelected: model.selectedPriorityMicrophoneUID == device.uid
+                        )
                     }
                 }
             }
@@ -513,6 +504,16 @@ struct MenuBarControlCenterView: View {
             }
         }
         .disabled(runtimeSettingsLocked)
+    }
+
+    private var systemDefaultMicrophoneTitle: String {
+        guard let device = model.systemDefaultInputDevice else {
+            return L("跟随系统", "Follow System")
+        }
+        return L(
+            "跟随系统（当前：\(device.name)）",
+            "Follow System (Current: \(device.name))"
+        )
     }
 
     private var asrProviderMenu: some View {
@@ -683,31 +684,6 @@ struct MenuBarControlCenterView: View {
         case .failed:
             return L("重试更新下载", "Retry Update Download")
         }
-    }
-
-    private var statusColor: Color {
-        switch appState.barPhase {
-        case .preparing, .recording: return TF.recording
-        case .processing, .recovering: return TF.amber
-        case .done: return TF.success
-        case .error: return TF.settingsAccentRed
-        case .hidden: return .secondary.opacity(0.4)
-        }
-    }
-
-    private var statusTitle: String {
-        switch appState.barPhase {
-        case .preparing, .recording: return L("录制中", "Recording")
-        case .processing, .recovering: return appState.effectiveProcessingLabel
-        case .done: return appState.feedbackMessage
-        case .error: return appState.feedbackMessage
-        case .hidden: return L("就绪", "Ready")
-        }
-    }
-
-    private var statusSubtitle: String {
-        let mode = localizedModeName(appState.currentMode)
-        return "\(mode) · \(model.selectedProviderLabel) · \(model.selectedMicrophoneLabel)"
     }
 
     private func modeMenuTitle(_ mode: ProcessingMode) -> String {

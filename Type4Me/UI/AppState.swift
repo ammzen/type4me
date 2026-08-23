@@ -1322,6 +1322,10 @@ final class AppState {
     /// history or clipboard output, keep its post-recording work out of the
     /// floating bar. The final event may reveal a short completion message.
     private var awaitsSuppressedCancellationFinalization = false
+    /// A non-session notice (for example, a microphone change) must never
+    /// replace recording or processing UI. Keep only the newest notice until
+    /// the current floating-bar lifecycle has finished.
+    private var pendingTransientNotification: String?
     var activityKind: RecordingActivityKind = .standard
     var latestReviseUndoTicketID: UUID? = nil
     var isQwen3OnlyMode: Bool {
@@ -1542,6 +1546,18 @@ final class AppState {
         scheduleAutoHide(for: .error, delay: .seconds(1.8))
     }
 
+    /// Reuses the existing floating-bar completion presentation for a brief,
+    /// application-local notification. It is intentionally deferred whenever
+    /// a recognition or recovery session owns the bar.
+    func showTransientNotification(_ message: String, delay: Duration = .seconds(2)) {
+        guard !message.isEmpty else { return }
+        guard barPhase == .hidden else {
+            pendingTransientNotification = message
+            return
+        }
+        presentTransientNotification(message, delay: delay)
+    }
+
     func cancel() {
         activityKind = .standard
         latestReviseUndoTicketID = nil
@@ -1550,7 +1566,11 @@ final class AppState {
         segments = []
         audioLevel.current = 0
         pinsTranscriptPopup = false
-        onHidePanel?()
+        if let message = takePendingTransientNotification() {
+            presentTransientNotification(message, delay: .seconds(2))
+        } else {
+            onHidePanel?()
+        }
     }
 
     func showReviseProcessing() {
@@ -1691,6 +1711,20 @@ final class AppState {
 
     private var hideGeneration = 0
 
+    private func presentTransientNotification(_ message: String, delay: Duration) {
+        feedbackKind = .standard
+        feedbackMessage = message
+        barPhase = .done
+        onShowPanel?()
+        scheduleAutoHide(for: .done, delay: delay)
+    }
+
+    private func takePendingTransientNotification() -> String? {
+        let message = pendingTransientNotification
+        pendingTransientNotification = nil
+        return message
+    }
+
     private func showDone(message: String = L("已完成", "Done"), delay: Duration = .seconds(0.5)) {
         DebugFileLogger.log("showDone: barPhase → .done, message=\(message)")
         feedbackMessage = message
@@ -1707,7 +1741,11 @@ final class AppState {
             DebugFileLogger.log("autoHide: barPhase → .hidden (was \(phase))")
             barPhase = .hidden
             pinsTranscriptPopup = false
-            onHidePanel?()
+            if let message = takePendingTransientNotification() {
+                presentTransientNotification(message, delay: .seconds(2))
+            } else {
+                onHidePanel?()
+            }
         }
     }
 }

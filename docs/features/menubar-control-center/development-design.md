@@ -37,6 +37,8 @@
 
 禁止再创建平行的“菜单录音状态”。
 
+菜单 View 不再渲染常驻的 `statusSection`。`.hidden` 和 `.done` 直接展示可执行动作；`.preparing` / `.recording` 以完成和取消动作表达活跃状态；`.processing` / `.recovering` 仅渲染一个由 `effectiveProcessingLabel` 驱动的紧凑 `Label`；`.error` 则在动作前渲染红色错误行。模式、识别引擎和麦克风只能在其各自的可操作菜单中呈现，避免状态摘要与控制项重复。
+
 ### 2.2 录音与控制
 
 `AppDelegate` 拥有 `RecognitionSession`、`HotkeyManager`、`RecordingStartGate`、`RecordingControlCoordinator`、`AskAnythingCoordinator` 及 `SelectionAskController`。热键启动已经完成模式解析、Selection Ask 特殊路径、start gate、`appState.selectModeForRecording`、`appState.startRecording()`、`session.awaitIdle()` 和 `session.startRecording(mode:requestedAt:)`。
@@ -50,7 +52,7 @@
 | 能力 | 当前权威来源 | 设计要求 |
 | --- | --- | --- |
 | ASR 选择 | `KeychainService.selectedASRProvider` + `ASRProviderRegistry` | 复用 provider-change 通知、模式协调和热键重注册 |
-| 麦克风 | `AudioInputDevicePreferenceStore`、`AudioInputDeviceMonitor` | 复用解析和回退策略，不绕过优先级存储 |
+| 麦克风 | `AudioInputDevicePreferenceStore`、`AudioInputDeviceMonitor`、CoreAudio 默认输入 | 复用解析和回退策略，不绕过优先级存储；展示并监听实际有效的输入设备 |
 | 实时文本 | `LiveTranscriptDisplayPreference` / `tf_showLiveTranscript` | 直接使用既有 key |
 | 输出格式 | `TextOutputFormatter`、`ModeStorage`、相关 Preferences | 复用既有持久化与模式格式约束 |
 | 翻译目标 | 翻译 `ProcessingMode` 的 ModeStorage 配置 | 通过共享写接口保存，录音时冻结 |
@@ -220,6 +222,10 @@ Settings 和菜单若各自写 Preference，会丢失 Provider 重启、模式�
 ### 6.2 麦克风
 
 读取 `AudioInputDeviceMonitor` 和 `AudioInputDevicePreferenceStore`。菜单的“跟随系统”调用现有 reset；具体设备写入一个受控的单项优先级而不直接改变捕获引擎。设备变化通知后重新解析结果；设备不在列表时回退，菜单显示解析后的实际设备。录音开始后禁用选择。
+
+`AudioInputDeviceMonitor` 除输入设备列表外，还缓存 CoreAudio `kAudioHardwarePropertyDefaultInputDevice` 解析出的 UID、名称与类别，并监听该 property 与设备列表变化。`activeInputDevice(devices:systemDefault:)` 是唯一的有效设备决策：优先模式取第一个在线优先项，否则回退系统默认输入；跟随系统直接取系统默认输入。Menu 的勾选状态仍表达用户偏好，实际设备名称仅作状态说明，避免“跟随系统”和某个物理设备同时被勾选。
+
+`AppDelegate` 对设备拓扑和设备偏好通知建立启动基线，并仅在 effective UID 改变时调用 `AppState.showTransientNotification`。`AppState` 复用既有 `.done` 浮动条反馈；忙碌时将最新设备消息排队，在会话完成、取消或自动隐藏后呈现，绝不覆盖录音/处理 UI。该机制是应用内反馈，不接入 macOS 系统通知。
 
 ### 6.3 ASR Provider
 

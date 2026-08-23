@@ -141,6 +141,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingStartGate = RecordingStartGate()
     private var recognitionEventTask: Task<Void, Never>?
     private var recognitionEventContinuation: AsyncStream<RecognitionEvent>.Continuation?
+    private var inputDeviceChangeObservers: [NSObjectProtocol] = []
+    private var effectiveInputDevice: AudioInputDevice?
+    private var hasEstablishedInputDeviceBaseline = false
     lazy var menuBarControlCenterModel = MenuBarControlCenterModel(appState: appState)
     lazy var menuBarActionCoordinator = MenuBarActionCoordinator(
         appDelegate: self,
@@ -188,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         SoundFeedback.warmUp()
         AudioInputDeviceMonitor.shared.start()
+        observeEffectiveInputDeviceChanges()
         AudioKeepAliveManager.syncState()
 
         // Pre-warm audio subsystem and ASR connection so the first recording starts instantly
@@ -471,6 +475,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.reconcileCurrentMode(for: provider)
         updateSelectionAskShortcutHint()
         registerHotkeys(for: provider)
+    }
+
+    // MARK: - Actual input device notification
+
+    /// The configured microphone policy and the actual device can differ: a
+    /// priority device may be unavailable, while Follow System delegates to
+    /// CoreAudio's default input. Notify only when that effective device moves.
+    private func observeEffectiveInputDeviceChanges() {
+        updateEffectiveInputDevice(notify: false)
+        inputDeviceChangeObservers = [
+            .audioInputDevicesDidChange,
+            .audioInputDevicePreferenceDidChange,
+        ].map { name in
+            NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.updateEffectiveInputDevice(notify: true)
+                }
+            }
+        }
+    }
+
+    private func updateEffectiveInputDevice(notify: Bool) {
+        let current = AudioInputDevicePreferenceStore.activeCachedInputDevice()
+        guard hasEstablishedInputDeviceBaseline else {
+            effectiveInputDevice = current
+            hasEstablishedInputDeviceBaseline = true
+            return
+        }
+        guard current?.uid != effectiveInputDevice?.uid else { return }
+
+        let previous = effectiveInputDevice
+        effectiveInputDevice = current
+        DebugFileLogger.log(
+            "audio input changed effective=\(previous?.uid ?? "none") → \(current?.uid ?? "none")"
+        )
+        guard notify else { return }
+
+        let message: String
+        if let current {
+            message = L(
+                "输入设备已切换至 \(current.name)",
+                "Input device switched to \(current.name)"
+            )
+        } else {
+            message = L("未找到可用输入设备", "No input device available")
+        }
+        appState.showTransientNotification(message)
     }
 
     // MARK: - Menu bar control center
@@ -1407,6 +1462,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
 
     func applicationWillTerminate(_ notification: Notification) {
+        inputDeviceChangeObservers.forEach(NotificationCenter.default.removeObserver)
+        inputDeviceChangeObservers.removeAll()
         recognitionEventContinuation?.finish()
         recognitionEventTask?.cancel()
         SystemVolumeManager.restore()
