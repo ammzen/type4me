@@ -4,6 +4,14 @@ import Carbon.HIToolbox
 
 final class TextInjectionEngine: @unchecked Sendable {
 
+    enum ClipboardRetention: Sendable, Equatable {
+        /// Keep the dictated result in the system clipboard after the paste attempt.
+        case retainResult
+        /// Restore the clipboard captured before the paste attempt, including
+        /// when no editable target was found.
+        case restoreOriginal
+    }
+
     private struct FocusedElementSnapshot {
         let element: AXUIElement?
         let processIdentifier: pid_t?
@@ -24,10 +32,9 @@ final class TextInjectionEngine: @unchecked Sendable {
 
     // MARK: - Public
 
-    /// When true, saves and restores the clipboard around injection.
-    /// Has a small race-condition risk: if the target app hasn't finished
-    /// reading the clipboard before restore, the paste may contain stale data.
-    var preserveClipboard = true
+    /// Whether a normal paste attempt retains its result or restores the
+    /// clipboard that existed before injection.
+    var clipboardRetention: ClipboardRetention = .restoreOriginal
 
     /// Inject text into the currently focused input field.
     /// Returns the outcome as soon as the paste is dispatched.
@@ -93,12 +100,13 @@ final class TextInjectionEngine: @unchecked Sendable {
         _ text: String,
         trackingMetadata: (sourceText: String, sourceRecordID: String, modeID: UUID)?
     ) -> TrackedInjectionResult {
-        let savedClipboard = preserveClipboard ? ClipboardSnapshot.capture() : nil
+        let shouldRestoreClipboard = clipboardRetention == .restoreOriginal
+        let savedClipboard = shouldRestoreClipboard ? ClipboardSnapshot.capture() : nil
 
         // Snapshot focused element BEFORE paste for outcome detection
         let before = captureFocusedElementSnapshot()
 
-        copyToClipboard(text, transient: preserveClipboard)
+        copyToClipboard(text, transient: shouldRestoreClipboard)
         let postWriteChangeCount = NSPasteboard.general.changeCount
         usleep(50_000)
         simulatePaste()
@@ -106,16 +114,16 @@ final class TextInjectionEngine: @unchecked Sendable {
 
         // Snapshot AFTER paste and compare to detect if text landed
         let after = captureFocusedElementSnapshot()
-        var outcome = inferInjectionOutcome(before: before, after: after, pastedText: text)
+        let detectedOutcome = inferInjectionOutcome(before: before, after: after, pastedText: text)
+        let outcome = Self.finalizeOutcome(
+            detectedOutcome,
+            retention: clipboardRetention
+        )
 
-        // "Always copy to clipboard" is ON: text on clipboard is by design,
-        // no need to show the fallback message.
-        if !preserveClipboard && outcome == .copiedToClipboard {
-            outcome = .inserted
-        }
-
-        // Defer clipboard restore so .finalized can be emitted sooner
-        if outcome == .inserted, let savedClipboard {
+        // Defer restoration so the target app has time to consume Cmd+V.
+        // Keep it pending for every result so a failed paste cannot leak text
+        // into the clipboard under a restoring policy.
+        if let savedClipboard {
             pendingClipboardRestore = PendingClipboardRestore(
                 snapshot: savedClipboard, changeCount: postWriteChangeCount
             )
@@ -135,6 +143,18 @@ final class TextInjectionEngine: @unchecked Sendable {
             )
         }
         return TrackedInjectionResult(outcome: outcome, observationContext: context)
+    }
+
+    /// A restore policy cannot truthfully report a clipboard fallback: its
+    /// temporary pasteboard contents are restored after the paste attempt.
+    static func finalizeOutcome(
+        _ detectedOutcome: InjectionOutcome,
+        retention: ClipboardRetention
+    ) -> InjectionOutcome {
+        if detectedOutcome == .copiedToClipboard, retention == .restoreOriginal {
+            return .notInserted
+        }
+        return detectedOutcome
     }
 
     private func simulatePaste() {

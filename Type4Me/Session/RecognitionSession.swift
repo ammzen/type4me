@@ -553,8 +553,15 @@ actor RecognitionSession {
     /// Stores the last LLM error from the early/fresh LLM task, consumed once by stopRecording().
     private var pendingLLMError: Error?
     private var pendingSelectionAskRequestContext: SelectionAskRequestContext?
-    /// When true, skip text injection (paste) but still save to clipboard & history.
-    private var injectionAborted = false
+    private enum CompletionIntent: Sendable {
+        case normal
+        case cancelled
+    }
+
+    /// Both the clipboard policy and the completion intent are frozen per
+    /// session so a Settings change cannot alter an in-flight recording.
+    private var clipboardOutputPolicy = ClipboardOutputPolicy.defaultValue
+    private var completionIntent: CompletionIntent = .normal
     /// Continuation resumed when a final (isFinal) transcript arrives during stop.
     private var finalTranscriptCont: CheckedContinuation<String?, Never>?
     /// Continuation resumed when first non-empty streaming text arrives (for short-recording wait).
@@ -653,6 +660,8 @@ actor RecognitionSession {
         }
 
         self.recordingPurpose = purpose
+        clipboardOutputPolicy = ClipboardOutputPolicy.current()
+        completionIntent = .normal
         stoppedByMaxDuration = false
         let frontmostApplication = NSWorkspace.shared.frontmostApplication
         targetBundleId = frontmostApplication?.bundleIdentifier
@@ -748,7 +757,6 @@ actor RecognitionSession {
 
         self.recordingStartTime = nil
         hasEmittedReadyForCurrentSession = false
-        injectionAborted = false
         speculativeThrottle.reset()
         pendingLLMError = nil
         lastStreamingError = nil
@@ -1077,10 +1085,24 @@ actor RecognitionSession {
         await forceReset()
     }
 
-    /// Mark that injection should be skipped. Recognition, clipboard, and history still proceed.
+    /// Mark the current result as cancelled. Recognition and history still
+    /// proceed; the frozen clipboard policy decides whether it is retained.
     func abortInjection() {
-        injectionAborted = true
-        DebugFileLogger.log("abortInjection: injection will be skipped")
+        completionIntent = .cancelled
+        if cancellationSkipsLLM {
+            cancelAllSpeculativeLLM()
+        }
+        DebugFileLogger.log(
+            "abortInjection: policy=\(clipboardOutputPolicy.rawValue) "
+                + "processesCancelled=\(clipboardOutputPolicy.processesCancelledResult)"
+        )
+    }
+
+    /// Raw transcript and never-copy cancellation still wait for final ASR,
+    /// but they have no LLM phase. The UI can hide the processing indicator
+    /// while that non-interactive finalization completes.
+    func cancellationHidesProcessingUI() -> Bool {
+        usesClipboardOutputPolicy && !clipboardOutputPolicy.processesCancelledResult
     }
 
     /// Parse a Mac Action LLM reply for a `<tool_call>{...}</tool_call>`, dispatch
@@ -1442,6 +1464,12 @@ actor RecognitionSession {
             recordingPurpose: recordingPurpose,
             mode: currentMode
         )
+        if cancellationSkipsLLM {
+            needsLLM = false
+            cancelAllSpeculativeLLM()
+            clearHistoryLLMMetadata()
+            DebugFileLogger.log("stop: cancelled output skips LLM")
+        }
 
         // Early label override for short text exemption (语音润色 only).
         // Use streaming transcript to update UI immediately, before ASR teardown,
@@ -1664,6 +1692,18 @@ actor RecognitionSession {
             finalText = SnippetStorage.applyEffective(to: finalText, bundleId: targetBundleId)
             let intelliSenseGuardInput = finalText
 
+            if cancellationSkipsLLM {
+                // A cancellation may arrive while ASR teardown is awaiting.
+                // Discard any speculative result and retain the final ASR text.
+                needsLLM = false
+                earlyLLMTask?.cancel()
+                earlyLLMTask = nil
+                cancelAllSpeculativeLLM()
+                clearHistoryLLMMetadata()
+                finalText = rawText
+                DebugFileLogger.log("stop: cancellation received before LLM completion, using raw ASR")
+            }
+
             // Short text exemption (for non-streaming providers, per-mode threshold)
             if needsLLM && earlyLLMTask == nil && currentMode.shortTextExemption > 0 {
                 let exemptionThreshold = currentMode.shortTextExemption
@@ -1730,8 +1770,14 @@ actor RecognitionSession {
                             finalText = translated
                             onASREvent?(.processingResult(text: translated))
                         } catch {
-                            await failTranslation(error, rawText: rawText, myGeneration: myGeneration)
-                            return
+                            if cancellationSkipsLLM {
+                                DebugFileLogger.log(
+                                    "stop: cancelled raw output ignores translation failure"
+                                )
+                            } else {
+                                await failTranslation(error, rawText: rawText, myGeneration: myGeneration)
+                                return
+                            }
                         }
                     } else {
                         let guarded = applyIntelliSenseGuard(
@@ -1747,12 +1793,18 @@ actor RecognitionSession {
                     DebugFileLogger.log("stop: early LLM failed: \(err)")
                     pendingLLMError = nil
                     if currentMode.id == ProcessingMode.translationModeId {
-                        await failTranslation(
-                            TranslationError.llmUnavailable,
-                            rawText: rawText,
-                            myGeneration: myGeneration
-                        )
-                        return
+                        if cancellationSkipsLLM {
+                            DebugFileLogger.log(
+                                "stop: cancelled raw output ignores unavailable translation LLM"
+                            )
+                        } else {
+                            await failTranslation(
+                                TranslationError.llmUnavailable,
+                                rawText: rawText,
+                                myGeneration: myGeneration
+                            )
+                            return
+                        }
                     }
                     llmFailed = true
                     onASREvent?(.processingResult(text: rawText))
@@ -1829,8 +1881,14 @@ actor RecognitionSession {
                                 finalText = translated
                                 onASREvent?(.processingResult(text: translated))
                             } catch {
-                                await failTranslation(error, rawText: rawText, myGeneration: myGeneration)
-                                return
+                                if cancellationSkipsLLM {
+                                    DebugFileLogger.log(
+                                        "stop: cancelled raw output ignores translation failure"
+                                    )
+                                } else {
+                                    await failTranslation(error, rawText: rawText, myGeneration: myGeneration)
+                                    return
+                                }
                             }
                         } else {
                             let guarded = applyIntelliSenseGuard(
@@ -1843,12 +1901,18 @@ actor RecognitionSession {
                         }
                     } else {
                         if currentMode.id == ProcessingMode.translationModeId {
-                            await failTranslation(
-                                TranslationError.llmUnavailable,
-                                rawText: rawText,
-                                myGeneration: myGeneration
-                            )
-                            return
+                            if cancellationSkipsLLM {
+                                DebugFileLogger.log(
+                                    "stop: cancelled raw output ignores unavailable translation LLM"
+                                )
+                            } else {
+                                await failTranslation(
+                                    TranslationError.llmUnavailable,
+                                    rawText: rawText,
+                                    myGeneration: myGeneration
+                                )
+                                return
+                            }
                         }
                         llmFailed = true
                         onASREvent?(.processingResult(text: rawText))
@@ -1856,31 +1920,48 @@ actor RecognitionSession {
                 } else {
                     DebugFileLogger.log("stop: no LLM credentials")
                     if currentMode.id == ProcessingMode.translationModeId {
-                        await failTranslation(
-                            TranslationError.llmUnavailable,
-                            rawText: rawText,
-                            myGeneration: myGeneration
-                        )
-                        return
+                        if cancellationSkipsLLM {
+                            DebugFileLogger.log(
+                                "stop: cancelled raw output ignores unavailable translation LLM"
+                            )
+                        } else {
+                            await failTranslation(
+                                TranslationError.llmUnavailable,
+                                rawText: rawText,
+                                myGeneration: myGeneration
+                            )
+                            return
+                        }
                     }
                     llmFailed = true
                     onASREvent?(.processingResult(text: rawText))
                 }
             }
 
+            if cancellationSkipsLLM {
+                // A pre-existing LLM request can finish while the user cancels.
+                // Its result is intentionally ignored for raw/never policies.
+                finalText = rawText
+                processedText = nil
+                llmFailed = false
+                clearHistoryLLMMetadata()
+            }
+
             finalText = formattedOutputText(finalText)
 
             state = .injecting
-            let defaults = UserDefaults.standard
-            injectionEngine.preserveClipboard = defaults.object(forKey: "tf_preserveClipboard") != nil
-                ? defaults.bool(forKey: "tf_preserveClipboard")
-                : true
+            let wasCancelled = completionIntent == .cancelled
+            let retainsClipboardResult = clipboardOutputPolicy.retainsResult(
+                forCancellation: wasCancelled
+            )
+            injectionEngine.clipboardRetention = retainsClipboardResult
+                ? .retainResult
+                : .restoreOriginal
 
             // Run injection on a detached task to avoid blocking the actor with usleep().
             // .finalized is emitted directly from the detached task so the UI updates
             // immediately after paste, without waiting for actor re-scheduling.
             let engine = injectionEngine
-            let aborted = injectionAborted
             let onEvent = self.onASREvent
             let recordId = UUID().uuidString
             let modeID = currentMode.id
@@ -1891,7 +1972,7 @@ actor RecognitionSession {
                 modeID: modeID,
                 startedModeID: intelliSenseStartedModeID,
                 isCrossModeFallback: intelliSenseCrossModeFallback,
-                aborted: aborted,
+                aborted: wasCancelled,
                 guardRejected: intelliSenseGuardRejected,
                 contextAvailability: contextAvailability,
                 targetBundleIdentifier: targetBundleId
@@ -1908,11 +1989,17 @@ actor RecognitionSession {
             let injectionResult: TrackedInjectionResult = await withCheckedContinuation { continuation in
                 Task.detached {
                     let result: TrackedInjectionResult
-                    if aborted {
+                    if wasCancelled, retainsClipboardResult {
                         engine.copyToClipboard(finalText)
-                        DebugFileLogger.log("stop: injection aborted by ESC, text saved to clipboard & history")
+                        DebugFileLogger.log("stop: cancelled result retained in clipboard & history")
                         result = TrackedInjectionResult(
                             outcome: .copiedToClipboard,
+                            observationContext: nil
+                        )
+                    } else if wasCancelled {
+                        DebugFileLogger.log("stop: cancelled result not retained in clipboard")
+                        result = TrackedInjectionResult(
+                            outcome: .discarded,
                             observationContext: nil
                         )
                     } else {
@@ -1934,10 +2021,9 @@ actor RecognitionSession {
                     // Notify UI immediately from this thread, before actor resumes
                     onEvent?(.finalized(text: finalText, injection: result.outcome))
                     DebugFileLogger.log("stop: finalized emitted from injection task")
-                    // Only restore clipboard when text was successfully inserted.
-                    // When outcome is .copiedToClipboard (injection failed or ESC abort),
-                    // keep the text in clipboard so user can manually paste.
-                    if result.outcome == .inserted {
+                    // Restoring policies must restore even when there was no
+                    // editable destination, otherwise a failed paste leaks text.
+                    if !retainsClipboardResult && !wasCancelled {
                         engine.finishClipboardRestore()
                     }
                     continuation.resume(returning: result)
@@ -1953,7 +2039,9 @@ actor RecognitionSession {
             // Save to history
             let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
             let status: String
-            if injectionAborted { status = "aborted" }
+            if wasCancelled {
+                status = clipboardOutputPolicy.cancelledHistoryStatus
+            }
             else if llmFailed { status = "llm_error" }
             else if needsBatchFallback { status = "stream_recovered" }
             else { status = "completed" }
@@ -2020,7 +2108,7 @@ actor RecognitionSession {
             }
             KeychainService.addASRUsage(seconds: duration)
 
-            // Note: injectionAborted and llmFailed info is already conveyed
+            // Note: cancellation and LLM-failure details are already conveyed
             // through the .finalized event's InjectionOutcome / completionMessage.
             // No separate .error emission here to avoid green→red UI flash.
 
@@ -2156,7 +2244,9 @@ actor RecognitionSession {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let recovered, !recovered.isEmpty {
-            injectionEngine.copyToClipboard(recovered)
+            if clipboardOutputPolicy.retainsNormalResult {
+                injectionEngine.copyToClipboard(recovered)
+            }
             currentTranscript = RecognitionTranscript(
                 confirmedSegments: [recovered],
                 partialText: "",
@@ -2197,9 +2287,15 @@ actor RecognitionSession {
 
     private func injectRecoveryPartial(_ text: String) {
         let engine = injectionEngine
+        let retainsClipboardResult = clipboardOutputPolicy.retainsNormalResult
         Task.detached {
-            engine.preserveClipboard = false
+            engine.clipboardRetention = retainsClipboardResult
+                ? .retainResult
+                : .restoreOriginal
             _ = engine.inject(text)
+            if !retainsClipboardResult {
+                engine.finishClipboardRestore()
+            }
         }
     }
 
@@ -2583,6 +2679,34 @@ actor RecognitionSession {
         speculativeDebounceTask?.cancel()
         speculativeDebounceTask = nil
         // Don't cancel speculativeLLMTask here — stopRecording may reuse it
+    }
+
+    /// The clipboard policy applies only to text modes that ultimately target
+    /// another application. Ask Anything, Revise and Mac Action keep their
+    /// own cancellation semantics.
+    private var usesClipboardOutputPolicy: Bool {
+        guard case .input = recordingPurpose else { return false }
+        return currentMode.supportsOutputFormatting
+    }
+
+    private var cancellationSkipsLLM: Bool {
+        usesClipboardOutputPolicy
+            && completionIntent == .cancelled
+            && !clipboardOutputPolicy.processesCancelledResult
+    }
+
+    private func cancelAllSpeculativeLLM() {
+        speculativeDebounceTask?.cancel()
+        speculativeDebounceTask = nil
+        speculativeLLMTask?.cancel()
+        speculativeLLMTask = nil
+        speculativeLLMText = ""
+    }
+
+    private func clearHistoryLLMMetadata() {
+        historyLLMProvider = nil
+        historyLLMModel = nil
+        historyLLMDurationSeconds = nil
     }
 
     private func setPendingLLMError(_ error: Error) {

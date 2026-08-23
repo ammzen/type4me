@@ -57,6 +57,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     @AppStorage(LiveTranscriptDisplayPreference.storageKey) private var showLiveTranscript = LiveTranscriptDisplayPreference.defaultValue
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
     @AppStorage(RecordingVisualStyle.storageKey) private var visualStyle = RecordingVisualStyle.defaultValue
+    @AppStorage("tf_language") private var language = AppLanguage.systemDefault
 
     // MARK: - Transcript Popup
 
@@ -538,13 +539,20 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 onHoverChanged: updateTranscriptHover
             )
         case .mode:
-            hintBubble(text: state.currentMode.name)
+            hintBubble(text: localizedCurrentModeName)
                 .transaction { $0.animation = nil }
         case .action(.finish):
             alignedActionHint(.finish)
         case .action(.cancel):
             alignedActionHint(.cancel)
         }
+    }
+
+    private var localizedCurrentModeName: String {
+        // The floating bar stays alive across language changes, so it must
+        // observe the preference instead of retaining a launch-time string.
+        _ = language
+        return state.currentMode.localizedDisplayName
     }
 
     private func alignedActionHint(_ action: RecordingControlAction) -> some View {

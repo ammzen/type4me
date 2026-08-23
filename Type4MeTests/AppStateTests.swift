@@ -342,6 +342,32 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.feedbackMessage, "找不到麦克风")
     }
 
+    func testTransientNotificationUsesExistingCompletionPresentationWhenIdle() {
+        let appState = AppState()
+        var showCount = 0
+        appState.onShowPanel = { showCount += 1 }
+
+        appState.showTransientNotification("输入设备已切换至 AirPods Pro")
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, "输入设备已切换至 AirPods Pro")
+        XCTAssertEqual(showCount, 1)
+    }
+
+    func testTransientNotificationDefersUntilRecordingEnds() {
+        let appState = AppState()
+        appState.barPhase = .recording
+
+        appState.showTransientNotification("输入设备已切换至 AirPods Pro")
+
+        XCTAssertEqual(appState.barPhase, .recording)
+
+        appState.cancel()
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, "输入设备已切换至 AirPods Pro")
+    }
+
     func testReconcileCurrentModeKeepsSupportedCustomModeForQuickOnlyProvider() {
         let appState = AppState()
         let customMode = ProcessingMode(
@@ -397,11 +423,39 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(switchedMode.id, endingMode.id)
     }
 
-    func testClipboardInjectionPreferencePreservesLegacyInverseStorage() {
-        XCTAssertFalse(ClipboardInjectionPreference.isEnabled(preserveClipboard: true))
-        XCTAssertTrue(ClipboardInjectionPreference.isEnabled(preserveClipboard: false))
-        XCTAssertFalse(ClipboardInjectionPreference.preserveClipboardValue(isEnabled: true))
-        XCTAssertTrue(ClipboardInjectionPreference.preserveClipboardValue(isEnabled: false))
+    func testFinalizeShowsNoDestinationMessage() {
+        let appState = AppState()
+        appState.barPhase = .processing
+
+        appState.finalize(text: "测试文本", outcome: .notInserted)
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, InjectionOutcome.notInserted.completionMessage)
+    }
+
+    func testFinalizeShowsCancelledMessageWhenResultIsNotRetained() {
+        let appState = AppState()
+        appState.barPhase = .processing
+
+        appState.finalize(text: "测试文本", outcome: .discarded)
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, InjectionOutcome.discarded.completionMessage)
+    }
+
+    func testSuppressedCancellationHidesProcessingUntilItFinalizes() {
+        let appState = AppState()
+        appState.barPhase = .recording
+
+        appState.stopRecording(suppressProcessingUI: true)
+
+        XCTAssertEqual(appState.barPhase, .hidden)
+        XCTAssertNil(appState.processingLabelOverride)
+
+        appState.finalize(text: "原始识别", outcome: .copiedToClipboard)
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, InjectionOutcome.copiedToClipboard.completionMessage)
     }
 
     func testLocalASREngineSelectionNeverDisablesBothEngines() {

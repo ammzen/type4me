@@ -152,7 +152,7 @@ struct HomeDashboardView: View {
         HStack(spacing: 18) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 7) {
-                    Text(mode.name)
+                    Text(mode.localizedDisplayName)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(TF.settingsText)
 
@@ -393,7 +393,7 @@ struct HomeDashboardView: View {
                 "Target: \(target.displayName) · Auto-detect spoken language"
             )
         }
-        let summary = mode.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = mode.localizedDisplayDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         return summary.isEmpty ? L("自定义处理模式", "Custom processing mode") : summary
     }
 

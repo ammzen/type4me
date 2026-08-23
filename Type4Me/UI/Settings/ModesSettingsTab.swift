@@ -234,7 +234,7 @@ struct ModesSettingsTab: View {
             }
         } message: {
             if let id = deletingModeId, let mode = modes.first(where: { $0.id == id }) {
-                Text(L("确定要删除「\(mode.name)」吗？此操作不可撤销。", "Delete \"\(mode.name)\"? This cannot be undone."))
+                Text(L("确定要删除「\(mode.localizedDisplayName)」吗？此操作不可撤销。", "Delete \"\(mode.localizedDisplayName)\"? This cannot be undone."))
             }
         }
         .alert(
@@ -334,7 +334,7 @@ struct ModesSettingsTab: View {
                 .opacity(isHovered || isDragging ? 1 : 0)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(mode.name)
+                Text(mode.localizedDisplayName)
                     .font(.system(size: 13, weight: isActive ? .semibold : .medium))
                     .foregroundStyle(TF.settingsText)
                     .lineLimit(1)
@@ -389,7 +389,7 @@ struct ModesSettingsTab: View {
             draggingModeId = mode.id
             return NSItemProvider(object: mode.id.uuidString as NSString)
         } preview: {
-            Text(mode.name)
+            Text(mode.localizedDisplayName)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(TF.settingsText)
                 .padding(.horizontal, 12)
@@ -475,7 +475,7 @@ struct ModesSettingsTab: View {
     private func editBinding(_ mode: ProcessingMode, _ binding: HotkeyBinding) {
         recordingTarget = RecordingTarget(
             modeId: mode.id,
-            modeName: mode.name,
+            modeName: mode.localizedDisplayName,
             editingBindingId: binding.id,
             initialKeyCode: binding.keyCode,
             initialModifiers: binding.modifiers,
@@ -486,7 +486,7 @@ struct ModesSettingsTab: View {
     private func addBinding(_ mode: ProcessingMode) {
         recordingTarget = RecordingTarget(
             modeId: mode.id,
-            modeName: mode.name,
+            modeName: mode.localizedDisplayName,
             editingBindingId: nil,
             initialKeyCode: nil,
             initialModifiers: nil,
@@ -507,7 +507,7 @@ struct ModesSettingsTab: View {
                 Image(systemName: builtinIcon(for: mode))
                     .font(.system(size: 14))
                     .foregroundStyle(TF.settingsAccentAmber)
-                Text(mode.name)
+                Text(mode.localizedDisplayName)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(TF.settingsText)
                 Text(L("内置", "BUILT-IN"))
@@ -523,7 +523,7 @@ struct ModesSettingsTab: View {
             } else if mode.id == ProcessingMode.selectionAskId {
                 selectionAskDescription
             } else {
-                Text(mode.description)
+                Text(mode.localizedDisplayDescription)
                     .font(.system(size: 12))
                     .foregroundStyle(TF.settingsTextSecondary)
                     .lineSpacing(3)
@@ -1269,8 +1269,8 @@ private struct HotkeyRecordingSheet: View {
                 HStack(spacing: 4) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
-                    Text(L("「\(conflict.name)」正在使用此快捷键，确认后将移除其绑定",
-                           "\"\(conflict.name)\" is using this hotkey. Confirming will unbind it."))
+                    Text(L("「\(conflict.localizedDisplayName)」正在使用此快捷键，确认后将移除其绑定",
+                           "\"\(conflict.localizedDisplayName)\" is using this hotkey. Confirming will unbind it."))
                         .font(.system(size: 11))
                 }
                 .foregroundStyle(TF.settingsAccentAmber)
@@ -1281,8 +1281,8 @@ private struct HotkeyRecordingSheet: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 10))
                     Text(L(
-                        "与「\(prefixConflict.name)」存在前缀冲突；「\(target.modeName)」触发将改为抬起按键时触发，速度稍慢、手感变差",
-                        "Prefix conflict with \"\(prefixConflict.name)\". \"\(target.modeName)\" will trigger when the key is released, which is slightly slower and less responsive"
+                        "与「\(prefixConflict.localizedDisplayName)」存在前缀冲突；「\(target.modeName)」触发将改为抬起按键时触发，速度稍慢、手感变差",
+                        "Prefix conflict with \"\(prefixConflict.localizedDisplayName)\". \"\(target.modeName)\" will trigger when the key is released, which is slightly slower and less responsive"
                     ))
                     .font(.system(size: 11))
                 }
@@ -1906,7 +1906,7 @@ private struct FormalWritingDetailInner: View {
                 Image(systemName: "wand.and.stars")
                     .font(.system(size: 14))
                     .foregroundStyle(TF.settingsAccentAmber)
-                Text(mode.name)
+                Text(mode.localizedDisplayName)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(TF.settingsText)
                 Text(L("内置", "BUILT-IN"))

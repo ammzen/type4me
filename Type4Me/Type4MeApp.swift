@@ -13,6 +13,8 @@ struct Type4MeApp: App {
             MenuBarContent()
                 .environment(appDelegate.appState)
                 .environment(appDelegate.appUpdater)
+                .environment(appDelegate.menuBarControlCenterModel)
+                .environment(appDelegate.menuBarActionCoordinator)
         }
 
         Window(L("Type4Me 设置", "Type4Me Settings"), id: "settings") {
@@ -105,6 +107,13 @@ struct RecordingStartGate {
     }
 }
 
+enum RecordingStartSource: String {
+    case hotkey
+    case menuBar
+    case reviseHotkey
+    case reviseMenuBar
+}
+
 // MARK: - App Delegate
 
 @MainActor
@@ -132,6 +141,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordingStartGate = RecordingStartGate()
     private var recognitionEventTask: Task<Void, Never>?
     private var recognitionEventContinuation: AsyncStream<RecognitionEvent>.Continuation?
+    private var inputDeviceChangeObservers: [NSObjectProtocol] = []
+    private var effectiveInputDevice: AudioInputDevice?
+    private var hasEstablishedInputDeviceBaseline = false
+    lazy var menuBarControlCenterModel = MenuBarControlCenterModel(appState: appState)
+    lazy var menuBarActionCoordinator = MenuBarActionCoordinator(
+        appDelegate: self,
+        model: menuBarControlCenterModel
+    )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[Type4Me] applicationDidFinishLaunching")
@@ -149,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SnippetStorage.migrateIfNeeded()
         AudioInputDevicePreferenceStore.migrateIfNeeded()
         CJKSpacingMode.migrateIfNeeded()
+        ClipboardOutputPolicy.migrateIfNeeded()
 
         // Sync hotwords to Volcengine cloud table (async, non-blocking)
         VolcHotwordSyncManager.syncIfNeeded()
@@ -173,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         SoundFeedback.warmUp()
         AudioInputDeviceMonitor.shared.start()
+        observeEffectiveInputDeviceChanges()
         AudioKeepAliveManager.syncState()
 
         // Pre-warm audio subsystem and ASR connection so the first recording starts instantly
@@ -458,6 +477,253 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerHotkeys(for: provider)
     }
 
+    // MARK: - Actual input device notification
+
+    /// The configured microphone policy and the actual device can differ: a
+    /// priority device may be unavailable, while Follow System delegates to
+    /// CoreAudio's default input. Notify only when that effective device moves.
+    private func observeEffectiveInputDeviceChanges() {
+        updateEffectiveInputDevice(notify: false)
+        inputDeviceChangeObservers = [
+            .audioInputDevicesDidChange,
+            .audioInputDevicePreferenceDidChange,
+        ].map { name in
+            NotificationCenter.default.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.updateEffectiveInputDevice(notify: true)
+                }
+            }
+        }
+    }
+
+    private func updateEffectiveInputDevice(notify: Bool) {
+        let current = AudioInputDevicePreferenceStore.activeCachedInputDevice()
+        guard hasEstablishedInputDeviceBaseline else {
+            effectiveInputDevice = current
+            hasEstablishedInputDeviceBaseline = true
+            return
+        }
+        guard current?.uid != effectiveInputDevice?.uid else { return }
+
+        let previous = effectiveInputDevice
+        effectiveInputDevice = current
+        DebugFileLogger.log(
+            "audio input changed effective=\(previous?.uid ?? "none") → \(current?.uid ?? "none")"
+        )
+        guard notify else { return }
+
+        let message: String
+        if let current {
+            message = L(
+                "输入设备已切换至 \(current.name)",
+                "Input device switched to \(current.name)"
+            )
+        } else {
+            message = L("未找到可用输入设备", "No input device available")
+        }
+        appState.showTransientNotification(message)
+    }
+
+    // MARK: - Menu bar control center
+
+    /// Runtime settings which affect the next recording are deliberately
+    /// locked while a recording is being prepared or captured. The controls
+    /// are available again during processing because that session has already
+    /// frozen its own context.
+    var menuBarRuntimeSettingsAreEditable: Bool {
+        switch appState.barPhase {
+        case .preparing, .recording:
+            return false
+        case .hidden, .processing, .recovering, .done, .error:
+            return true
+        }
+    }
+
+    func requestMenuBarRecordingStart(modeID: UUID) {
+        guard let mode = appState.availableModes.first(where: { $0.id == modeID }) else {
+            return
+        }
+        requestRecordingStart(mode: mode, source: .menuBar)
+    }
+
+    func requestMenuBarRecordingControl(_ action: RecordingControlAction) {
+        recordingControlCoordinator.perform(action)
+    }
+
+    func requestMenuBarReviseStart() {
+        requestReviseRecordingStart(source: .reviseMenuBar)
+    }
+
+    func selectASRProviderFromMenu(_ provider: ASRProvider) {
+        guard menuBarRuntimeSettingsAreEditable,
+              ASRProviderRegistry.capabilities(for: provider).isAvailable
+        else { return }
+
+        if !provider.isLocal,
+           KeychainService.loadASRConfig(for: provider)?.isValid != true {
+            return
+        }
+
+        let previousProvider = KeychainService.selectedASRProvider
+        guard provider != previousProvider else { return }
+
+        KeychainService.selectedASRProvider = provider
+
+        if previousProvider == .sherpa, provider != .sherpa {
+            Task {
+                await SenseVoiceServerManager.shared.stopQwen3()
+                #if HAS_SHERPA_ONNX
+                SenseVoiceASRClient.releaseCachedModels()
+                #endif
+            }
+        }
+
+        if provider == .sherpa {
+            let defaults = UserDefaults.standard
+            let senseVoiceEnabled = defaults.object(forKey: "tf_sensevoiceEnabled") as? Bool ?? true
+            let qwen3FinalEnabled = defaults.object(forKey: "tf_qwen3FinalEnabled") as? Bool ?? true
+            if !senseVoiceEnabled && !qwen3FinalEnabled {
+                defaults.set(true, forKey: "tf_qwen3FinalEnabled")
+            }
+            Task {
+                do {
+                    try await SenseVoiceServerManager.shared.start()
+                } catch {
+                    await MainActor.run {
+                        self.appState.showError(
+                            L("本地识别服务启动失败", "Failed to start local recognition service")
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    func setTranslationTargetFromMenu(_ language: TranslationLanguage) {
+        guard menuBarRuntimeSettingsAreEditable,
+              let index = appState.availableModes.firstIndex(
+                where: { $0.id == ProcessingMode.translationModeId }
+              )
+        else { return }
+
+        var modes = appState.availableModes
+        modes[index].translationTargetLanguageCode = language.rawValue
+        persistModesFromMenu(modes)
+    }
+
+    func setCurrentModePunctuationFromMenu(_ punctuationMode: ModePunctuationMode) {
+        guard menuBarRuntimeSettingsAreEditable,
+              let index = appState.availableModes.firstIndex(
+                where: { $0.id == appState.currentMode.id }
+              )
+        else { return }
+
+        var modes = appState.availableModes
+        modes[index].punctuationMode = punctuationMode
+        persistModesFromMenu(modes)
+    }
+
+    private func persistModesFromMenu(_ modes: [ProcessingMode]) {
+        do {
+            try ModeStorage().save(modes)
+            appState.availableModes = modes
+            if let selected = modes.first(where: { $0.id == appState.currentMode.id }) {
+                appState.currentMode = selected
+            }
+            NotificationCenter.default.post(name: .modesDidChange, object: nil)
+            refreshModeAvailability()
+        } catch {
+            NSLog("[Type4Me] Failed to save menu bar mode setting: %@", String(describing: error))
+            appState.showError(L("保存模式设置失败", "Failed to save mode settings"))
+        }
+    }
+
+    private func requestRecordingStart(mode: ProcessingMode, source: RecordingStartSource) {
+        switch appState.barPhase {
+        case .hidden, .done, .error:
+            break
+        case .preparing, .recording, .processing, .recovering:
+            DebugFileLogger.log("\(source.rawValue) record start blocked phase=\(appState.barPhase)")
+            return
+        }
+
+        let selectedProvider = KeychainService.selectedASRProvider
+        let resolvedMode = ASRProviderRegistry.resolvedMode(for: mode, provider: selectedProvider)
+        let effectiveMode = appState.availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
+        if effectiveMode.executionKind == .selectionAsk {
+            askAnythingCoordinator.prepareForExternalNewQuestion()
+        }
+
+        let startToken = recordingStartGate.begin()
+        let recordingRequestedAt = ContinuousClock.now
+        NSLog("[Type4Me] >>> %@: Record START (mode: %@)", source.rawValue, effectiveMode.name)
+        DebugFileLogger.log("\(source.rawValue) record start mode=\(effectiveMode.name)")
+        appState.selectModeForRecording(effectiveMode)
+        appState.startRecording()
+
+        Task {
+            // Keep the existing session as the only recording owner and wait
+            // for its previous teardown before starting a new capture.
+            let ready = await self.session.awaitIdle()
+            if !ready {
+                NSLog("[Type4Me] >>> %@: previous session did not reach idle in time", source.rawValue)
+                DebugFileLogger.log("\(source.rawValue) start: awaitIdle timed out")
+            }
+            let canStart = await MainActor.run {
+                self.recordingStartGate.allowsStart(token: startToken)
+            }
+            guard canStart else {
+                NSLog("[Type4Me] >>> %@: start aborted by start gate token invalidation", source.rawValue)
+                DebugFileLogger.log("\(source.rawValue) start aborted by start gate token invalidation")
+                return
+            }
+            await self.session.startRecording(
+                mode: effectiveMode,
+                requestedAt: recordingRequestedAt
+            )
+        }
+    }
+
+    private func requestReviseRecordingStart(source: RecordingStartSource) {
+        guard menuBarRuntimeSettingsAreEditable else {
+            DebugFileLogger.log("\(source.rawValue) revise start blocked phase=\(appState.barPhase)")
+            return
+        }
+
+        let startToken = recordingStartGate.begin()
+        DebugFileLogger.log("\(source.rawValue) revise start")
+        Task {
+            let prepResult = await ReviseCoordinator.shared.prepareForRecording()
+            let canStart = await MainActor.run {
+                self.recordingStartGate.allowsStart(token: startToken)
+            }
+            guard canStart else {
+                if case .success(let prepared) = prepResult {
+                    await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
+                }
+                return
+            }
+
+            switch prepResult {
+            case .success(let prepared):
+                await MainActor.run {
+                    self.appState.startReviseRecording()
+                }
+                await self.session.startReviseRecording(prepared)
+            case .failure(let failure):
+                await MainActor.run {
+                    SoundFeedback.playError()
+                    self.appState.showReviseError(failure)
+                    self.hotkeyManager.resetActiveState()
+                }
+            }
+        }
+    }
+
     private func updateSelectionAskShortcutHint() {
         let hint = appState.availableModes
             .first(where: { $0.id == ProcessingMode.selectionAskId })?
@@ -587,42 +853,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
 
-                let selectedProvider = KeychainService.selectedASRProvider
-                let resolvedMode = ASRProviderRegistry.resolvedMode(for: capturedMode, provider: selectedProvider)
-                let effectiveMode = availableModes.first(where: { $0.id == resolvedMode.id }) ?? resolvedMode
-                if effectiveMode.executionKind == .selectionAsk {
-                    MainActor.assumeIsolated {
-                        self.askAnythingCoordinator.prepareForExternalNewQuestion()
-                    }
-                }
-                let startToken = MainActor.assumeIsolated { self.recordingStartGate.begin() }
-                let recordingRequestedAt = ContinuousClock.now
-                NSLog("[Type4Me] >>> HOTKEY: Record START (mode: %@)", effectiveMode.name)
-                DebugFileLogger.log("hotkey record start mode=\(effectiveMode.name)")
-                Task { @MainActor in
-                    guard self.recordingStartGate.allowsStart(token: startToken) else { return }
-                    self.appState.selectModeForRecording(effectiveMode)
-                    self.appState.startRecording()
-                }
-                Task {
-                    // Wait for previous session to fully clean up before starting
-                    let ready = await self.session.awaitIdle()
-                    if !ready {
-                        NSLog("[Type4Me] >>> HOTKEY: previous session did not reach idle in time")
-                        DebugFileLogger.log("hotkey start: awaitIdle timed out")
-                    }
-                    let canStart = await MainActor.run {
-                        self.recordingStartGate.allowsStart(token: startToken)
-                    }
-                    guard canStart else {
-                        NSLog("[Type4Me] >>> HOTKEY: start aborted by start gate token invalidation")
-                        DebugFileLogger.log("hotkey start aborted by start gate token invalidation")
-                        return
-                    }
-                    await self.session.startRecording(
-                        mode: effectiveMode,
-                        requestedAt: recordingRequestedAt
-                    )
+                MainActor.assumeIsolated {
+                    self.requestRecordingStart(mode: capturedMode, source: .hotkey)
                 }
             }
             let onStop: @Sendable () -> Void = { [weak self] in
@@ -707,31 +939,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let hk = reviseSettings.hotkey {
             let reviseOnStart: @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
-                let startToken = MainActor.assumeIsolated { self.recordingStartGate.begin() }
-                Task {
-                    let prepResult = await ReviseCoordinator.shared.prepareForRecording()
-                    let canStart = await MainActor.run {
-                        self.recordingStartGate.allowsStart(token: startToken)
-                    }
-                    guard canStart else {
-                        if case .success(let prepared) = prepResult {
-                            await ReviseCoordinator.shared.cancel(transactionID: prepared.transactionID)
-                        }
-                        return
-                    }
-                    switch prepResult {
-                    case .success(let prepared):
-                        await MainActor.run {
-                            self.appState.startReviseRecording()
-                        }
-                        await self.session.startReviseRecording(prepared)
-                    case .failure(let failure):
-                        await MainActor.run {
-                            SoundFeedback.playError()
-                            self.appState.showReviseError(failure)
-                            self.hotkeyManager.resetActiveState()
-                        }
-                    }
+                MainActor.assumeIsolated {
+                    self.requestReviseRecordingStart(source: .reviseHotkey)
                 }
             }
             let reviseOnStop: @Sendable () -> Void = { [weak self] in
@@ -847,11 +1056,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             NSLog("[Type4Me] >>> HOTKEY: ESC abort injection (phase=%@)", String(describing: phase))
             DebugFileLogger.log("hotkey ESC abort injection phase=\(phase)")
-            MainActor.assumeIsolated { self.appState.stopRecording() }
             if phase == .preparing {
+                MainActor.assumeIsolated { self.appState.stopRecording() }
                 Task { await self.session.cancelRecording() }
             } else {
                 Task {
+                    let suppressProcessingUI = await self.session.cancellationHidesProcessingUI()
+                    await MainActor.run {
+                        self.appState.stopRecording(
+                            suppressProcessingUI: suppressProcessingUI
+                        )
+                    }
                     await self.session.abortInjection()
                     await self.session.stopRecording()
                 }
@@ -963,11 +1178,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { await session.stopRecording() }
             }
         case .cancel:
-            appState.stopRecording()
             if phase == .preparing {
+                appState.stopRecording()
                 Task { await session.cancelRecording() }
             } else {
                 Task {
+                    let suppressProcessingUI = await session.cancellationHidesProcessingUI()
+                    await MainActor.run {
+                        appState.stopRecording(suppressProcessingUI: suppressProcessingUI)
+                    }
                     await session.abortInjection()
                     await session.stopRecording()
                 }
@@ -1243,6 +1462,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
 
     func applicationWillTerminate(_ notification: Notification) {
+        inputDeviceChangeObservers.forEach(NotificationCenter.default.removeObserver)
+        inputDeviceChangeObservers.removeAll()
         recognitionEventContinuation?.finish()
         recognitionEventTask?.cancel()
         SystemVolumeManager.restore()
@@ -1363,102 +1584,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Menu Bar Content
 
 struct MenuBarContent: View {
-
-    @Environment(AppState.self) private var appState
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.openWindow) private var openSettingsWindow
-    @AppStorage("tf_language") private var language = AppLanguage.systemDefault
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 7, height: 7)
-                Text(statusText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-        }
-
-        Divider()
-
-        // Mode hotkey hints (click to open settings)
-        ForEach(appState.availableModes) { mode in
-            Button {
-                openSettingsWindow(id: "settings")
-                NSApp.activate(ignoringOtherApps: true)
-                NotificationCenter.default.post(
-                    name: .navigateToMode, object: mode.id
-                )
-            } label: {
-                let hotkeyText = mode.hotkeyBindings.isEmpty
-                    ? L("未绑定", "Unbound")
-                    : mode.hotkeyBindings
-                        .map { HotkeyRecorderView.keyDisplayName(keyCode: $0.keyCode, modifiers: $0.modifiers) }
-                        .joined(separator: " / ")
-                Text("\(mode.name)  [\(hotkeyText)]")
-            }
-        }
-
-        Divider()
-
-        Button(L("历史记录...", "History...")) {
-            openSettingsWindow(id: "settings")
-            NSApp.activate(ignoringOtherApps: true)
-            NotificationCenter.default.post(name: .navigateToHistory, object: nil)
-        }
-
-        Button(L("偏好设置...", "Preferences...")) {
-            openSettingsWindow(id: "settings")
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        .keyboardShortcut(",", modifiers: .command)
-
-        Divider()
-
-        Button(L("退出 Type4Me", "Quit Type4Me")) {
-            NSApplication.shared.terminate(nil)
-        }
-        .keyboardShortcut("q", modifiers: .command)
-
-        // Force re-render when language changes
-        let _ = language
-
-        // Register the settings opener for Dock icon click
-        let _ = {
-            AppDelegate.openSettingsAction = { [openSettingsWindow] in
-                openSettingsWindow(id: "settings")
-            }
-            AppDelegate.openPermissionGuideAction = { [openSettingsWindow] in
-                openSettingsWindow(id: "permission-guide")
-            }
-        }()
-    }
-
-    private var statusColor: Color {
-        switch appState.barPhase {
-        case .preparing: return TF.recording
-        case .recording: return TF.recording
-        case .processing: return TF.amber
-        case .recovering: return TF.amber
-        case .done: return TF.success
-        case .error: return TF.settingsAccentRed
-        case .hidden: return .secondary.opacity(0.4)
-        }
-    }
-
-    private var statusText: String {
-        switch appState.barPhase {
-        case .preparing: return L("录制中", "Recording")
-        case .recording: return L("录制中", "Recording")
-        case .processing: return appState.effectiveProcessingLabel
-        case .recovering: return appState.effectiveProcessingLabel
-        case .done: return L("完成", "Done")
-        case .error: return L("错误", "Error")
-        case .hidden: return L("就绪", "Ready")
-        }
+        MenuBarControlCenterView()
     }
 }

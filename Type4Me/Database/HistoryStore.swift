@@ -196,6 +196,50 @@ actor HistoryStore {
         return executeQuery(sql)
     }
 
+    /// Returns the effective final text of the most recent completed record
+    /// for the menu-bar recovery action. A later applied Voice Revise result
+    /// supersedes the record's original final text; an undone revision does
+    /// not. The caller deliberately does not receive a record or any other
+    /// history metadata, which keeps the menu snapshot free of dictated
+    /// content.
+    func latestCopyableFinalText() -> String? {
+        let sql = """
+        SELECT COALESCE(
+            (
+                SELECT revision.after_text
+                FROM recognition_revisions AS revision
+                WHERE revision.source_record_id = history.id
+                  AND revision.status = 'applied'
+                ORDER BY revision.sequence DESC
+                LIMIT 1
+            ),
+            history.final_text
+        )
+        FROM recognition_history AS history
+        WHERE history.status = 'completed'
+          AND TRIM(COALESCE(
+              (
+                  SELECT revision.after_text
+                  FROM recognition_revisions AS revision
+                  WHERE revision.source_record_id = history.id
+                    AND revision.status = 'applied'
+                  ORDER BY revision.sequence DESC
+                  LIMIT 1
+              ),
+              history.final_text
+          )) != ''
+        ORDER BY history.created_at DESC
+        LIMIT 1;
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return nil
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return column(statement, 0)
+    }
+
     /// Cursor-based pagination with optional date range filter.
     /// Pass `cursor` for subsequent pages, `from`/`to` as ISO8601 strings for date filtering.
     func fetchPage(limit: Int, before cursor: String? = nil, from: String? = nil, to: String? = nil) -> [HistoryRecord] {

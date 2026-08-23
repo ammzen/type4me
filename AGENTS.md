@@ -288,6 +288,13 @@ API keys and other secure values are stored in Keychain, not in this file.
 - Test/action buttons should be spatially separated from destructive actions
 - Download progress UI must use `@Published` properties on `@MainActor` for SwiftUI updates
 
+### Localization & Language Adaptation (Mandatory)
+- Chinese and English are first-class product languages. Any user-facing copy in a new or changed screen, menu, popover, dialog, floating bar, indicator, or accessibility label must have Chinese and English equivalents.
+- Switching `tf_language` must update every currently visible user-facing surface without an app relaunch. Persistent surfaces such as `MenuBarExtra`, floating/non-activating panels, overlays, and existing settings windows must observe the setting (for example, with `@AppStorage`) rather than capture a launch-time string.
+- Persist semantic values, stable IDs, and user-entered text—not a single-language UI string as the only source of truth. Render Type4Me-provided labels at display time for the selected language.
+- System-provided `ProcessingMode` names must be rendered through `localizedDisplayName` (or an explicitly equivalent language-aware API), never through the persisted raw `name`. A custom mode name or a user-renamed system mode must remain verbatim and must not be auto-translated.
+- Add or update automated coverage for language-sensitive behavior, including switching between Chinese and English for changed persistent UI paths. Review both languages before declaring a UI change complete.
+
 ### Git Workflow
 - `sherpa-onnx.xcframework` is not committed; `.gitignore` it and build it locally with `scripts/build-sherpa.sh`.
 - Before opening or updating a PR, run `git fetch origin && git rebase origin/main` when the requested workflow calls for a rebase.

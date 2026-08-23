@@ -367,9 +367,7 @@ struct SettingsView: View {
         let isHovered = hoveredSettingsTab == tab
 
         return Button {
-            withAnimation(.easeInOut(duration: 0.16)) {
-                requestNavigation(to: tab)
-            }
+            requestNavigation(to: tab)
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: tab.icon)
@@ -397,6 +395,10 @@ struct SettingsView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        // Keep the selection-pill animation local to this control. Wrapping
+        // the navigation mutation in `withAnimation` animated the whole
+        // settings page replacement, including its otherwise unchanged header.
+        .animation(.easeInOut(duration: 0.16), value: isSelected)
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.12)) {
                 hoveredSettingsTab = hovering ? tab : nil
@@ -440,33 +442,13 @@ struct SettingsView: View {
             fixedPage { VocabularyTab() }
         case .history:
             fixedPage { HistoryTab(isActive: selectedTab == .history) }
-        case .preferences:
-            settingsTabPage { GeneralSettingsTab(showsHeader: false) }
-        case .models:
-            #if HAS_CLOUD_SUBSCRIPTION
-            if edition != .member {
-                settingsTabPage {
-                    ModelSettingsTab(showsHeader: false, draftCoordinator: draftCoordinator)
-                }
-            } else {
-                settingsTabPage { GeneralSettingsTab(showsHeader: false) }
-            }
-            #else
-            settingsTabPage {
-                ModelSettingsTab(showsHeader: false, draftCoordinator: draftCoordinator)
-            }
-            #endif
-        case .modes:
-            settingsFixedPage {
-                ModesSettingsTab(showsHeader: false, draftCoordinator: draftCoordinator)
-            }
-        case .about:
-            settingsTabPage { AboutTab(showsHeader: false) }
+        case .preferences, .models, .modes, .about:
+            settingsHubPage
         case .debug:
             if debugPanelEnabled {
                 tabPage { DebugSettingsTab() }
             } else {
-                settingsTabPage { GeneralSettingsTab(showsHeader: false) }
+                settingsHubPage
             }
             #if HAS_CLOUD_SUBSCRIPTION
         case .account:
@@ -475,34 +457,61 @@ struct SettingsView: View {
         }
     }
 
-    private func settingsTabPage<V: View>(
+    /// Stable chrome for the four Settings subtabs. Keeping this outside the
+    /// switched body prevents the “Settings” heading and description from
+    /// being removed and inserted on every subtab selection.
+    private var settingsHubPage: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            settingsHubHeader
+                .padding(.horizontal, 38)
+                .padding(.top, 34)
+            settingsHubContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(TF.settingsWindowBackground)
+    }
+
+    @ViewBuilder
+    private var settingsHubContent: some View {
+        switch selectedTab {
+        case .preferences:
+            settingsScrollableContent { GeneralSettingsTab(showsHeader: false) }
+        case .models:
+            #if HAS_CLOUD_SUBSCRIPTION
+            if edition != .member {
+                settingsScrollableContent {
+                    ModelSettingsTab(showsHeader: false, draftCoordinator: draftCoordinator)
+                }
+            } else {
+                settingsScrollableContent { GeneralSettingsTab(showsHeader: false) }
+            }
+            #else
+            settingsScrollableContent {
+                ModelSettingsTab(showsHeader: false, draftCoordinator: draftCoordinator)
+            }
+            #endif
+        case .modes:
+            ModesSettingsTab(showsHeader: false, draftCoordinator: draftCoordinator)
+                .padding(.horizontal, 38)
+                .padding(.bottom, 34)
+        case .about:
+            settingsScrollableContent { AboutTab(showsHeader: false) }
+        default:
+            settingsScrollableContent { GeneralSettingsTab(showsHeader: false) }
+        }
+    }
+
+    private func settingsScrollableContent<V: View>(
         @ViewBuilder content: () -> V
     ) -> some View {
         ScrollView(.vertical, showsIndicators: true) {
-            VStack(alignment: .leading, spacing: 0) {
-                settingsHubHeader
-                content()
-            }
+            content()
             .padding(.horizontal, 38)
-            .padding(.vertical, 34)
+            .padding(.bottom, 34)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TF.settingsWindowBackground)
-    }
-
-    private func settingsFixedPage<V: View>(
-        @ViewBuilder content: () -> V
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            settingsHubHeader
-            content()
-        }
-        .padding(.horizontal, 38)
-        .padding(.vertical, 34)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(TF.settingsWindowBackground)
     }
 
     /// Scrollable tab page (most tabs).
