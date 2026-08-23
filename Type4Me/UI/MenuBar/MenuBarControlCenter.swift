@@ -311,6 +311,7 @@ struct MenuBarControlCenterView: View {
     @Environment(AppUpdater.self) private var appUpdater
     @Environment(MenuBarActionCoordinator.self) private var actions
     @Environment(MenuBarControlCenterModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     @AppStorage(LiveTranscriptDisplayPreference.storageKey)
     private var liveTranscriptEnabled = LiveTranscriptDisplayPreference.defaultValue
     @AppStorage("tf_preserveClipboard") private var preserveClipboard = true
@@ -722,8 +723,16 @@ struct MenuBarControlCenterView: View {
     }
 
     private func registerGlobalOpenActions() {
-        AppDelegate.openSettingsAction = { actions.openSettings() }
-        AppDelegate.openPermissionGuideAction = { actions.openPermissionGuide() }
+        // `presentSettings()` invokes these as a fallback after its standard
+        // AppKit action. They must open the SwiftUI scene directly rather than
+        // route back through the coordinator, or the fallback recursively
+        // re-enters `presentSettings()`.
+        AppDelegate.openSettingsAction = { [openWindow] in
+            openWindow(id: "settings")
+        }
+        AppDelegate.openPermissionGuideAction = { [openWindow] in
+            openWindow(id: "permission-guide")
+        }
     }
 }
 
