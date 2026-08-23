@@ -1001,11 +1001,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             NSLog("[Type4Me] >>> HOTKEY: ESC abort injection (phase=%@)", String(describing: phase))
             DebugFileLogger.log("hotkey ESC abort injection phase=\(phase)")
-            MainActor.assumeIsolated { self.appState.stopRecording() }
             if phase == .preparing {
+                MainActor.assumeIsolated { self.appState.stopRecording() }
                 Task { await self.session.cancelRecording() }
             } else {
                 Task {
+                    let suppressProcessingUI = await self.session.cancellationHidesProcessingUI()
+                    await MainActor.run {
+                        self.appState.stopRecording(
+                            suppressProcessingUI: suppressProcessingUI
+                        )
+                    }
                     await self.session.abortInjection()
                     await self.session.stopRecording()
                 }
@@ -1117,11 +1123,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { await session.stopRecording() }
             }
         case .cancel:
-            appState.stopRecording()
             if phase == .preparing {
+                appState.stopRecording()
                 Task { await session.cancelRecording() }
             } else {
                 Task {
+                    let suppressProcessingUI = await session.cancellationHidesProcessingUI()
+                    await MainActor.run {
+                        appState.stopRecording(suppressProcessingUI: suppressProcessingUI)
+                    }
                     await session.abortInjection()
                     await session.stopRecording()
                 }

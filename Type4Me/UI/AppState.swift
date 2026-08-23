@@ -1318,6 +1318,10 @@ final class AppState {
     var processingLabelOverride: String?
     var processingFinishTime: Date?
     var pinsTranscriptPopup = false
+    /// When a cancelled raw/no-copy session still needs ASR finalization for
+    /// history or clipboard output, keep its post-recording work out of the
+    /// floating bar. The final event may reveal a short completion message.
+    private var awaitsSuppressedCancellationFinalization = false
     var activityKind: RecordingActivityKind = .standard
     var latestReviseUndoTicketID: UUID? = nil
     var isQwen3OnlyMode: Bool {
@@ -1374,6 +1378,7 @@ final class AppState {
     func startRecording() {
         activityKind = .standard
         latestReviseUndoTicketID = nil
+        awaitsSuppressedCancellationFinalization = false
         segments = []
         audioLevel.current = 0
         recordingStartDate = nil
@@ -1391,6 +1396,7 @@ final class AppState {
     func startReviseRecording() {
         activityKind = .revise
         latestReviseUndoTicketID = nil
+        awaitsSuppressedCancellationFinalization = false
         segments = []
         audioLevel.current = 0
         recordingStartDate = nil
@@ -1414,7 +1420,17 @@ final class AppState {
         barPhase = .recording
     }
 
-    func stopRecording() {
+    func stopRecording(suppressProcessingUI: Bool = false) {
+        if suppressProcessingUI {
+            guard barPhase == .recording || barPhase == .processing else { return }
+            awaitsSuppressedCancellationFinalization = true
+            processingFinishTime = nil
+            processingLabelOverride = nil
+            barPhase = .hidden
+            onHidePanel?()
+            return
+        }
+
         switch barPhase {
         case .preparing:
             cancel()
@@ -1495,18 +1511,25 @@ final class AppState {
 
     func finalize(text: String, outcome: InjectionOutcome) {
         // Only accept finalization while the bar is in processing state.
-        // A stale .finalized from a previous session's detached task must not
-        // overwrite a new recording that has already started.
-        guard barPhase == .processing else {
-            DebugFileLogger.log("finalize: ignored (barPhase=\(barPhase), expected .processing)")
+        // A suppressed raw/no-copy cancellation can also finalize from .hidden.
+        // A stale event from a previous session is still rejected because a
+        // new recording clears `awaitsSuppressedCancellationFinalization`.
+        let shouldRevealSuppressedFinalization = barPhase == .hidden
+            && awaitsSuppressedCancellationFinalization
+        guard barPhase == .processing || shouldRevealSuppressedFinalization else {
+            DebugFileLogger.log("finalize: ignored (barPhase=\(barPhase))")
             return
         }
+        awaitsSuppressedCancellationFinalization = false
         guard !text.isEmpty else {
             cancel()
             return
         }
         segments = [TranscriptionSegment(text: text, isConfirmed: true)]
         showDone(message: outcome.completionMessage)
+        if shouldRevealSuppressedFinalization {
+            onShowPanel?()
+        }
     }
 
     func showError(_ message: String) {
@@ -1522,6 +1545,7 @@ final class AppState {
     func cancel() {
         activityKind = .standard
         latestReviseUndoTicketID = nil
+        awaitsSuppressedCancellationFinalization = false
         barPhase = .hidden
         segments = []
         audioLevel.current = 0

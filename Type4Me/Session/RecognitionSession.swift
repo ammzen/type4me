@@ -1098,6 +1098,13 @@ actor RecognitionSession {
         )
     }
 
+    /// Raw transcript and never-copy cancellation still wait for final ASR,
+    /// but they have no LLM phase. The UI can hide the processing indicator
+    /// while that non-interactive finalization completes.
+    func cancellationHidesProcessingUI() -> Bool {
+        usesClipboardOutputPolicy && !clipboardOutputPolicy.processesCancelledResult
+    }
+
     /// Parse a Mac Action LLM reply for a `<tool_call>{...}</tool_call>`, dispatch
     /// the action via `ActionRegistry`, and return both the user-facing message
     /// and a status. The floating bar uses the status to pick an icon/color

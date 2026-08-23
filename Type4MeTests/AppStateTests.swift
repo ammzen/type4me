@@ -417,6 +417,21 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(appState.feedbackMessage, InjectionOutcome.discarded.completionMessage)
     }
 
+    func testSuppressedCancellationHidesProcessingUntilItFinalizes() {
+        let appState = AppState()
+        appState.barPhase = .recording
+
+        appState.stopRecording(suppressProcessingUI: true)
+
+        XCTAssertEqual(appState.barPhase, .hidden)
+        XCTAssertNil(appState.processingLabelOverride)
+
+        appState.finalize(text: "原始识别", outcome: .copiedToClipboard)
+
+        XCTAssertEqual(appState.barPhase, .done)
+        XCTAssertEqual(appState.feedbackMessage, InjectionOutcome.copiedToClipboard.completionMessage)
+    }
+
     func testLocalASREngineSelectionNeverDisablesBothEngines() {
         let qwenOnly = LocalASREngineSelection(
             senseVoiceEnabled: true,
