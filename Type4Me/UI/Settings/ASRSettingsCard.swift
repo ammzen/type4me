@@ -158,11 +158,16 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
 
     @ViewBuilder
     private func providerMenuItem(_ provider: ASRProvider) -> some View {
+        let isBatch = !ASRProviderRegistry.capabilities(for: provider).supportsRealtimeRecognition
         Toggle(isOn: Binding(
             get: { provider == selectedASRProvider },
             set: { if $0 { selectedASRProvider = provider } }
         )) {
-            Text(provider.displayName)
+            if isBatch {
+                Text("\(provider.displayName) (\(L("非实时", "Batch")))")
+            } else {
+                Text(provider.displayName)
+            }
         }
     }
 
