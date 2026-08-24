@@ -149,7 +149,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         case .mimo:
             return [
                 (L("接入文档", "Setup guide"), L("查看", "view"), URL(string: "https://mimo.mi.com/docs/zh-CN/api/audio/Speech-Recognition")!),
-                ("API Key", L("获取", "get"), URL(string: "https://mimo.mi.com/dashboard/api-keys")!),
+                ("API Key", L("获取", "get"), URL(string: "https://platform.xiaomimimo.com")!),
             ]
         default:
             return []

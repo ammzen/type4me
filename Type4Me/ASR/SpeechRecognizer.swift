@@ -10,12 +10,27 @@ struct ASRRequestOptions: Sendable, Equatable {
     var bypassProxy: Bool = false
     /// When set, ASR clients connect to this URL instead of their default endpoint.
     var cloudProxyURL: String?
+    var customURLSessionConfiguration: URLSessionConfiguration?
+
     var urlSessionConfiguration: URLSessionConfiguration {
+        if let custom = customURLSessionConfiguration {
+            return custom
+        }
         let config = URLSessionConfiguration.default
         if bypassProxy {
             config.connectionProxyDictionary = [:]
         }
         return config
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.enablePunc == rhs.enablePunc
+            && lhs.hotwords == rhs.hotwords
+            && lhs.boostingTableID == rhs.boostingTableID
+            && lhs.contextHistoryLength == rhs.contextHistoryLength
+            && lhs.bypassProxy == rhs.bypassProxy
+            && lhs.cloudProxyURL == rhs.cloudProxyURL
+            && lhs.customURLSessionConfiguration === rhs.customURLSessionConfiguration
     }
 }
 

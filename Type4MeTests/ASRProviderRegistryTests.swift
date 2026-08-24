@@ -36,4 +36,17 @@ final class ASRProviderRegistryTests: XCTestCase {
         let bailianModes = ASRProviderRegistry.supportedModes(from: modes, for: .bailian)
         XCTAssertEqual(bailianModes.map(\.id), [ProcessingMode.directId, customMode.id])
     }
+
+    func testRegistry_exposesMiMoProviderConfiguration() {
+        let entry = ASRProviderRegistry.entry(for: .mimo)
+        XCTAssertNotNil(entry)
+        XCTAssertTrue(entry?.isAvailable ?? false)
+        XCTAssertTrue(ASRProviderRegistry.configType(for: .mimo) == MiMoASRConfig.self)
+        XCTAssertNotNil(ASRProviderRegistry.createClient(for: .mimo))
+
+        let caps = ASRProviderRegistry.capabilities(for: .mimo)
+        XCTAssertTrue(caps.isAvailable)
+        XCTAssertFalse(caps.isStreaming)
+        XCTAssertEqual(caps.audioInput, .pcmData)
+    }
 }

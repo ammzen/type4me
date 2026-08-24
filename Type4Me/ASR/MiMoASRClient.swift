@@ -32,12 +32,14 @@ actor MiMoASRClient: SpeechRecognizer {
         session = URLSession(configuration: options.urlSessionConfiguration)
         audioBuffer = Data()
 
-        let (stream, continuation) = AsyncStream<RecognitionEvent>.makeStream()
-        eventContinuation = continuation
-        _events = stream
+        if eventContinuation == nil {
+            let (stream, continuation) = AsyncStream<RecognitionEvent>.makeStream()
+            eventContinuation = continuation
+            _events = stream
+        }
 
-        continuation.yield(.ready)
-        continuation.yield(.transcript(RecognitionTranscript(
+        eventContinuation?.yield(.ready)
+        eventContinuation?.yield(.transcript(RecognitionTranscript(
             confirmedSegments: [],
             partialText: L("录音中…", "Recording…"),
             authoritativeText: "",
@@ -123,13 +125,6 @@ actor MiMoASRClient: SpeechRecognizer {
                 )))
 
             case .done:
-                let finalText = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
-                eventContinuation?.yield(.transcript(RecognitionTranscript(
-                    confirmedSegments: finalText.isEmpty ? [] : [finalText],
-                    partialText: "",
-                    authoritativeText: finalText,
-                    isFinal: true
-                )))
                 didReceiveDone = true
 
             case .error(let message):
@@ -139,19 +134,17 @@ actor MiMoASRClient: SpeechRecognizer {
             if didReceiveDone { break }
         }
 
-        if !didReceiveDone {
-            let finalText = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !finalText.isEmpty {
-                eventContinuation?.yield(.transcript(RecognitionTranscript(
-                    confirmedSegments: [finalText],
-                    partialText: "",
-                    authoritativeText: finalText,
-                    isFinal: true
-                )))
-            } else {
-                throw MiMoASRError.invalidResponse
-            }
+        let finalText = accumulatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard didReceiveDone, !finalText.isEmpty else {
+            throw MiMoASRError.invalidResponse
         }
+
+        eventContinuation?.yield(.transcript(RecognitionTranscript(
+            confirmedSegments: [finalText],
+            partialText: "",
+            authoritativeText: finalText,
+            isFinal: true
+        )))
 
         logger.info("MiMo ASR completed: \(accumulatedText.count) chars")
     }

@@ -90,9 +90,23 @@ final class MiMoASRProtocolTests: XCTestCase {
         XCTAssertEqual(event, .done)
     }
 
-    func testParseSSELine_parsesDoneSentinel() throws {
+    func testParseSSELine_parsesFinishReasonLengthAsError() throws {
+        let json = #"{"choices":[{"delta":{},"finish_reason":"length"}]}"#
+        let event = try MiMoASRProtocol.parseSSELine("data: \(json)")
+
+        XCTAssertEqual(event, .error(L("识别结果超出最大生成长度", "Recognition output exceeded maximum token length")))
+    }
+
+    func testParseSSELine_parsesFinishReasonContentFilterAsError() throws {
+        let json = #"{"choices":[{"delta":{},"finish_reason":"content_filter"}]}"#
+        let event = try MiMoASRProtocol.parseSSELine("data: \(json)")
+
+        XCTAssertEqual(event, .error(L("识别内容已被安全策略过滤", "Recognition content was filtered by safety policy")))
+    }
+
+    func testParseSSELine_ignoresDoneSentinelAsFraming() throws {
         let event = try MiMoASRProtocol.parseSSELine("data: [DONE]")
-        XCTAssertEqual(event, .done)
+        XCTAssertNil(event)
     }
 
     func testParseSSELine_parsesServerError() throws {

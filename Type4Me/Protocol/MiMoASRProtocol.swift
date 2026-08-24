@@ -100,8 +100,9 @@ enum MiMoASRProtocol {
         let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
+        // [DONE] is SSE stream framing; terminal completion is strictly governed by finish_reason
         if trimmed == "[DONE]" {
-            return .done
+            return nil
         }
 
         guard let data = trimmed.data(using: .utf8) else { return nil }
@@ -118,11 +119,21 @@ enum MiMoASRProtocol {
         }
 
         if let firstChoice = chunk.choices.first {
+            if let finishReason = firstChoice.finishReason {
+                switch finishReason {
+                case "stop":
+                    return .done
+                case "length":
+                    return .error(L("识别结果超出最大生成长度", "Recognition output exceeded maximum token length"))
+                case "content_filter":
+                    return .error(L("识别内容已被安全策略过滤", "Recognition content was filtered by safety policy"))
+                default:
+                    return .error(L("识别异常终止: \(finishReason)", "Recognition terminated abnormally: \(finishReason)"))
+                }
+            }
+
             if let content = firstChoice.delta.content, !content.isEmpty {
                 return .delta(content)
-            }
-            if firstChoice.finishReason == "stop" {
-                return .done
             }
         }
 
