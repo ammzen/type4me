@@ -7,21 +7,41 @@ enum ASRAudioInputKind: Sendable, Equatable {
 
 struct ASRProviderCapabilities: Sendable, Equatable {
     let isAvailable: Bool
-    /// False for batch/REST providers that only produce results in endAudio().
+    /// Internal session behavior: false for batch/REST providers that only produce final results in endAudio().
     let isStreaming: Bool
+    /// User-facing capability: true if recognition starts while speaking (streaming preview);
+    /// false if the complete audio is submitted only after releasing the hotkey ("非实时").
+    let supportsRealtimeRecognition: Bool
     let audioInput: ASRAudioInputKind
 
-    static func streaming(audioInput: ASRAudioInputKind = .pcmData) -> ASRProviderCapabilities {
-        ASRProviderCapabilities(isAvailable: true, isStreaming: true, audioInput: audioInput)
+    static func streaming(
+        audioInput: ASRAudioInputKind = .pcmData,
+        supportsRealtimeRecognition: Bool = true
+    ) -> ASRProviderCapabilities {
+        ASRProviderCapabilities(
+            isAvailable: true,
+            isStreaming: true,
+            supportsRealtimeRecognition: supportsRealtimeRecognition,
+            audioInput: audioInput
+        )
     }
 
-    static func batch(audioInput: ASRAudioInputKind = .pcmData) -> ASRProviderCapabilities {
-        ASRProviderCapabilities(isAvailable: true, isStreaming: false, audioInput: audioInput)
+    static func batch(
+        audioInput: ASRAudioInputKind = .pcmData,
+        supportsRealtimeRecognition: Bool = false
+    ) -> ASRProviderCapabilities {
+        ASRProviderCapabilities(
+            isAvailable: true,
+            isStreaming: false,
+            supportsRealtimeRecognition: supportsRealtimeRecognition,
+            audioInput: audioInput
+        )
     }
 
     static let unavailable = ASRProviderCapabilities(
         isAvailable: false,
         isStreaming: true,
+        supportsRealtimeRecognition: false,
         audioInput: .pcmData
     )
 }
@@ -134,7 +154,7 @@ enum ASRProviderRegistry {
         dict[.sherpa] = ProviderEntry(
             configType: SherpaASRConfig.self,
             createClient: { SenseVoiceASRClient() },
-            capabilities: .batch()
+            capabilities: .batch(supportsRealtimeRecognition: true)
         )
         #else
         dict[.sherpa] = ProviderEntry(

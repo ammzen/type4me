@@ -158,12 +158,51 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
 
     @ViewBuilder
     private func providerMenuItem(_ provider: ASRProvider) -> some View {
+        let isBatch = !ASRProviderRegistry.capabilities(for: provider).supportsRealtimeRecognition
         Toggle(isOn: Binding(
             get: { provider == selectedASRProvider },
             set: { if $0 { selectedASRProvider = provider } }
         )) {
-            Text(provider.displayName)
+            if isBatch {
+                Text("\(provider.displayName) (\(L("非实时", "Batch")))")
+            } else {
+                Text(provider.displayName)
+            }
         }
+    }
+
+    private func asrProviderDropdownLabel(_ provider: ASRProvider) -> some View {
+        let isBatch = !ASRProviderRegistry.capabilities(for: provider).supportsRealtimeRecognition
+        return HStack(spacing: 8) {
+            Text(provider.displayName)
+                .font(.system(size: 13))
+                .foregroundStyle(TF.settingsText)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            if isBatch {
+                Text(L("非实时", "Batch"))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(
+                        Capsule()
+                            .fill(TF.settingsCard)
+                    )
+            }
+
+            Image(systemName: "chevron.down")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(TF.settingsTextTertiary)
+        }
+        .padding(.horizontal, 12)
+        .frame(minWidth: 88, minHeight: 36)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(TF.settingsCardAlt)
+        )
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var currentProviderNote: String? {
@@ -175,6 +214,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             )
         case .deepgram:
             return L("受接口限制，热词仅取前 30 个", "Due to API limits, only the first 30 hotwords are used")
+        case .openai:
+            return L(
+                "松开快捷键后提交完整录音进行转写。",
+                "The complete recording is submitted after you release the hotkey."
+            )
         case .stepfunBatch:
             return L(
                 "松开快捷键后提交完整录音；Step Plan 与标准按量付费需显式选择",
@@ -351,7 +395,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                         }
                     }
                 } label: {
-                    settingsDropdownLabel(selectedASRProvider.displayName)
+                    asrProviderDropdownLabel(selectedASRProvider)
                 }
                 .buttonStyle(.plain)
         }

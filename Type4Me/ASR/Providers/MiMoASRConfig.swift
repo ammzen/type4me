@@ -17,7 +17,7 @@ enum MiMoASRLanguage: String, Sendable, CaseIterable {
 struct MiMoASRConfig: ASRProviderConfig, Sendable {
 
     static let provider = ASRProvider.mimo
-    static let displayName = L("小米 MiMo（非实时）", "Xiaomi MiMo (Batch)")
+    static let displayName = L("小米 MiMo", "Xiaomi MiMo")
     static let defaultModel = "mimo-v2.5-asr"
     static let endpoint = "https://api.xiaomimimo.com/v1/chat/completions"
 
