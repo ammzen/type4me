@@ -541,6 +541,31 @@ actor RecognitionSession {
     /// The frontmost application captured when recording starts, used to restore focus if needed.
     private var targetApplication: NSRunningApplication?
 
+    /// Activates `target` and waits until it actually becomes the frontmost
+    /// application, up to a short timeout. Returns `true` only once the target is
+    /// confirmed frontmost, so callers can fail-safe (skip pasting) instead of
+    /// risking text landing in whatever application happens to be focused.
+    ///
+    /// `NSRunningApplication.activate()` is asynchronous and can fail (e.g. the app
+    /// quit, or the system denied activation), so its return value alone is not a
+    /// safe signal — we verify the real frontmost app instead.
+    nonisolated static func activateAndConfirmFrontmost(_ target: NSRunningApplication) -> Bool {
+        let targetPid = target.processIdentifier
+        let activated = DispatchQueue.main.sync { target.activate() }
+        if !activated {
+            DebugFileLogger.log("stop: target.activate() returned false pid=\(targetPid)")
+        }
+        let deadline = Date().addingTimeInterval(0.4)
+        while Date() < deadline {
+            if target.isTerminated { return false }
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPid {
+                return true
+            }
+            usleep(20_000)
+        }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPid
+    }
+
     // MARK: - Speculative LLM (fire during recording pauses)
 
     private struct TimedLLMResult: Sendable {
@@ -665,12 +690,18 @@ actor RecognitionSession {
         clipboardOutputPolicy = ClipboardOutputPolicy.current()
         completionIntent = .normal
         stoppedByMaxDuration = false
+        // Determine the injection target fresh for every recording. Never inherit
+        // the previous session's target: if Type4Me itself is frontmost (e.g. a URL
+        // Scheme command activated the app), we deliberately clear the target rather
+        // than reusing a stale one, so we can never re-activate and paste into the
+        // wrong application. In that case the natural frontmost app at paste time
+        // receives the text, guarded by the frontmost confirmation below.
         let frontmostApplication = NSWorkspace.shared.frontmostApplication
         let isSelf = frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
-        if !isSelf, let app = frontmostApplication {
-            targetApplication = app
-            targetBundleId = app.bundleIdentifier
-        } else if targetApplication == nil || targetApplication?.isTerminated == true {
+        if isSelf {
+            targetApplication = nil
+            targetBundleId = nil
+        } else {
             targetApplication = frontmostApplication
             targetBundleId = frontmostApplication?.bundleIdentifier
         }
@@ -2013,23 +2044,33 @@ actor RecognitionSession {
                             observationContext: nil
                         )
                     } else {
-                        if let target = targetApp, !target.isTerminated {
-                            if !target.isActive {
-                                target.activate()
-                                usleep(50_000)
-                            }
+                        var targetConfirmed = true
+                        if let target = targetApp, !target.isTerminated, !target.isActive {
+                            targetConfirmed = RecognitionSession.activateAndConfirmFrontmost(target)
                         }
-                        DebugFileLogger.log(injectLog)
-                        if shouldTrackLearning {
-                            result = engine.injectTracked(
-                                finalText,
-                                sourceText: rawText,
-                                sourceRecordID: recordId,
-                                modeID: modeID
-                            )
+                        if targetConfirmed {
+                            DebugFileLogger.log(injectLog)
+                            if shouldTrackLearning {
+                                result = engine.injectTracked(
+                                    finalText,
+                                    sourceText: rawText,
+                                    sourceRecordID: recordId,
+                                    modeID: modeID
+                                )
+                            } else {
+                                result = TrackedInjectionResult(
+                                    outcome: engine.inject(finalText),
+                                    observationContext: nil
+                                )
+                            }
                         } else {
+                            // Fail-safe: the intended target never became frontmost, so
+                            // pasting now could leak the dictated text into the wrong app.
+                            // Retain it in the clipboard for a manual paste instead.
+                            engine.copyToClipboard(finalText)
+                            DebugFileLogger.log("stop: target focus unconfirmed; retained in clipboard, paste skipped")
                             result = TrackedInjectionResult(
-                                outcome: engine.inject(finalText),
+                                outcome: .copiedToClipboard,
                                 observationContext: nil
                             )
                         }

@@ -140,6 +140,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let session = RecognitionSession()
     private var selectionAskFollowUpStartGate = SelectionAskFollowUpStartGate()
     private var recordingStartGate = RecordingStartGate()
+    /// Set when the app is launched/activated by a headless URL recording command,
+    /// so the first-run setup wizard is not force-presented over a background
+    /// recording the user triggered via Stream Deck / Shortcuts / etc.
+    private var suppressSetupWizardForHeadlessLaunch = false
     private var recognitionEventTask: Task<Void, Never>?
     private var recognitionEventContinuation: AsyncStream<RecognitionEvent>.Continuation?
     private var inputDeviceChangeObservers: [NSObjectProtocol] = []
@@ -422,8 +426,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let needsSetup = !appState.hasCompletedSetup
         #endif
         if needsSetup {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 MainActor.assumeIsolated {
+                    // A headless URL recording command may have cold-launched the
+                    // app; do not force the setup wizard over the user's background
+                    // recording. The wizard still appears on a normal launch.
+                    if self?.suppressSetupWizardForHeadlessLaunch == true {
+                        DebugFileLogger.log("setup wizard suppressed: headless URL launch")
+                        return
+                    }
                     _ = NSApp.sendAction(Selector(("showSetupWindow:")), to: nil, from: nil)
                 }
             }
@@ -1548,14 +1559,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Type4Me] Recording URL rejected: \(String(describing: error))")
             DebugFileLogger.log("url recording command rejected: \(error)")
         case .success(let command):
-            if NSApp.isActive {
-                NSApp.hide(nil)
-            }
-            DispatchQueue.main.async {
-                if NSApp.isActive {
-                    NSApp.hide(nil)
-                }
-            }
+            // This is a headless automation command; if it cold-launched the app,
+            // do not force the first-run setup wizard over the recording.
+            suppressSetupWizardForHeadlessLaunch = true
             handleRecordingURLCommand(command)
         }
     }
@@ -1566,11 +1572,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("[Type4Me] URL command: %@ -> decision: %@", command.rawValue, String(describing: decision))
         switch decision {
         case .start:
+            // Only a real start yields focus. no-op commands must not touch window
+            // state, per the product spec ("safe no-op, do not steal focus").
+            yieldFocusToPreviousApp()
             requestURLRecordingStart()
         case .finish:
             requestURLRecordingStop()
         case .ignore:
             DebugFileLogger.log("url \(command.rawValue) ignored phase=\(phase)")
+        }
+    }
+
+    /// Hide Type4Me if a URL command activated it, so the previously focused app
+    /// regains focus before recording (and later injection) begins. The deferred
+    /// re-check covers activation that lands just after this handler runs.
+    private func yieldFocusToPreviousApp() {
+        if NSApp.isActive {
+            NSApp.hide(nil)
+        }
+        DispatchQueue.main.async {
+            if NSApp.isActive {
+                NSApp.hide(nil)
+            }
         }
     }
 
