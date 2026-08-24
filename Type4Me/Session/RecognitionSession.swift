@@ -1722,6 +1722,11 @@ actor RecognitionSession {
         uploadFailureFlag = nil
         lastStreamingError = nil
 
+        currentTranscript = Self.resolveEffectiveTranscript(
+            currentTranscript: currentTranscript,
+            providerIsStreaming: providerIsStreaming
+        )
+
         // Combine confirmed segments + any trailing unconfirmed partial.
         let effectiveText = currentTranscript.displayText
         currentConfig = nil
@@ -3281,6 +3286,19 @@ actor RecognitionSession {
         streamingError: Error?
     ) -> Bool {
         uploadFailed || !asrTeardownClean || streamingError != nil
+    }
+
+    /// Batch / non-streaming providers must strictly produce finalized output.
+    /// If a batch provider or its fallback failed without emitting isFinal,
+    /// discard unconfirmed partial text to avoid injecting truncated fragments.
+    static func resolveEffectiveTranscript(
+        currentTranscript: RecognitionTranscript,
+        providerIsStreaming: Bool
+    ) -> RecognitionTranscript {
+        if !providerIsStreaming && !currentTranscript.isFinal {
+            return .empty
+        }
+        return currentTranscript
     }
 
     static func shouldRunInputModeLLM(

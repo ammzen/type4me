@@ -31,7 +31,13 @@ struct MenuBarASRProviderItem: Identifiable, Equatable {
     let provider: ASRProvider
 
     var id: String { provider.rawValue }
-    var title: String { provider.displayName }
+    var title: String {
+        let isBatch = !ASRProviderRegistry.capabilities(for: provider).supportsRealtimeRecognition
+        if isBatch {
+            return "\(provider.displayName) (\(L("非实时", "Batch")))"
+        }
+        return provider.displayName
+    }
 }
 
 enum MenuBarPermissionIssue: Equatable {
@@ -103,7 +109,12 @@ final class MenuBarControlCenterModel {
     }
 
     var selectedProviderLabel: String {
-        KeychainService.selectedASRProvider.displayName
+        let provider = KeychainService.selectedASRProvider
+        let isBatch = !ASRProviderRegistry.capabilities(for: provider).supportsRealtimeRecognition
+        if isBatch {
+            return "\(provider.displayName) (\(L("非实时", "Batch")))"
+        }
+        return provider.displayName
     }
 
     var translationMode: ProcessingMode? {
