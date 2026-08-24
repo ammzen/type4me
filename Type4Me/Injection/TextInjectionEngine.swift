@@ -103,6 +103,14 @@ final class TextInjectionEngine: @unchecked Sendable {
         let shouldRestoreClipboard = clipboardRetention == .restoreOriginal
         let savedClipboard = shouldRestoreClipboard ? ClipboardSnapshot.capture() : nil
 
+        // If Type4Me is frontmost, yield focus so the target application receives paste
+        if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier {
+            DispatchQueue.main.sync {
+                NSApp.hide(nil)
+            }
+            usleep(50_000)
+        }
+
         // Snapshot focused element BEFORE paste for outcome detection
         let before = captureFocusedElementSnapshot()
 

@@ -538,6 +538,8 @@ actor RecognitionSession {
     /// Bundle identifier of the frontmost app when recording started.
     /// Used to select app-specific snippet rules.
     private var targetBundleId: String?
+    /// The frontmost application captured when recording starts, used to restore focus if needed.
+    private var targetApplication: NSRunningApplication?
 
     // MARK: - Speculative LLM (fire during recording pauses)
 
@@ -664,7 +666,14 @@ actor RecognitionSession {
         completionIntent = .normal
         stoppedByMaxDuration = false
         let frontmostApplication = NSWorkspace.shared.frontmostApplication
-        targetBundleId = frontmostApplication?.bundleIdentifier
+        let isSelf = frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+        if !isSelf, let app = frontmostApplication {
+            targetApplication = app
+            targetBundleId = app.bundleIdentifier
+        } else if targetApplication == nil || targetApplication?.isTerminated == true {
+            targetApplication = frontmostApplication
+            targetBundleId = frontmostApplication?.bundleIdentifier
+        }
         let provider = KeychainService.selectedASRProvider
         activeProvider = provider
 
@@ -1985,6 +1994,7 @@ actor RecognitionSession {
                     bundleIdentifier: targetBundleId,
                     appName: nil
                 )
+            let targetApp = targetApplication
             let injectLog = "stop: injecting method=clipboard len=\(finalText.count) +\(ContinuousClock.now - stopT0)"
             let injectionResult: TrackedInjectionResult = await withCheckedContinuation { continuation in
                 Task.detached {
@@ -2003,6 +2013,12 @@ actor RecognitionSession {
                             observationContext: nil
                         )
                     } else {
+                        if let target = targetApp, !target.isTerminated {
+                            if !target.isActive {
+                                target.activate()
+                                usleep(50_000)
+                            }
+                        }
                         DebugFileLogger.log(injectLog)
                         if shouldTrackLearning {
                             result = engine.injectTracked(

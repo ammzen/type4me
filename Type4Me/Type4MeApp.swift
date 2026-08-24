@@ -112,6 +112,7 @@ enum RecordingStartSource: String {
     case menuBar
     case reviseHotkey
     case reviseMenuBar
+    case urlScheme
 }
 
 // MARK: - App Delegate
@@ -815,8 +816,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if phase == .recording || phase == .preparing {
                     NSLog("[Type4Me] >>> HOTKEY: toggle desync – onStart while recording, redirecting to STOP (phase=%@)", String(describing: phase))
                     DebugFileLogger.log("hotkey toggle desync: onStart while recording, redirecting to stop phase=\(phase)")
-                    MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
-                    MainActor.assumeIsolated { self.appState.stopRecording() }
+                    MainActor.assumeIsolated {
+                        if phase == .preparing {
+                            self.recordingStartGate.invalidate()
+                            self.selectionAskFollowUpStartGate.invalidate()
+                        }
+                        self.hotkeyManager.resetActiveState()
+                        self.appState.stopRecording()
+                    }
                     if phase == .preparing {
                         Task { await self.session.cancelRecording() }
                     } else {
@@ -876,7 +883,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Task { _ = await self.session.handleRecoveryHotkeyPress() }
                     return
                 }
-                MainActor.assumeIsolated { self.appState.stopRecording() }
+                MainActor.assumeIsolated {
+                    if phase == .preparing {
+                        self.recordingStartGate.invalidate()
+                        self.selectionAskFollowUpStartGate.invalidate()
+                    }
+                    self.appState.stopRecording()
+                }
                 if phase == .preparing {
                     Task { await self.session.cancelRecording() }
                 } else {
@@ -946,7 +959,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let reviseOnStop: @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
                 let phase = MainActor.assumeIsolated { self.appState.barPhase }
-                MainActor.assumeIsolated { self.appState.stopRecording() }
+                MainActor.assumeIsolated {
+                    if phase == .preparing {
+                        self.recordingStartGate.invalidate()
+                        self.selectionAskFollowUpStartGate.invalidate()
+                    }
+                    self.appState.stopRecording()
+                }
                 if phase == .preparing {
                     Task { await self.session.cancelRecording() }
                 } else {
@@ -1057,7 +1076,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Type4Me] >>> HOTKEY: ESC abort injection (phase=%@)", String(describing: phase))
             DebugFileLogger.log("hotkey ESC abort injection phase=\(phase)")
             if phase == .preparing {
-                MainActor.assumeIsolated { self.appState.stopRecording() }
+                MainActor.assumeIsolated {
+                    self.recordingStartGate.invalidate()
+                    self.selectionAskFollowUpStartGate.invalidate()
+                    self.appState.stopRecording()
+                }
                 Task { await self.session.cancelRecording() }
             } else {
                 Task {
@@ -1171,14 +1194,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch action {
         case .finish:
-            appState.stopRecording()
             if phase == .preparing {
+                recordingStartGate.invalidate()
+                selectionAskFollowUpStartGate.invalidate()
+                appState.stopRecording()
                 Task { await session.cancelRecording() }
             } else {
+                appState.stopRecording()
                 Task { await session.stopRecording() }
             }
         case .cancel:
             if phase == .preparing {
+                recordingStartGate.invalidate()
+                selectionAskFollowUpStartGate.invalidate()
                 appState.stopRecording()
                 Task { await session.cancelRecording() }
             } else {
@@ -1480,7 +1508,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("[Type4Me] Ignored URL with unregistered scheme")
                 continue
             }
-            switch url.host {
+            switch url.host?.lowercased() {
+            case "start", "stop", "toggle":
+                handleRecordingURL(url, acceptedSchemes: acceptedSchemes)
             case "vocabulary":
                 handleVocabularyURL(url, acceptedSchemes: acceptedSchemes)
             case "reload-vocabulary":
@@ -1510,6 +1540,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .flatMap { $0 }
             .map { $0.lowercased() }
         return schemes.isEmpty ? ["type4me"] : Set(schemes)
+    }
+
+    private func handleRecordingURL(_ url: URL, acceptedSchemes: Set<String>) {
+        switch RecordingURLCommandParser.parse(url, allowedSchemes: acceptedSchemes) {
+        case .failure(let error):
+            NSLog("[Type4Me] Recording URL rejected: \(String(describing: error))")
+            DebugFileLogger.log("url recording command rejected: \(error)")
+        case .success(let command):
+            if NSApp.isActive {
+                NSApp.hide(nil)
+            }
+            DispatchQueue.main.async {
+                if NSApp.isActive {
+                    NSApp.hide(nil)
+                }
+            }
+            handleRecordingURLCommand(command)
+        }
+    }
+
+    func handleRecordingURLCommand(_ command: RecordingURLCommand) {
+        let phase = appState.barPhase
+        let decision = RecordingURLDecision.decide(for: command, phase: phase)
+        NSLog("[Type4Me] URL command: %@ -> decision: %@", command.rawValue, String(describing: decision))
+        switch decision {
+        case .start:
+            requestURLRecordingStart()
+        case .finish:
+            requestURLRecordingStop()
+        case .ignore:
+            DebugFileLogger.log("url \(command.rawValue) ignored phase=\(phase)")
+        }
+    }
+
+    private func requestURLRecordingStart() {
+        requestRecordingStart(
+            mode: appState.currentMode,
+            source: .urlScheme
+        )
+    }
+
+    private func requestURLRecordingStop() {
+        recordingControlCoordinator.perform(.finish)
     }
 
     private func handleVocabularyURL(_ url: URL, acceptedSchemes: Set<String>) {

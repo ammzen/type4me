@@ -25,7 +25,7 @@
 - **词汇管理**：支持热词、映射词，2种模式。热词用于校正语音识别引擎，映射词可作为兜底或个性化场景使用（如 Web coding -> Vibe Coding, "我的邮箱地址" -> xxx@gmail.com）；
 - **历史记录**：存储所有历史识别记录，包括原始文本和处理后文本，支持导出CSV；
 - **配套Skill**：真正做到100%准确率，打造只属于你的输入法，[点这里安装Skill](https://github.com/joewongjc/type4me-vocab-skill)后跟你的agent说"Qwen3.5 不要识别成 Queen 3.5"，他就能自动帮你管理热词和映射词，同类错误不再犯
-- **URL Scheme**：支持从浏览器、终端、快捷指令、Raycast / Alfred、脚本或 Agent 打开设置、管理词库、静默写入热词与片段替换规则；
+- **URL Scheme**：支持从 Stream Deck、快捷指令、Raycast / Alfred、终端、浏览器或脚本直接控制录音（开始、结束、切换），以及打开设置、管理词库、静默写入热词与片段替换规则；
 
 ## 立即体验
 
@@ -500,6 +500,41 @@ Type4Me 提供 URL Scheme，可以从浏览器、终端、macOS 快捷指令、R
 
 下面示例统一使用正式版 `type4me://`。开发版或个人版只需要替换 Scheme 前缀。
 
+#### 录音控制（Recording Commands）
+
+为 Stream Deck、Raycast、Alfred、BetterTouchTool、Hammerspoon、macOS 快捷指令等自动化工具提供免模拟键盘事件的直接控制接口：
+
+##### 开始录音
+```text
+type4me://start
+```
+- 使用 Type4Me 当前选中的模式（`AppState.currentMode`）开始录音；
+- 幂等命令：若已经在准备中或录音中，不会重复触发或中断当前录音；
+- 在处理中（processing）或恢复中（recovering）安全忽略，不会并发开启第二轮录音。
+
+##### 结束录音
+```text
+type4me://stop
+```
+- 结束当前录音并正常进入后续语音识别、LLM 处理与文本注入流程；
+- 仅在准备中（preparing）或录音中（recording）生效；空闲或处理中安全忽略；
+- 不等价于取消（cancel），会完整保留已录音内容。
+
+##### 录音开关（Toggle）
+```text
+type4me://toggle
+```
+- 空闲时开始录音，录音中结束录音；适合 Stream Deck 单键绑定；
+- 在处理中或恢复中安全忽略。
+
+> **最佳实践（推荐使用 `-g` 后台调用）**：
+> - 在终端、脚本或第三方工具（Stream Deck、Raycast、Alfred、BetterTouchTool、Hammerspoon、快捷指令等）中触发时，推荐使用 **`open -g 'type4me://toggle'`**（`-g` / `--background` 选项）；
+> - `-g` 会让系统直接在后台传递事件，**完全不激活 Type4Me 也不会抢占前台焦点**，彻底消除前台界面切换与光标抖动，实现 100% 丝滑无感的录音与文本注入体验。
+>
+> 说明：
+> - 录音控制命令默认使用 Type4Me 当前选中的模式，第一版不接受 `?mode=` 等 query 参数（带有未知参数将被拒绝）；
+> - 通过 URL 启动的录音是标准的 Type4Me 录音会话，可以随时通过浮动条、菜单栏或键盘快捷键正常结束或取消。
+
 #### 打开设置
 
 ```text
@@ -696,7 +731,7 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 - **Vocabulary Management**: Two modes: hotwords and snippet replacements. Hotwords improve ASR accuracy for proper nouns; snippets enable personalized substitutions (e.g., "Web coding" -> "Vibe Coding", "my email" -> xxx@gmail.com);
 - **History**: Stores all recognition records including raw and processed text, with CSV export;
 - **Companion Skill**: Achieve 100% recognition accuracy. [Install the Skill](https://github.com/joewongjc/type4me-vocab-skill) and tell your agent "Don't recognize Qwen3.5 as Queen 3.5" to automatically manage hotwords and snippets. Same mistakes won't happen again.
-- **URL Scheme**: Open Settings, manage vocabulary, and silently add hotwords or snippet rules from browsers, Terminal, Shortcuts, Raycast / Alfred, scripts, or AI agents.
+- **URL Scheme**: Control recording directly (start, stop, toggle) from Stream Deck, Shortcuts, Raycast / Alfred, Terminal, or scripts without simulating keystrokes; open Settings, manage vocabulary, and silently write hotwords/snippets.
 
 ## Get Started
 
@@ -1192,6 +1227,41 @@ Different builds register different schemes, and **each installed app accepts on
 | Personal / CtriXin build | `type4me-ctrixin://` | `type4me-ctrixin://settings` |
 
 Examples below use `type4me://`. For Dev or Personal builds, replace only the scheme prefix.
+
+#### Recording Control Commands
+
+Direct, deterministic recording control for Stream Deck, Raycast, Alfred, BetterTouchTool, Hammerspoon, and macOS Shortcuts without simulating keyboard events:
+
+##### Start Recording
+```text
+type4me://start
+```
+- Starts recording using the currently active mode in Type4Me (`AppState.currentMode`);
+- Idempotent: repeated calls while preparing or recording do not interrupt the active session;
+- Safely ignored while processing or recovering.
+
+##### Stop Recording
+```text
+type4me://stop
+```
+- Finishes the active recording and proceeds through transcription, LLM processing, and text injection;
+- Active only during `preparing` or `recording`; safely ignored when idle or processing;
+- Does not cancel: all recorded speech is preserved and processed.
+
+##### Toggle Recording
+```text
+type4me://toggle
+```
+- Starts recording when idle, and finishes recording when preparing or active; ideal for single-button Stream Deck actions;
+- Safely ignored while processing or recovering.
+
+> **Best Practice (Recommended `-g` Background Flag)**:
+> - When invoking from terminals, scripts, or automation utilities (Stream Deck, Raycast, Alfred, BetterTouchTool, Hammerspoon, Shortcuts, etc.), use **`open -g 'type4me://toggle'`** (the `-g` / `--background` option);
+> - The `-g` flag delivers the URL event purely in the background without activating Type4Me or stealing foreground focus, completely avoiding any window flicker or cursor disruption for a completely seamless dictation and text injection experience.
+>
+> Note:
+> - Recording commands operate on Type4Me's currently active mode. Version 1 does not accept query parameters such as `?mode=` (unknown parameters are rejected);
+> - Sessions started via URL Scheme are standard Type4Me sessions and can be finished or cancelled via the floating bar, menu bar, or global hotkeys.
 
 #### Open Settings
 

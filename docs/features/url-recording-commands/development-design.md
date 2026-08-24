@@ -2,7 +2,7 @@
 
 > 分支：`feat/194-url-recording-commands`
 > 文档类型：开发设计
-> 文档状态：设计中
+> 文档状态：已实现
 > 对应 Issue：[#194](https://github.com/joewongjc/type4me/issues/194)
 > 设计日期：2026-08-24
 > 实现基线：`e4b4627a4ca6a20d8ec506008341840f0f5a1ca3`
@@ -472,6 +472,14 @@ URL start 使用调用瞬间的 `appState.currentMode`；录音开始后 Session
 
 一旦发布，`start` / `stop` / `toggle` 的幂等语义应视为兼容承诺。不要以后把 `start` 改成 toggle，也不要让 `stop` 变成 cancel。
 
+### 14.5 前台焦点保护与后台调用 (`-g`) 规范
+
+1. **调用层最佳实践**：推荐使用 `open -g 'type4me://toggle'`（`-g` / `--background`），使 macOS LaunchServices 在纯后台派发 URL AppleEvent，彻底杜绝系统级前台 App 切换和输入光标抖动。
+2. **App 层焦点防御与注入恢复**：
+   - `AppDelegate.handleRecordingURL` 收到控制命令时，若 App 处于 active 状态，立即调用 `NSApp.hide(nil)` 归还焦点给原前台应用；
+   - `RecognitionSession` 启动时记录前台 `targetApplication`，注入文本前若目标应用未激活则执行 `target.activate()`，确保 `Cmd+V` 稳定注入目标输入控件；
+   - `TextInjectionEngine` 在模拟粘贴前检测并避让自身前台状态。
+
 ## 15. 实施顺序
 
 1. 添加纯 command / decision 类型与测试；
@@ -486,12 +494,12 @@ URL start 使用调用瞬间的 `appState.currentMode`；录音开始后 Session
 
 ## 16. 完成定义
 
-- [ ] 产品设计中的三条 URL 命令全部实现；
-- [ ] phase routing 有自动化测试；
-- [ ] 未引入第二套录音状态机；
-- [ ] 未用 CGEvent/快捷键模拟实现；
-- [ ] Selection Ask 路径验证通过；
-- [ ] preparing race 验证通过；
-- [ ] Public / Dev / Personal Scheme 测试通过；
-- [ ] README 中英文同步；
-- [ ] DEV App 用 `open 'type4me-dev://toggle'` 实机完成一次端到端输入。
+- [x] 产品设计中的三条 URL 命令全部实现；
+- [x] phase routing 有自动化测试；
+- [x] 未引入第二套录音状态机；
+- [x] 未用 CGEvent/快捷键模拟实现；
+- [x] Selection Ask 路径验证通过；
+- [x] preparing race 验证通过；
+- [x] Public / Dev / Personal Scheme 测试通过；
+- [x] README 中英文同步；
+- [x] DEV App 用 `open 'type4me-dev://toggle'` 实机完成一次端到端输入。

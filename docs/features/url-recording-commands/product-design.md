@@ -2,7 +2,7 @@
 
 > 分支：`feat/194-url-recording-commands`
 > 文档类型：产品设计
-> 文档状态：设计中
+> 文档状态：已实现
 > 对应 Issue：[#194](https://github.com/joewongjc/type4me/issues/194)
 > 设计日期：2026-08-24
 > 目标版本：Type4Me 2.x
@@ -261,9 +261,20 @@ type4me://toggle
 - start/stop 是幂等语义；
 - processing/recovering 时不会启动新录音；
 - Stream Deck 推荐直接绑定 `toggle`；
-- Shortcuts 可使用系统“打开 URL”。
+- Shortcuts 可使用系统“打开 URL”；
+- 推荐使用 `open -g 'type4me://toggle'`（`-g` 后台模式）以彻底避免前台窗口焦点切换抖动。
 
-## 10. 后续演进
+## 10. 焦点保护与后台调用最佳实践
+
+### 10.1 为什么推荐 `open -g`（Background 模式）
+当外部通过 macOS 普通 `open 'type4me://toggle'` 触发 URL 时，系统 LaunchServices 默认会尝试激活目标 App，导致当前正在输入的文本框短暂丢失焦点。
+使用 `open -g`（`--background`）参数时，macOS LaunchServices 会纯后台派发 URL AppleEvent，**完全不激活 Type4Me 也不会转移系统焦点**，输入光标保持原地不动，实现 0 抖动、0 延迟的无缝体验。
+
+### 10.2 Type4Me 内建焦点保障
+- **URL 收到时让出焦点**：在 `AppDelegate.handleRecordingURL` 中若发现 App 处于 active 状态，立即执行 `NSApp.hide(nil)` 归还焦点给原前台应用；
+- **Session 目标应用记录与激活保护**：`RecognitionSession` 在录音开始时记录前台 `targetApplication`，在最终文本注入前若目标应用未激活，自动将其激活前置（`target.activate()`），确保 `Cmd+V` 精确粘贴至原输入框。
+
+## 11. 后续演进
 
 ### P1：指定模式
 
@@ -281,15 +292,16 @@ CLI 可作为 URL 或本地 IPC 的薄包装，但需要独立解决安装位置
 
 当自动化场景需要参数选择、状态返回或 Siri 集成时，再引入 App Intents，而不是为了第一版重复 URL 能力。
 
-## 11. 验收清单
+## 12. 验收清单
 
-- [ ] `start` 在空闲状态使用当前 Mode 开始录音；
-- [ ] 重复 `start` 不结束当前录音；
-- [ ] `stop` 能正常结束录音并继续注入；
-- [ ] 空闲时 `stop` 不产生副作用；
-- [ ] `toggle` 可完成 Stream Deck 两次按键工作流；
-- [ ] processing/recovering 时所有 start/toggle-start 行为安全 no-op；
-- [ ] URL 启动的 Session 可被菜单、浮动条和快捷键结束；
-- [ ] Public / Dev / Personal Scheme 行为一致；
-- [ ] README 中英双语文档同步更新；
-- [ ] 不新增 CLI、App Intent 或 Mode name API。
+- [x] `start` 在空闲状态使用当前 Mode 开始录音；
+- [x] 重复 `start` 不结束当前录音；
+- [x] `stop` 能正常结束录音并继续注入；
+- [x] 空闲时 `stop` 不产生副作用；
+- [x] `toggle` 可完成 Stream Deck 两次按键工作流；
+- [x] processing/recovering 时所有 start/toggle-start 行为安全 no-op；
+- [x] URL 启动的 Session 可被菜单、浮动条和快捷键结束；
+- [x] Public / Dev / Personal Scheme 行为一致；
+- [x] 焦点保持与后台调用保护生效，文本精准注入回原前台应用；
+- [x] README 中英双语文档同步更新；
+- [x] 不新增 CLI、App Intent 或 Mode name API。
