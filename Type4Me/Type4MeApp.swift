@@ -27,6 +27,7 @@ struct Type4MeApp: App {
         .defaultSize(width: 1200, height: 800)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .handlesExternalEvents(matching: [])
 
         Window(L("Type4Me 设置向导", "Type4Me Setup"), id: "setup") {
             SetupWizardView()
@@ -37,6 +38,7 @@ struct Type4MeApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .handlesExternalEvents(matching: [])
 
         Window(L("Type4Me 授权引导", "Type4Me Permissions"), id: "permission-guide") {
             PermissionGuideView(model: appDelegate.permissionGuideModel)
@@ -45,6 +47,7 @@ struct Type4MeApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .handlesExternalEvents(matching: [])
     }
 }
 
@@ -112,6 +115,7 @@ enum RecordingStartSource: String {
     case menuBar
     case reviseHotkey
     case reviseMenuBar
+    case urlScheme
 }
 
 // MARK: - App Delegate
@@ -139,6 +143,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let session = RecognitionSession()
     private var selectionAskFollowUpStartGate = SelectionAskFollowUpStartGate()
     private var recordingStartGate = RecordingStartGate()
+    /// Set when the app is launched/activated by a headless URL recording command,
+    /// so the first-run setup wizard is not force-presented over a background
+    /// recording the user triggered via Stream Deck / Shortcuts / etc.
+    private var suppressSetupWizardForHeadlessLaunch = false
     private var recognitionEventTask: Task<Void, Never>?
     private var recognitionEventContinuation: AsyncStream<RecognitionEvent>.Continuation?
     private var inputDeviceChangeObservers: [NSObjectProtocol] = []
@@ -420,9 +428,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #else
         let needsSetup = !appState.hasCompletedSetup
         #endif
+        // Only auto-present the first-run setup wizard on a normal, foreground
+        // launch. A `type4me://` URL command may cold-launch the app; in that case
+        // `application(open:)` sets `suppressSetupWizardForHeadlessLaunch` so the
+        // wizard doesn't steal focus over the headless recording.
         if needsSetup {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 MainActor.assumeIsolated {
+                    if self?.suppressSetupWizardForHeadlessLaunch == true {
+                        DebugFileLogger.log("setup wizard suppressed: headless URL launch")
+                        return
+                    }
                     _ = NSApp.sendAction(Selector(("showSetupWindow:")), to: nil, from: nil)
                 }
             }
@@ -815,8 +831,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if phase == .recording || phase == .preparing {
                     NSLog("[Type4Me] >>> HOTKEY: toggle desync – onStart while recording, redirecting to STOP (phase=%@)", String(describing: phase))
                     DebugFileLogger.log("hotkey toggle desync: onStart while recording, redirecting to stop phase=\(phase)")
-                    MainActor.assumeIsolated { self.hotkeyManager.resetActiveState() }
-                    MainActor.assumeIsolated { self.appState.stopRecording() }
+                    MainActor.assumeIsolated {
+                        if phase == .preparing {
+                            self.recordingStartGate.invalidate()
+                            self.selectionAskFollowUpStartGate.invalidate()
+                        }
+                        self.hotkeyManager.resetActiveState()
+                        self.appState.stopRecording()
+                    }
                     if phase == .preparing {
                         Task { await self.session.cancelRecording() }
                     } else {
@@ -876,7 +898,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Task { _ = await self.session.handleRecoveryHotkeyPress() }
                     return
                 }
-                MainActor.assumeIsolated { self.appState.stopRecording() }
+                MainActor.assumeIsolated {
+                    if phase == .preparing {
+                        self.recordingStartGate.invalidate()
+                        self.selectionAskFollowUpStartGate.invalidate()
+                    }
+                    self.appState.stopRecording()
+                }
                 if phase == .preparing {
                     Task { await self.session.cancelRecording() }
                 } else {
@@ -946,7 +974,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let reviseOnStop: @Sendable () -> Void = { [weak self] in
                 guard let self else { return }
                 let phase = MainActor.assumeIsolated { self.appState.barPhase }
-                MainActor.assumeIsolated { self.appState.stopRecording() }
+                MainActor.assumeIsolated {
+                    if phase == .preparing {
+                        self.recordingStartGate.invalidate()
+                        self.selectionAskFollowUpStartGate.invalidate()
+                    }
+                    self.appState.stopRecording()
+                }
                 if phase == .preparing {
                     Task { await self.session.cancelRecording() }
                 } else {
@@ -1057,7 +1091,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[Type4Me] >>> HOTKEY: ESC abort injection (phase=%@)", String(describing: phase))
             DebugFileLogger.log("hotkey ESC abort injection phase=\(phase)")
             if phase == .preparing {
-                MainActor.assumeIsolated { self.appState.stopRecording() }
+                MainActor.assumeIsolated {
+                    self.recordingStartGate.invalidate()
+                    self.selectionAskFollowUpStartGate.invalidate()
+                    self.appState.stopRecording()
+                }
                 Task { await self.session.cancelRecording() }
             } else {
                 Task {
@@ -1171,14 +1209,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         switch action {
         case .finish:
-            appState.stopRecording()
             if phase == .preparing {
+                recordingStartGate.invalidate()
+                selectionAskFollowUpStartGate.invalidate()
+                appState.stopRecording()
                 Task { await session.cancelRecording() }
             } else {
+                appState.stopRecording()
                 Task { await session.stopRecording() }
             }
         case .cancel:
             if phase == .preparing {
+                recordingStartGate.invalidate()
+                selectionAskFollowUpStartGate.invalidate()
                 appState.stopRecording()
                 Task { await session.cancelRecording() }
             } else {
@@ -1480,7 +1523,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("[Type4Me] Ignored URL with unregistered scheme")
                 continue
             }
-            switch url.host {
+            switch url.host?.lowercased() {
+            case "start", "stop", "toggle":
+                handleRecordingURL(url, acceptedSchemes: acceptedSchemes)
             case "vocabulary":
                 handleVocabularyURL(url, acceptedSchemes: acceptedSchemes)
             case "reload-vocabulary":
@@ -1510,6 +1555,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .flatMap { $0 }
             .map { $0.lowercased() }
         return schemes.isEmpty ? ["type4me"] : Set(schemes)
+    }
+
+    private func handleRecordingURL(_ url: URL, acceptedSchemes: Set<String>) {
+        switch RecordingURLCommandParser.parse(url, allowedSchemes: acceptedSchemes) {
+        case .failure(let error):
+            NSLog("[Type4Me] Recording URL rejected: \(String(describing: error))")
+            DebugFileLogger.log("url recording command rejected: \(error)")
+        case .success(let command):
+            // This is a headless automation command; if it cold-launched the app,
+            // do not force the first-run setup wizard over the recording.
+            suppressSetupWizardForHeadlessLaunch = true
+            handleRecordingURLCommand(command)
+        }
+    }
+
+    func handleRecordingURLCommand(_ command: RecordingURLCommand) {
+        let phase = appState.barPhase
+        let decision = RecordingURLDecision.decide(for: command, phase: phase)
+        NSLog("[Type4Me] URL command: %@ -> decision: %@", command.rawValue, String(describing: decision))
+        switch decision {
+        case .start:
+            // Only a real start yields focus. no-op commands must not touch window
+            // state, per the product spec ("safe no-op, do not steal focus").
+            yieldFocusToPreviousApp()
+            requestURLRecordingStart()
+        case .finish:
+            requestURLRecordingStop()
+        case .ignore:
+            DebugFileLogger.log("url \(command.rawValue) ignored phase=\(phase)")
+        }
+    }
+
+    /// Hide Type4Me if a URL command activated it, so the previously focused app
+    /// regains focus before recording (and later injection) begins. The deferred
+    /// re-check covers activation that lands just after this handler runs.
+    private func yieldFocusToPreviousApp() {
+        if NSApp.isActive {
+            NSApp.hide(nil)
+        }
+        DispatchQueue.main.async {
+            if NSApp.isActive {
+                NSApp.hide(nil)
+            }
+        }
+    }
+
+    private func requestURLRecordingStart() {
+        requestRecordingStart(
+            mode: appState.currentMode,
+            source: .urlScheme
+        )
+    }
+
+    private func requestURLRecordingStop() {
+        recordingControlCoordinator.perform(.finish)
     }
 
     private func handleVocabularyURL(_ url: URL, acceptedSchemes: Set<String>) {
