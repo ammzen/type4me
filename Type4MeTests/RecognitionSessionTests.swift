@@ -250,4 +250,55 @@ final class RecognitionSessionTests: XCTestCase {
         )
     }
 
+    func testResolveEffectiveTranscript_batchProviderWithUnfinalizedPartial_returnsEmpty() {
+        let partialTranscript = RecognitionTranscript(
+            confirmedSegments: [],
+            partialText: "未完成的半截识别文本",
+            authoritativeText: "未完成的半截识别文本",
+            isFinal: false
+        )
+
+        let result = RecognitionSession.resolveEffectiveTranscript(
+            currentTranscript: partialTranscript,
+            providerIsStreaming: false
+        )
+
+        XCTAssertEqual(result, .empty)
+        XCTAssertTrue(result.displayText.isEmpty)
+    }
+
+    func testResolveEffectiveTranscript_batchProviderWithFinalizedTranscript_preservesText() {
+        let finalTranscript = RecognitionTranscript(
+            confirmedSegments: ["完整识别文本"],
+            partialText: "",
+            authoritativeText: "完整识别文本",
+            isFinal: true
+        )
+
+        let result = RecognitionSession.resolveEffectiveTranscript(
+            currentTranscript: finalTranscript,
+            providerIsStreaming: false
+        )
+
+        XCTAssertEqual(result, finalTranscript)
+        XCTAssertEqual(result.displayText, "完整识别文本")
+    }
+
+    func testResolveEffectiveTranscript_streamingProviderWithPartial_preservesTextForRecovery() {
+        let partialTranscript = RecognitionTranscript(
+            confirmedSegments: ["前半句"],
+            partialText: "后半句",
+            authoritativeText: "",
+            isFinal: false
+        )
+
+        let result = RecognitionSession.resolveEffectiveTranscript(
+            currentTranscript: partialTranscript,
+            providerIsStreaming: true
+        )
+
+        XCTAssertEqual(result, partialTranscript)
+        XCTAssertEqual(result.displayText, "前半句后半句")
+    }
+
 }
