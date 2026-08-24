@@ -32,17 +32,20 @@ enum ASRProviderRegistry {
         let configType: any ASRProviderConfig.Type
         let createClient: (@Sendable () -> any SpeechRecognizer)?
         let capabilities: ASRProviderCapabilities
+        let validateCredentials: (@Sendable (any ASRProviderConfig, ASRRequestOptions) async throws -> Void)?
 
         var isAvailable: Bool { createClient != nil }
 
         init(
             configType: any ASRProviderConfig.Type,
             createClient: (@Sendable () -> any SpeechRecognizer)?,
-            capabilities: ASRProviderCapabilities = .unavailable
+            capabilities: ASRProviderCapabilities = .unavailable,
+            validateCredentials: (@Sendable (any ASRProviderConfig, ASRRequestOptions) async throws -> Void)? = nil
         ) {
             self.configType = configType
             self.createClient = createClient
             self.capabilities = capabilities
+            self.validateCredentials = validateCredentials
         }
     }
 
@@ -62,6 +65,17 @@ enum ASRProviderRegistry {
                 configType: StepFunBatchASRConfig.self,
                 createClient: { StepFunBatchASRClient() },
                 capabilities: .batch()
+            ),
+            .mimo: ProviderEntry(
+                configType: MiMoASRConfig.self,
+                createClient: { MiMoASRClient() },
+                capabilities: .batch(),
+                validateCredentials: { config, options in
+                    guard let mimoConfig = config as? MiMoASRConfig else {
+                        throw MiMoASRError.invalidConfig
+                    }
+                    try await MiMoASRProtocol.validateCredentials(config: mimoConfig, options: options)
+                }
             ),
             .deepgram: ProviderEntry(
                 configType: DeepgramASRConfig.self,
@@ -167,6 +181,22 @@ enum ASRProviderRegistry {
 
     static func resolvedMode(for mode: ProcessingMode, provider: ASRProvider) -> ProcessingMode {
         supports(mode, for: provider) ? mode : .direct
+    }
+
+    static func validateCredentials(
+        for provider: ASRProvider,
+        config: any ASRProviderConfig,
+        options: ASRRequestOptions
+    ) async throws {
+        if let validator = all[provider]?.validateCredentials {
+            try await validator(config, options)
+            return
+        }
+        guard let client = createClient(for: provider) else {
+            throw MiMoASRError.invalidConfig
+        }
+        try await client.connect(config: config, options: options)
+        await client.disconnect()
     }
 
     static func unsupportedReason(for mode: ProcessingMode, provider: ASRProvider) -> String? {

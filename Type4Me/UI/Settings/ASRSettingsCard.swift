@@ -146,6 +146,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                 (L("接入文档", "Setup guide"), L("查看", "view"), URL(string: "https://platform.stepfun.com/docs/zh/api-reference/audio/asr-sse")!),
                 ("API Key", L("获取", "get"), URL(string: "https://platform.stepfun.com/interface-key")!),
             ]
+        case .mimo:
+            return [
+                (L("接入文档", "Setup guide"), L("查看", "view"), URL(string: "https://mimo.mi.com/docs/zh-CN/api/audio/Speech-Recognition")!),
+                ("API Key", L("获取", "get"), URL(string: "https://mimo.mi.com/dashboard/api-keys")!),
+            ]
         default:
             return []
         }
@@ -174,6 +179,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             return L(
                 "松开快捷键后提交完整录音；Step Plan 与标准按量付费需显式选择",
                 "The complete recording is submitted after you release the hotkey; explicitly choose Step Plan or standard pay-as-you-go"
+            )
+        case .mimo:
+            return L(
+                "松开快捷键后提交完整录音；MiMo 的流式模式仅流式返回识别文本，不支持录音期间实时上传。",
+                "The complete recording is submitted after you release the hotkey. MiMo streams transcript text only; it does not accept live audio chunks while recording."
             )
         default:
             return nil
@@ -771,14 +781,17 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             do {
                 guard let configType = ASRProviderRegistry.configType(for: provider),
                       let config = configType.init(credentials: testValues),
-                      let client = ASRProviderRegistry.createClient(for: provider)
+                      ASRProviderRegistry.entry(for: provider)?.isAvailable == true
                 else {
                     guard !Task.isCancelled else { return }
                     asrTestStatus = .failed(L("不支持", "Unsupported"))
                     return
                 }
-                try await client.connect(config: config, options: currentASRRequestOptions(enablePunc: false))
-                await client.disconnect()
+                try await ASRProviderRegistry.validateCredentials(
+                    for: provider,
+                    config: config,
+                    options: currentASRRequestOptions(enablePunc: false)
+                )
                 guard !Task.isCancelled else { return }
                 asrTestStatus = .success
             } catch {

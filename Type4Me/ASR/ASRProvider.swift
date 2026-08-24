@@ -20,6 +20,7 @@ enum ASRProvider: String, CaseIterable, Codable, Sendable {
     // China
     case volcano
     case stepfunBatch
+    case mimo
     case aliyun
     case bailian
     case tencent
@@ -48,6 +49,7 @@ enum ASRProvider: String, CaseIterable, Codable, Sendable {
         case .soniox:   return "Soniox"
         case .volcano:  return L("火山引擎 (Doubao)", "Volcano (Doubao)")
         case .stepfunBatch: return L("阶跃星辰（非实时）", "StepFun (Batch)")
+        case .mimo:     return L("小米 MiMo（非实时）", "Xiaomi MiMo (Batch)")
         case .aliyun:   return L("阿里云", "Alibaba Cloud")
         case .bailian:  return L("阿里云百炼", "Alibaba Cloud Bailian")
         case .tencent:  return L("腾讯云", "Tencent Cloud")
