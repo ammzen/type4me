@@ -25,6 +25,7 @@
 - **词汇管理**：支持热词、映射词，2种模式。热词用于校正语音识别引擎，映射词可作为兜底或个性化场景使用（如 Web coding -> Vibe Coding, "我的邮箱地址" -> xxx@gmail.com）；
 - **历史记录**：存储所有历史识别记录，包括原始文本和处理后文本，支持导出CSV；
 - **配套Skill**：真正做到100%准确率，打造只属于你的输入法，[点这里安装Skill](https://github.com/joewongjc/type4me-vocab-skill)后跟你的agent说"Qwen3.5 不要识别成 Queen 3.5"，他就能自动帮你管理热词和映射词，同类错误不再犯
+- **URL Scheme**：支持从浏览器、终端、快捷指令、Raycast / Alfred、脚本或 Agent 打开设置、管理词库、静默写入热词与片段替换规则；
 
 ## 立即体验
 
@@ -483,6 +484,132 @@ Prompt 优化负责“帮你写一份更好的任务说明”。
 
 ---
 
+### URL Scheme / 外部自动化
+
+Type4Me 提供 URL Scheme，可以从浏览器、终端、macOS 快捷指令、Raycast、Alfred、脚本或 AI Agent 调用常用功能。
+
+#### Scheme 名称
+
+不同构建默认注册不同的 Scheme；**单个安装包只接受自己实际注册的 Scheme**：
+
+| 构建 | 默认 Scheme | 示例 |
+| --- | --- | --- |
+| 正式版 / Public | `type4me://` | `type4me://settings` |
+| Dev 开发版 | `type4me-dev://` | `type4me-dev://settings` |
+| Personal / CtriXin | `type4me-ctrixin://` | `type4me-ctrixin://settings` |
+
+下面示例统一使用正式版 `type4me://`。开发版或个人版只需要替换 Scheme 前缀。
+
+#### 打开设置
+
+```text
+type4me://settings
+```
+
+`preferences` 是等价别名：
+
+```text
+type4me://preferences
+```
+
+#### 热词（Hotwords）
+
+打开热词管理：
+
+```text
+type4me://vocabulary/hotwords
+```
+
+预填一个热词并打开设置：
+
+```text
+type4me://vocabulary/hotwords?word=Ghostty
+```
+
+中文或特殊字符需要进行 URL 编码，例如：
+
+```text
+type4me://vocabulary/hotwords?word=%E9%98%B6%E8%B7%83%E6%98%9F%E8%BE%B0
+```
+
+静默添加热词，不打开 Settings：
+
+```text
+type4me://vocabulary/hotwords?word=Ghostty&silent=true
+```
+
+`silent=1` 同样有效。静默模式下 `word` 为必填参数；已存在的热词会按大小写不敏感方式去重。
+
+#### 片段替换（Snippets）
+
+打开片段替换：
+
+```text
+type4me://vocabulary/snippets
+```
+
+只预填 trigger：
+
+```text
+type4me://vocabulary/snippets?trigger=ghosty
+```
+
+同时预填 trigger 和 replacement：
+
+```text
+type4me://vocabulary/snippets?trigger=ghosty&replacement=Ghostty
+```
+
+静默添加片段替换：
+
+```text
+type4me://vocabulary/snippets?trigger=ghosty&replacement=Ghostty&silent=true
+```
+
+静默模式下 `trigger` 和 `replacement` 都是必填参数。若同名 trigger 已存在且 replacement 相同，则视为已存在；若 replacement 不同，则不会静默覆盖原规则。
+
+#### 重新加载词表
+
+```text
+type4me://reload-vocabulary
+```
+
+该命令会刷新 Hotwords / Snippets 缓存、发送词汇变更通知，并触发本地热词同步与相关服务刷新。
+
+#### 已废弃：`auth`
+
+```text
+type4me://auth
+```
+
+这个入口仅为历史兼容保留。认证流程已经改为 code-based auth，因此当前 `auth` 是 **no-op**，新集成不应再使用。
+
+#### 参数限制
+
+Vocabulary URL 会执行严格校验：
+
+- URL 最大 **8 KB**；
+- `word` 最大 **256 字符**；
+- `trigger` 最大 **256 字符**；
+- `replacement` 最大 **4096 字符**；
+- 不接受空值或控制字符；
+- 不接受未知 query 参数；
+- 同名 query 参数不能重复；
+- `silent` 只接受 `true` / `1` / `false` / `0`；
+- Vocabulary 路径只支持 `/hotwords` 与 `/snippets`。
+
+#### Terminal 示例
+
+```bash
+open 'type4me://settings'
+open 'type4me://vocabulary/hotwords?word=Ghostty'
+open 'type4me://vocabulary/snippets?trigger=ghosty&replacement=Ghostty&silent=true'
+```
+
+> 对带有空格、中文、`&`、`?` 等特殊字符的参数，请先进行 URL 编码。
+
+---
+
 ### 语音改口（Revise）
 
 对最近一次仍可可靠定位的 Type4Me 输入，按下改口快捷键（默认 `Fn + R`）并说出修改指令；Type4Me 只替换授权范围，目标已变化或无法定位时会安全失败。成功后可一键或语音撤销。
@@ -569,6 +696,7 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 - **Vocabulary Management**: Two modes: hotwords and snippet replacements. Hotwords improve ASR accuracy for proper nouns; snippets enable personalized substitutions (e.g., "Web coding" -> "Vibe Coding", "my email" -> xxx@gmail.com);
 - **History**: Stores all recognition records including raw and processed text, with CSV export;
 - **Companion Skill**: Achieve 100% recognition accuracy. [Install the Skill](https://github.com/joewongjc/type4me-vocab-skill) and tell your agent "Don't recognize Qwen3.5 as Queen 3.5" to automatically manage hotwords and snippets. Same mistakes won't happen again.
+- **URL Scheme**: Open Settings, manage vocabulary, and silently add hotwords or snippet rules from browsers, Terminal, Shortcuts, Raycast / Alfred, scripts, or AI agents.
 
 ## Get Started
 
@@ -1046,6 +1174,126 @@ The companion Skill can use Type4Me vocabulary commands to open vocabulary manag
 <p align="center">
   <img src="docs/screenshots/screenshot-vocabulary.png" width="480" alt="Vocabulary Management" />
 </p>
+
+---
+
+### URL Scheme / External Automation
+
+Type4Me exposes a URL Scheme for browsers, Terminal, macOS Shortcuts, Raycast, Alfred, scripts, and AI agents.
+
+#### Registered Schemes
+
+Different builds register different schemes, and **each installed app accepts only the scheme actually registered in its bundle**:
+
+| Build | Default Scheme | Example |
+| --- | --- | --- |
+| Public release | `type4me://` | `type4me://settings` |
+| Dev build | `type4me-dev://` | `type4me-dev://settings` |
+| Personal / CtriXin build | `type4me-ctrixin://` | `type4me-ctrixin://settings` |
+
+Examples below use `type4me://`. For Dev or Personal builds, replace only the scheme prefix.
+
+#### Open Settings
+
+```text
+type4me://settings
+```
+
+`preferences` is an equivalent alias:
+
+```text
+type4me://preferences
+```
+
+#### Hotwords
+
+Open Hotword management:
+
+```text
+type4me://vocabulary/hotwords
+```
+
+Open Settings and prefill a hotword:
+
+```text
+type4me://vocabulary/hotwords?word=Ghostty
+```
+
+Silently add a hotword without opening Settings:
+
+```text
+type4me://vocabulary/hotwords?word=Ghostty&silent=true
+```
+
+`silent=1` is also accepted. In silent mode, `word` is required; existing hotwords are deduplicated case-insensitively.
+
+#### Snippet Replacements
+
+Open snippet management:
+
+```text
+type4me://vocabulary/snippets
+```
+
+Prefill only the trigger:
+
+```text
+type4me://vocabulary/snippets?trigger=ghosty
+```
+
+Prefill both trigger and replacement:
+
+```text
+type4me://vocabulary/snippets?trigger=ghosty&replacement=Ghostty
+```
+
+Silently add a snippet rule:
+
+```text
+type4me://vocabulary/snippets?trigger=ghosty&replacement=Ghostty&silent=true
+```
+
+In silent mode, both `trigger` and `replacement` are required. An identical existing rule is treated as already present; a conflicting replacement is not silently overwritten.
+
+#### Reload Vocabulary
+
+```text
+type4me://reload-vocabulary
+```
+
+This refreshes Hotword / Snippet caches, posts vocabulary-change notifications, and triggers local hotword synchronization and related service refreshes.
+
+#### Deprecated: `auth`
+
+```text
+type4me://auth
+```
+
+Retained for backward compatibility only. Authentication now uses a code-based flow, so this endpoint is currently a **no-op** and should not be used by new integrations.
+
+#### Validation Limits
+
+Vocabulary URLs are strictly validated:
+
+- Maximum URL size: **8 KB**;
+- `word`: up to **256 characters**;
+- `trigger`: up to **256 characters**;
+- `replacement`: up to **4096 characters**;
+- empty values and control characters are rejected;
+- unknown query parameters are rejected;
+- duplicate query parameters are rejected;
+- `silent` accepts only `true` / `1` / `false` / `0`;
+- vocabulary paths are limited to `/hotwords` and `/snippets`.
+
+#### Terminal Examples
+
+```bash
+open 'type4me://settings'
+open 'type4me://vocabulary/hotwords?word=Ghostty'
+open 'type4me://vocabulary/snippets?trigger=ghosty&replacement=Ghostty&silent=true'
+```
+
+> URL-encode spaces, CJK text, `&`, `?`, and other special characters in query values.
 
 ---
 
