@@ -361,7 +361,7 @@ Content-Type: application/json
 api-key: <MIMO_API_KEY>
 ```
 
-官方也支持 Bearer 鉴权，但第一版统一使用 `api-key`，减少协议分支。
+官方同时支持 `Authorization: Bearer <MIMO_API_KEY>` 与 `api-key` 两种鉴权方式，第一版固定使用 `api-key`，减少协议分支。
 
 ## 12. 10 MB 限制
 
