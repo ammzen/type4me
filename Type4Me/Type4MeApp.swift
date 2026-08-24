@@ -27,6 +27,7 @@ struct Type4MeApp: App {
         .defaultSize(width: 1200, height: 800)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .handlesExternalEvents(matching: [])
 
         Window(L("Type4Me 设置向导", "Type4Me Setup"), id: "setup") {
             SetupWizardView()
@@ -37,6 +38,7 @@ struct Type4MeApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .handlesExternalEvents(matching: [])
 
         Window(L("Type4Me 授权引导", "Type4Me Permissions"), id: "permission-guide") {
             PermissionGuideView(model: appDelegate.permissionGuideModel)
@@ -45,6 +47,7 @@ struct Type4MeApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.center)
         .windowStyle(.hiddenTitleBar)
+        .handlesExternalEvents(matching: [])
     }
 }
 
@@ -425,12 +428,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #else
         let needsSetup = !appState.hasCompletedSetup
         #endif
+        // Only auto-present the first-run setup wizard on a normal, foreground
+        // launch. A `type4me://` URL command may cold-launch the app; in that case
+        // `application(open:)` sets `suppressSetupWizardForHeadlessLaunch` so the
+        // wizard doesn't steal focus over the headless recording.
         if needsSetup {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 MainActor.assumeIsolated {
-                    // A headless URL recording command may have cold-launched the
-                    // app; do not force the setup wizard over the user's background
-                    // recording. The wizard still appears on a normal launch.
                     if self?.suppressSetupWizardForHeadlessLaunch == true {
                         DebugFileLogger.log("setup wizard suppressed: headless URL launch")
                         return

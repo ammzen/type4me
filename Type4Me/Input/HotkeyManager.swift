@@ -707,16 +707,19 @@ final class HotkeyManager: NSObject {
 
         // ESC key (keyCode 53) - abort active recording or processing
         if isESCAbortEnabled && type == .keyDown && keyCode == 53 {
-            let isRecording = activeRecordingBindingId != nil || holdState.values.contains(true)
-            let shouldAbort = isRecording || isProcessing
-            if shouldAbort {
-                NSLog("[HotkeyManager] ESC pressed, triggering abort (recording=%@, processing=%@)",
-                      isRecording ? "true" : "false", isProcessing ? "true" : "false")
-                if onESCAbort?() == true {
-                    return nil  // Swallow ESC: abort was handled
-                }
-                // App is not actually in an active session — stale state.
-                // Clean up and let ESC pass through to the system.
+            let hotkeyOwnedSession = activeRecordingBindingId != nil || holdState.values.contains(true)
+            // A recording session may also be driven outside the hotkey system
+            // (e.g. a `type4me://` URL Scheme command), in which case none of this
+            // manager's hotkey bookkeeping is set. `onESCAbort` validates the real
+            // session phase via appState and returns false when idle, so consult it
+            // on every ESC — not only when this manager owns the recording —
+            // otherwise URL-initiated recordings can never be cancelled with ESC.
+            if onESCAbort?() == true {
+                return nil  // Swallow ESC: abort was handled
+            }
+            if hotkeyOwnedSession || isProcessing {
+                // We believed a session was active but the callback declined —
+                // stale state. Clean up and let ESC pass through to the system.
                 NSLog("[HotkeyManager] ESC abort not handled, resetting stale state")
                 isProcessing = false
                 resetActiveState()

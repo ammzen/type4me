@@ -541,6 +541,31 @@ actor RecognitionSession {
     /// The frontmost application captured when recording starts, used to restore focus if needed.
     private var targetApplication: NSRunningApplication?
 
+    /// Pure, testable classification of how to treat the injection target that was
+    /// captured when recording started, evaluated at paste time.
+    ///
+    /// The overriding goal is to never paste dictated text into an application the
+    /// user did not intend, so anything uncertain fails safe to the clipboard.
+    enum InjectionTargetPlan: Equatable {
+        /// No target was captured because Type4Me itself was frontmost at record
+        /// start (e.g. a URL Scheme command activated the app, then yielded focus).
+        /// The application focused at paste time *is* the user's intended target,
+        /// so pasting into the current frontmost app is correct.
+        case injectIntoCurrentFrontmost
+        /// A live target was captured; it must be activated and confirmed frontmost
+        /// (PID match) before pasting, otherwise fall back to the clipboard.
+        case activateAndConfirm
+        /// The captured target terminated during transcription/processing. Never
+        /// paste — whatever is frontmost now is a different app — retain the text
+        /// in the clipboard for a deliberate manual paste.
+        case failSafeClipboard
+    }
+
+    static func planInjectionTarget(hasCapturedTarget: Bool, isTerminated: Bool) -> InjectionTargetPlan {
+        guard hasCapturedTarget else { return .injectIntoCurrentFrontmost }
+        return isTerminated ? .failSafeClipboard : .activateAndConfirm
+    }
+
     /// Activates `target` and waits until it actually becomes the frontmost
     /// application, up to a short timeout. Returns `true` only once the target is
     /// confirmed frontmost, so callers can fail-safe (skip pasting) instead of
@@ -2044,11 +2069,20 @@ actor RecognitionSession {
                             observationContext: nil
                         )
                     } else {
-                        var targetConfirmed = true
-                        if let target = targetApp, !target.isTerminated, !target.isActive {
-                            targetConfirmed = RecognitionSession.activateAndConfirmFrontmost(target)
+                        let plan = RecognitionSession.planInjectionTarget(
+                            hasCapturedTarget: targetApp != nil,
+                            isTerminated: targetApp?.isTerminated ?? false
+                        )
+                        let allowInjection: Bool
+                        switch plan {
+                        case .injectIntoCurrentFrontmost:
+                            allowInjection = true
+                        case .activateAndConfirm:
+                            allowInjection = targetApp.map(RecognitionSession.activateAndConfirmFrontmost) ?? false
+                        case .failSafeClipboard:
+                            allowInjection = false
                         }
-                        if targetConfirmed {
+                        if allowInjection {
                             DebugFileLogger.log(injectLog)
                             if shouldTrackLearning {
                                 result = engine.injectTracked(
@@ -2064,11 +2098,12 @@ actor RecognitionSession {
                                 )
                             }
                         } else {
-                            // Fail-safe: the intended target never became frontmost, so
-                            // pasting now could leak the dictated text into the wrong app.
-                            // Retain it in the clipboard for a manual paste instead.
+                            // Fail-safe: the intended target is gone or never became
+                            // frontmost, so pasting now could leak the dictated text
+                            // into the wrong app. Retain it in the clipboard instead.
                             engine.copyToClipboard(finalText)
-                            DebugFileLogger.log("stop: target focus unconfirmed; retained in clipboard, paste skipped")
+                            let reason = plan == .failSafeClipboard ? "target terminated" : "target focus unconfirmed"
+                            DebugFileLogger.log("stop: \(reason); retained in clipboard, paste skipped")
                             result = TrackedInjectionResult(
                                 outcome: .copiedToClipboard,
                                 observationContext: nil

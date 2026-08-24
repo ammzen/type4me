@@ -148,6 +148,45 @@ final class RecordingURLDecisionTests: XCTestCase {
     }
 }
 
+final class InjectionTargetPlanTests: XCTestCase {
+    // No captured target means Type4Me was frontmost at record start (e.g. a URL
+    // Scheme command activated it, then yielded focus). The app focused at paste
+    // time is the intended target, so paste into the current frontmost app.
+    func testNilTargetInjectsIntoCurrentFrontmost() {
+        XCTAssertEqual(
+            RecognitionSession.planInjectionTarget(hasCapturedTarget: false, isTerminated: false),
+            .injectIntoCurrentFrontmost
+        )
+    }
+
+    // `isTerminated` is only meaningful when a target was captured; nil target
+    // still resolves to the headless current-frontmost path regardless.
+    func testNilTargetIgnoresTerminatedFlag() {
+        XCTAssertEqual(
+            RecognitionSession.planInjectionTarget(hasCapturedTarget: false, isTerminated: true),
+            .injectIntoCurrentFrontmost
+        )
+    }
+
+    // A live captured target must be activated and PID-confirmed frontmost before
+    // pasting, so uncertainty falls back to the clipboard at runtime.
+    func testLiveTargetRequiresActivationConfirmation() {
+        XCTAssertEqual(
+            RecognitionSession.planInjectionTarget(hasCapturedTarget: true, isTerminated: false),
+            .activateAndConfirm
+        )
+    }
+
+    // The captured target terminated during transcription/processing. Whatever is
+    // frontmost now is a different app, so never paste — fail safe to the clipboard.
+    func testTerminatedTargetFailsSafeToClipboard() {
+        XCTAssertEqual(
+            RecognitionSession.planInjectionTarget(hasCapturedTarget: true, isTerminated: true),
+            .failSafeClipboard
+        )
+    }
+}
+
 final class RecordingStartSourceAndGateTests: XCTestCase {
     func testRecordingStartSourceValues() {
         XCTAssertEqual(RecordingStartSource.hotkey.rawValue, "hotkey")
