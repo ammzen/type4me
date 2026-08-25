@@ -456,6 +456,49 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(rows.dropLast().map(\.allTimeDuration), rows.dropLast().map(\.allTimeDuration).sorted(by: >))
     }
 
+    func testActivityDaysGroupsCompletedRecordsByLocalCalendarDay() async {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+
+        await store.insert(HistoryRecord(
+            id: "today-1", createdAt: today.addingTimeInterval(60), durationSeconds: 1,
+            rawText: "a", processingMode: nil, processedText: nil,
+            finalText: "a", status: "completed", characterCount: 1, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "today-2", createdAt: today.addingTimeInterval(120), durationSeconds: 1,
+            rawText: "b", processingMode: nil, processedText: nil,
+            finalText: "b", status: "completed", characterCount: 1, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "yesterday", createdAt: yesterday.addingTimeInterval(60), durationSeconds: 1,
+            rawText: "c", processingMode: nil, processedText: nil,
+            finalText: "c", status: "completed", characterCount: 1, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "cancelled", createdAt: today.addingTimeInterval(180), durationSeconds: 1,
+            rawText: "d", processingMode: nil, processedText: nil,
+            finalText: "d", status: "cancelled", characterCount: 1, asrProvider: nil
+        ))
+
+        let rows = await store.getActivityDays()
+        let byDay = Dictionary(uniqueKeysWithValues: rows.map { ($0.dayIdentifier, $0.recordCount) })
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+
+        XCTAssertEqual(byDay[formatter.string(from: today)], 2)
+        XCTAssertEqual(byDay[formatter.string(from: yesterday)], 1)
+        let todayRow = rows.first { $0.dayIdentifier == formatter.string(from: today) }
+        XCTAssertEqual(todayRow?.durationSeconds ?? 0, 2, accuracy: 0.01)
+        XCTAssertEqual(todayRow?.characterCount, 2)
+        XCTAssertEqual(rows.count, 2)
+    }
+
     func testShrinkMemoryDoesNotThrowOrCorrupt() async {
         let record = HistoryRecord(
             id: UUID().uuidString, createdAt: Date(), durationSeconds: 1.0,

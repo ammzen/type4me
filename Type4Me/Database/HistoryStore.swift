@@ -535,6 +535,25 @@ actor HistoryStore {
         }
     }
 
+    struct ActivityDay: Equatable, Sendable {
+        let dayIdentifier: String
+        let recordCount: Int
+        let durationSeconds: Double
+        let characterCount: Int
+
+        init(
+            dayIdentifier: String,
+            recordCount: Int,
+            durationSeconds: Double = 0,
+            characterCount: Int = 0
+        ) {
+            self.dayIdentifier = dayIdentifier
+            self.recordCount = recordCount
+            self.durationSeconds = durationSeconds
+            self.characterCount = characterCount
+        }
+    }
+
     struct UsageBreakdown: Identifiable, Sendable {
         let modelName: String
         let lastDayDuration: Double
@@ -581,6 +600,37 @@ actor HistoryStore {
             return Statistics(totalDuration: duration, totalCharacters: chars, recordCount: count)
         }
         return Statistics(totalDuration: 0, totalCharacters: 0, recordCount: 0)
+    }
+
+    /// Returns one compact row per local calendar day that contains a completed
+    /// dictation. The dashboard uses this for its heatmap and streak summaries,
+    /// avoiding loading dictated text or full history records into memory.
+    func getActivityDays() async -> [ActivityDay] {
+        let sql = """
+        SELECT
+            date(created_at, 'localtime') AS local_day,
+            COUNT(*),
+            COALESCE(SUM(duration_seconds), 0),
+            COALESCE(SUM(COALESCE(character_count, 0)), 0)
+        FROM recognition_history
+        WHERE status = 'completed'
+        GROUP BY local_day
+        ORDER BY local_day ASC;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        var days: [ActivityDay] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            days.append(ActivityDay(
+                dayIdentifier: column(stmt, 0),
+                recordCount: Int(sqlite3_column_int(stmt, 1)),
+                durationSeconds: sqlite3_column_double(stmt, 2),
+                characterCount: Int(sqlite3_column_int(stmt, 3))
+            ))
+        }
+        return days
     }
 
     func getUsageBreakdown(now: Date = Date()) async -> [UsageBreakdown] {

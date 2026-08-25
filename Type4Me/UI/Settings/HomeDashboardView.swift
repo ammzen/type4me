@@ -1,62 +1,71 @@
 import SwiftUI
 
-/// The lightweight landing page for Settings. It intentionally keeps mode
-/// configuration out of the overview: the gear takes users to the full editor.
+/// Width-driven heatmap geometry. The grid keeps cells legible, then changes
+/// the visible history window to consume the available horizontal space.
+struct HomeHeatmapLayout: Equatable {
+    let weekCount: Int
+    let cellSize: CGFloat = 13
+    let gap: CGFloat = 4
+
+    init(width: CGFloat) {
+        let usableWidth = max(0, width - 17)
+        let cellSize: CGFloat = 13
+        let gap: CGFloat = 4
+        let columns = Int(floor((usableWidth + gap) / (cellSize + gap)))
+        weekCount = max(12, min(104, columns))
+    }
+}
+
+/// A compact landing dashboard: usage totals and activity stay visually
+/// dominant, while configured mode shortcuts remain available at a glance.
 struct HomeDashboardView: View {
     let isActive: Bool
     let openModesEditor: () -> Void
 
     @Environment(AppState.self) private var appState
     @State private var statistics: HistoryStore.Statistics?
-    @State private var hoveredMetric: Metric?
+    @State private var activityDays: [HistoryStore.ActivityDay] = []
+    @State private var hoveredHeatmapDay: HeatmapDay?
+    @State private var visibleHeatmapDay: HeatmapDay?
+    @State private var heatmapHoverGeneration = 0
+    @State private var hoveredModeID: UUID?
     @State private var isModesButtonHovered = false
 
     private let historyStore = HistoryStore.shared
     private let assumedTypingSpeed = 40.0
 
-    /// Drive the list from the same live, observable source the menu bar reads
-    /// (`appState.availableModes`), so reordering in the Modes editor is
-    /// reflected here immediately without depending on notification/disk timing.
+    /// Use the same live source as the menu bar so edits and reordering are
+    /// immediately reflected without waiting for persistence notifications.
     private var modes: [ProcessingMode] { appState.availableModes }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L("说出想法，即刻成文", "Say it. Shape it."))
-                    .font(.system(size: 42, weight: .bold))
-                    .tracking(-1.2)
-                    .foregroundStyle(TF.settingsText)
-
-                Text(L("用你的声音完成写作，把时间留给更重要的事。",
-                       "Turn your voice into polished text and save time for what matters."))
-                    .font(.system(size: 14))
-                    .foregroundStyle(TF.settingsTextTertiary)
-            }
-            .padding(.bottom, 30)
+            header
+                .padding(.bottom, 22)
 
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 20) {
-                    modesCard
-                        .frame(minWidth: 520, maxWidth: .infinity, alignment: .top)
-
-                    statisticsCard
-                        .frame(width: 244, alignment: .top)
+                HStack(alignment: .top, spacing: 18) {
+                    primaryColumn
+                        .frame(minWidth: 350, maxWidth: .infinity)
+                    shortcutsCard
+                        .frame(width: 200)
                 }
 
-                modesCard
-                    .frame(minWidth: 520, maxWidth: .infinity, alignment: .top)
+                VStack(alignment: .leading, spacing: 18) {
+                    primaryColumn
+                    shortcutsCard
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
-            if isActive {
-                refreshDashboard()
-            }
+            if isActive { refreshDashboard() }
         }
         .onChange(of: isActive) { _, isNowActive in
-            if isNowActive {
-                refreshDashboard()
-            }
+            if isNowActive { refreshDashboard() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .historyStoreDidChange)) { _ in
+            if isActive { refreshDashboard() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .selectMode)) { _ in
             refreshDashboard()
@@ -66,335 +75,527 @@ struct HomeDashboardView: View {
         }
     }
 
-    private var modesCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(L("我的模式", "My Modes"))
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(TF.settingsText)
-                    Text(L("在任何地方使用快捷键开始口述",
-                           "Use a shortcut anywhere to start dictating"))
-                        .font(.system(size: 11))
-                        .foregroundStyle(TF.settingsTextTertiary)
-                }
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L("说出来，别打字", "Speak, don't type"))
+                .font(.system(size: 38, weight: .bold))
+                .tracking(-1.1)
+                .foregroundStyle(TF.settingsText)
 
-                Spacer()
+            HStack(spacing: 7) {
+                Image(systemName: "lock")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(L("识别历史保存在本机", "Recognition history stays on this Mac"))
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(TF.settingsTextSecondary)
+            .accessibilityElement(children: .combine)
+        }
+    }
 
-                Button(action: openModesEditor) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(L("管理", "Manage"))
-                            .font(.system(size: 11, weight: .semibold))
-                    }
-                    .foregroundStyle(isModesButtonHovered ? Color.white : TF.settingsTextSecondary)
-                    .padding(.horizontal, 11)
-                    .frame(height: 32)
-                    .background(
-                        Capsule()
-                            .fill(isModesButtonHovered ? TF.settingsText : TF.settingsCardAlt)
+    private var primaryColumn: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            statisticsCard
+            activityCard
+        }
+    }
+
+    // MARK: - Usage overview
+
+    private var statisticsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionTitle(
+                L("使用概览", "Usage overview"),
+                subtitle: L("基于本机识别历史", "From on-device recognition history")
+            )
+
+            Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                GridRow {
+                    metricTile(
+                        icon: "clock",
+                        title: L("输入总时间", "Total input time"),
+                        value: formatDuration(statistics?.totalDuration ?? 0),
+                        tint: TF.settingsAccentBlue
                     )
-                    .contentShape(Capsule())
-                    .scaleEffect(isModesButtonHovered ? 1.035 : 1)
-                    .shadow(
-                        color: Color.black.opacity(isModesButtonHovered ? 0.16 : 0),
-                        radius: 6,
-                        y: 2
+                    metricTile(
+                        icon: "mic",
+                        title: L("总字数", "Total characters"),
+                        value: formatNumber(statistics?.totalCharacters ?? 0),
+                        tint: Color(red: 0.45, green: 0.34, blue: 0.82)
                     )
                 }
-                .buttonStyle(.plain)
-                .help(L("编辑 Modes", "Edit Modes"))
-                .onHover { isHovering in
-                    withAnimation(.easeOut(duration: 0.14)) {
-                        isModesButtonHovered = isHovering
-                    }
-                    if isHovering {
-                        NSCursor.pointingHand.set()
-                    } else {
-                        NSCursor.arrow.set()
-                    }
+                GridRow {
+                    metricTile(
+                        icon: "hourglass",
+                        title: L("估算节约时间", "Estimated time saved"),
+                        value: formatDuration(estimatedSavedTime(statistics)),
+                        tint: TF.settingsAccentGreen
+                    )
+                    metricTile(
+                        icon: "bolt",
+                        title: L("平均输入速度", "Average input speed"),
+                        value: String(
+                            format: L("%.0f 字/分", "%.0f chars/min"),
+                            statistics?.averageSpeed ?? 0
+                        ),
+                        tint: TF.settingsAccentAmber
+                    )
                 }
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 18)
+        }
+        .padding(16)
+        .dashboardCard()
+    }
 
-            Divider()
-                .padding(.horizontal, 22)
+    private func metricTile(
+        icon: String,
+        title: String,
+        value: String,
+        tint: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(tint.opacity(0.11))
+                    )
 
-            if modes.isEmpty {
-                Text(L("还没有 Mode", "No modes yet"))
-                    .font(.system(size: 13))
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(TF.settingsTextTertiary)
-                    .frame(maxWidth: .infinity, minHeight: 92)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(modes.enumerated()), id: \.element.id) { index, mode in
-                        modeOverviewRow(mode)
-                        if index < modes.count - 1 {
-                            Divider().padding(.leading, 22)
+                    .lineLimit(1)
+            }
+
+            Text(value)
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(TF.settingsText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+        }
+        .padding(13)
+        .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(TF.settingsBg)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: - Activity
+
+    private var activityCard: some View {
+        let summary = HomeActivitySummary(activityDays: activityDays)
+        return VStack(alignment: .leading, spacing: 16) {
+            sectionTitle(L("活跃记录", "Activity"), subtitle: nil)
+
+            HStack(spacing: 0) {
+                activityStat(
+                    value: summary.activeDays,
+                    title: L("活跃天数", "Active days"),
+                    alignment: .leading
+                )
+                activityStat(
+                    value: summary.currentStreak,
+                    title: L("当前连续", "Current streak"),
+                    alignment: .center
+                )
+                activityStat(
+                    value: summary.longestStreak,
+                    title: L("最长连续", "Longest streak"),
+                    alignment: .trailing
+                )
+            }
+
+            heatmap
+
+            HStack(spacing: 6) {
+                Text(L("少", "Less"))
+                ForEach(0..<5, id: \.self) { level in
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(heatmapColor(level: level))
+                        .frame(width: 12, height: 12)
+                }
+                Text(L("多", "More"))
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(TF.settingsTextTertiary)
+        }
+        .padding(16)
+        .dashboardCard()
+        .overlayPreferenceValue(HeatmapCellAnchorPreferenceKey.self) { anchors in
+            GeometryReader { overlayProxy in
+                if let day = visibleHeatmapDay, let anchor = anchors[day.id] {
+                    heatmapTooltipOverlay(for: day, anchor: anchor, in: overlayProxy)
+                }
+            }
+        }
+        .zIndex(visibleHeatmapDay == nil ? 0 : 2)
+    }
+
+    private func activityStat(
+        value: Int,
+        title: String,
+        alignment: HorizontalAlignment
+    ) -> some View {
+        VStack(alignment: alignment, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("\(value)")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundStyle(TF.settingsText)
+                Text(L("天", "days"))
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(TF.settingsTextSecondary)
+            }
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(TF.settingsTextTertiary)
+        }
+        .frame(
+            maxWidth: .infinity,
+            alignment: Alignment(horizontal: alignment, vertical: .center)
+        )
+        .accessibilityElement(children: .combine)
+    }
+
+    private var heatmap: some View {
+        GeometryReader { proxy in
+            let layout = HomeHeatmapLayout(width: proxy.size.width)
+            let weeks = heatmapWeeks(weekCount: layout.weekCount)
+
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Text(L("最近 \(layout.weekCount) 周", "Last \(layout.weekCount) weeks"))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                    Spacer(minLength: 0)
+                }
+
+                heatmapGrid(weeks: weeks, layout: layout)
+                heatmapMonthLabels(weeks: weeks, layout: layout)
+            }
+        }
+        .frame(height: 151)
+    }
+
+    private func heatmapGrid(
+        weeks: [[HeatmapDay]],
+        layout: HomeHeatmapLayout
+    ) -> some View {
+        let weekdayLabels = L("日一二三四五六", "SMTWTFS").map(String.init)
+        return HStack(alignment: .top, spacing: 7) {
+            VStack(spacing: layout.gap) {
+                ForEach(Array(weekdayLabels.enumerated()), id: \.offset) { _, label in
+                    Text(label)
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                        .frame(width: 10, height: layout.cellSize)
+                }
+            }
+
+            HStack(spacing: layout.gap) {
+                ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                    VStack(spacing: layout.gap) {
+                        ForEach(week) { day in
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(heatmapColor(level: activityLevel(for: day.recordCount)))
+                                .frame(width: layout.cellSize, height: layout.cellSize)
+                                .help(activityTooltip(for: day))
+                                .accessibilityLabel(activityTooltip(for: day))
+                                .onHover { isHovering in
+                                    updateHeatmapHover(day, isHovering: isHovering)
+                                }
+                                .anchorPreference(
+                                    key: HeatmapCellAnchorPreferenceKey.self,
+                                    value: .bounds
+                                ) { [day.id: $0] }
                         }
                     }
                 }
             }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(TF.settingsCard)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(TF.settingsBorder, lineWidth: 1)
-        )
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func modeOverviewRow(_ mode: ProcessingMode) -> some View {
-        HStack(spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text(mode.localizedDisplayName)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(TF.settingsText)
+    private func heatmapTooltipOverlay(
+        for day: HeatmapDay,
+        anchor: Anchor<CGRect>,
+        in proxy: GeometryProxy
+    ) -> some View {
+        let cellRect = proxy[anchor]
+        let tooltipWidth: CGFloat = 190
+        let tooltipHeight: CGFloat = 96
+        let minX = tooltipWidth / 2 + 4
+        let maxX = max(minX, proxy.size.width - tooltipWidth / 2 - 4)
+        let tooltipX = min(max(cellRect.midX, minX), maxX)
+        let preferredTop = cellRect.minY - tooltipHeight - 8
+        let tooltipY = preferredTop >= 0
+            ? preferredTop + tooltipHeight / 2
+            : cellRect.maxY + tooltipHeight / 2 + 8
 
-                    if mode.isBuiltin {
-                        Text(L("内置", "BUILT-IN"))
-                            .font(.system(size: 8, weight: .bold))
+        return heatmapTooltipCard(for: day)
+            .frame(width: tooltipWidth)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(
+                TF.settingsCard,
+                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(TF.settingsBorder, lineWidth: 0.8)
+            }
+            .shadow(color: .black.opacity(0.14), radius: 12, y: 5)
+            .position(x: tooltipX, y: tooltipY)
+            .transition(.opacity)
+            .zIndex(100)
+            .allowsHitTesting(false)
+    }
+
+    private func updateHeatmapHover(_ day: HeatmapDay, isHovering: Bool) {
+        heatmapHoverGeneration += 1
+        let generation = heatmapHoverGeneration
+        let showDelay = 0.06
+        let hideDelay = 0.12
+
+        if isHovering {
+            hoveredHeatmapDay = day
+            DispatchQueue.main.asyncAfter(deadline: .now() + showDelay) {
+                guard generation == heatmapHoverGeneration,
+                      hoveredHeatmapDay?.id == day.id else { return }
+                withAnimation(.easeIn(duration: 0.16)) {
+                    visibleHeatmapDay = day
+                }
+            }
+        } else {
+            if hoveredHeatmapDay?.id == day.id {
+                hoveredHeatmapDay = nil
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + hideDelay) {
+                guard generation == heatmapHoverGeneration,
+                      hoveredHeatmapDay == nil else { return }
+                withAnimation(.easeOut(duration: 0.16)) {
+                    visibleHeatmapDay = nil
+                }
+            }
+        }
+    }
+
+    private func heatmapMonthLabels(
+        weeks: [[HeatmapDay]],
+        layout: HomeHeatmapLayout
+    ) -> some View {
+        let monthFormatter = DateFormatter()
+        monthFormatter.locale = Locale(identifier: L("zh_CN", "en_US"))
+        monthFormatter.dateFormat = L("M月", "MMM")
+        let monthKeyFormatter = DateFormatter()
+        monthKeyFormatter.locale = Locale(identifier: "en_US_POSIX")
+        monthKeyFormatter.dateFormat = "yyyy-MM"
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        var markers: [HeatmapMonthMarker] = []
+
+        for (weekIndex, week) in weeks.enumerated() {
+            // Anchor each label to the column containing that month's first
+            // day, rather than centering it across the whole month segment.
+            if let firstOfMonth = week.first(where: {
+                calendar.component(.day, from: $0.date) == 1
+            }) {
+                let key = monthKeyFormatter.string(from: firstOfMonth.date)
+                markers.append(HeatmapMonthMarker(
+                    id: key,
+                    label: monthFormatter.string(from: firstOfMonth.date),
+                    weekIndex: weekIndex
+                ))
+            }
+        }
+
+        return HStack(alignment: .top, spacing: layout.gap) {
+            Color.clear.frame(width: 17, height: 12)
+            GeometryReader { _ in
+                ZStack(alignment: .topLeading) {
+                    ForEach(markers) { marker in
+                        let centerX = CGFloat(marker.weekIndex) * (layout.cellSize + layout.gap)
+                            + layout.cellSize / 2
+                        Text(marker.label)
+                            .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(TF.settingsTextTertiary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(TF.settingsCardAlt))
+                            .fixedSize(horizontal: true, vertical: false)
+                            .position(x: centerX, y: 6)
+                    }
+                }
+            }
+        }
+        .frame(height: 12)
+    }
+
+    // MARK: - Shortcuts
+
+    private var shortcutsCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L("快捷键", "Shortcuts"))
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundStyle(TF.settingsText)
+                    Text(L("按模式快速输入", "Dictate by mode"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                }
+
+                Spacer(minLength: 4)
+
+                Button(action: openModesEditor) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isModesButtonHovered ? Color.white : TF.settingsTextSecondary)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(isModesButtonHovered ? TF.settingsText : TF.settingsCardAlt))
+                }
+                .buttonStyle(.plain)
+                .help(L("管理模式与快捷键", "Manage modes and shortcuts"))
+                .onHover { hovering in
+                    withAnimation(.easeOut(duration: 0.12)) { isModesButtonHovered = hovering }
+                }
+            }
+            .padding(15)
+
+            Divider().padding(.horizontal, 15)
+
+            if modes.isEmpty {
+                Text(L("还没有模式", "No modes yet"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                    .frame(maxWidth: .infinity, minHeight: 96)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(modes.prefix(6).enumerated()), id: \.element.id) { index, mode in
+                        shortcutRow(mode)
+                        if index < min(modes.count, 6) - 1 {
+                            Divider().padding(.leading, 15)
+                        }
+                    }
+
+                    if modes.count > 6 {
+                        Button(action: openModesEditor) {
+                            Text(L("查看全部 \(modes.count) 个模式", "View all \(modes.count) modes"))
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(TF.settingsTextSecondary)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 38)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .dashboardCard()
+    }
+
+    private func shortcutRow(_ mode: ProcessingMode) -> some View {
+        Button(action: openModesEditor) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Text(mode.localizedDisplayName)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(TF.settingsText)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.55)
+                        .allowsTightening(true)
+                        .layoutPriority(1)
+                    Spacer(minLength: 0)
+                    if mode.isBuiltin {
+                        Circle()
+                            .fill(TF.settingsAccentBlue.opacity(0.65))
+                            .frame(width: 5, height: 5)
+                            .help(L("内置模式", "Built-in mode"))
                     }
                 }
 
-                Text(modeSummary(mode))
-                    .font(.system(size: 11))
-                    .foregroundStyle(TF.settingsTextTertiary)
-                    .lineLimit(1)
+                hotkeyBadge(mode)
             }
-
-            Spacer(minLength: 12)
-
-            hotkeyBadge(mode)
+            .padding(.horizontal, 15)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+            .background(hoveredModeID == mode.id ? TF.settingsRowHover : Color.clear)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 22)
-        .frame(minHeight: 66)
+        .buttonStyle(.plain)
+        .help(L("管理「\(mode.localizedDisplayName)」", "Manage \"\(mode.localizedDisplayName)\""))
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.1)) { hoveredModeID = hovering ? mode.id : nil }
+        }
     }
-
-    private static let hotkeyBadgeVisibleLimit = 2
 
     private func hotkeyBadge(_ mode: ProcessingMode) -> some View {
         let bindings = mode.hotkeyBindings
-        let visible = Array(bindings.prefix(Self.hotkeyBadgeVisibleLimit))
+        let visible = Array(bindings.prefix(1))
         let overflow = bindings.count - visible.count
 
-        return HStack(spacing: 6) {
+        return HStack(spacing: 5) {
             if bindings.isEmpty {
                 Text(L("未设置", "Not set"))
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(TF.settingsTextTertiary)
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(TF.settingsBg)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(TF.settingsBorder, lineWidth: 1)
-                    )
             } else {
                 ForEach(visible) { binding in
                     hotkeyChip(binding)
                 }
-
                 if overflow > 0 {
                     Text("+\(overflow)")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(size: 9, weight: .semibold, design: .rounded))
                         .foregroundStyle(TF.settingsTextSecondary)
-                        .padding(.horizontal, 7)
-                        .frame(height: 30)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(TF.settingsBg)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .stroke(TF.settingsBorder, lineWidth: 1)
-                        )
-                        .help(bindings
-                            .map { hotkeyChipTooltip($0) }
-                            .joined(separator: "\n"))
                 }
             }
         }
-        .fixedSize()
+        .lineLimit(1)
     }
 
-    /// Compact, visually distinct chip for a single hotkey binding.
-    /// Hold vs. Toggle are differentiated by a leading colored glyph rather than a
-    /// space-consuming text label.
     private func hotkeyChip(_ binding: HotkeyBinding) -> some View {
-        let accent = hotkeyStyleColor(binding.style)
-        return HStack(spacing: 5) {
-            Image(systemName: hotkeyStyleIcon(binding.style))
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(accent)
-
-            Text(HotkeyRecorderView.keyDisplayName(
-                keyCode: binding.keyCode,
-                modifiers: binding.modifiers
-            ))
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
+        let key = HotkeyRecorderView.keyDisplayName(keyCode: binding.keyCode, modifiers: binding.modifiers)
+        return Text(key)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
             .foregroundStyle(TF.settingsText)
-        }
-        .padding(.leading, 8)
-        .padding(.trailing, 10)
-        .frame(height: 30)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(accent.opacity(0.12))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(accent.opacity(0.35), lineWidth: 1)
-        )
-        .help(hotkeyChipTooltip(binding))
-    }
-
-    private func hotkeyChipTooltip(_ binding: HotkeyBinding) -> String {
-        let key = HotkeyRecorderView.keyDisplayName(
-            keyCode: binding.keyCode, modifiers: binding.modifiers)
-        return "\(key) · \(hotkeyStyleLabel(binding.style))"
-    }
-
-    private func hotkeyStyleIcon(_ style: ProcessingMode.HotkeyStyle) -> String {
-        switch style {
-        case .hold:
-            return "hand.tap.fill"
-        case .toggle:
-            return "arrow.triangle.2.circlepath"
-        }
-    }
-
-    private func hotkeyStyleColor(_ style: ProcessingMode.HotkeyStyle) -> Color {
-        switch style {
-        case .hold:
-            return Color(red: 0.20, green: 0.60, blue: 0.86)
-        case .toggle:
-            return Color(red: 0.36, green: 0.56, blue: 0.32)
-        }
-    }
-
-    private func hotkeyStyleLabel(_ style: ProcessingMode.HotkeyStyle) -> String {
-        switch style {
-        case .hold:
-            return L("按住录制", "Hold")
-        case .toggle:
-            return L("按下切换", "Toggle")
-        }
-    }
-
-    private var statisticsCard: some View {
-        let stats = statistics
-        return VStack(alignment: .leading, spacing: 0) {
-            statRow(
-                metric: .inputTime,
-                icon: "clock",
-                title: L("输入总时间", "Total input time"),
-                value: formatDuration(stats?.totalDuration ?? 0)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .padding(.horizontal, 7)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(TF.settingsBg)
             )
-            statRow(
-                metric: .characters,
-                icon: "mic",
-                title: L("总字数", "Total characters"),
-                value: formatNumber(stats?.totalCharacters ?? 0)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(TF.settingsBorder, lineWidth: 1)
             )
-            statRow(
-                metric: .speed,
-                icon: "bolt",
-                title: L("输入速度", "Input speed"),
-                value: String(format: L("%.0f 字/分", "%.0f chars/min"), stats?.averageSpeed ?? 0)
-            )
-            statRow(
-                metric: .saved,
-                icon: "hourglass",
-                title: L("估算节约", "Estimated saved"),
-                value: formatDuration(estimatedSavedTime(stats))
-            )
-        }
-        .padding(.vertical, 12)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(TF.settingsBg)
-        )
+            .help("\(key) · \(hotkeyStyleLabel(binding.style))")
     }
 
-    private func statRow(
-        metric: Metric,
-        icon: String,
-        title: String,
-        value: String
-    ) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .regular))
-                .symbolRenderingMode(.monochrome)
+    // MARK: - Formatting and data
+
+    private func sectionTitle(_ title: String, subtitle: String?) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(TF.settingsText)
-                .frame(width: 20, height: 20)
-
-            Text(value)
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(TF.settingsText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 28)
-        .frame(height: 52)
-        .contentShape(Rectangle())
-        .overlay {
-            GeometryReader { geometry in
-                if hoveredMetric == metric {
-                    Text(title)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .frame(width: 112, height: 34)
-                        .background(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(Color.black.opacity(0.92))
-                        )
-                        .position(x: -48, y: geometry.size.height / 2)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                }
-            }
-        }
-        .zIndex(hoveredMetric == metric ? 2 : 0)
-        .onHover { isHovering in
-            withAnimation(.easeOut(duration: 0.14)) {
-                hoveredMetric = isHovering ? metric : nil
+            Spacer()
+            if let subtitle {
+                Text(subtitle)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(TF.settingsTextTertiary)
             }
         }
     }
 
     private func refreshDashboard() {
         Task {
-            statistics = await historyStore.getStatistics()
+            async let newStatistics = historyStore.getStatistics()
+            async let newActivityDays = historyStore.getActivityDays()
+            statistics = await newStatistics
+            activityDays = await newActivityDays
         }
-    }
-
-    private func modeSummary(_ mode: ProcessingMode) -> String {
-        if mode.id == ProcessingMode.translationModeId,
-           let code = mode.translationTargetLanguageCode,
-           let target = TranslationLanguage(rawValue: code) {
-            return L(
-                "目标：\(target.displayName) · 自动识别口述语言",
-                "Target: \(target.displayName) · Auto-detect spoken language"
-            )
-        }
-        let summary = mode.localizedDisplayDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        return summary.isEmpty ? L("自定义处理模式", "Custom processing mode") : summary
     }
 
     private func estimatedSavedTime(_ stats: HistoryStore.Statistics?) -> Double {
@@ -405,12 +606,8 @@ struct HomeDashboardView: View {
 
     private func formatDuration(_ seconds: Double) -> String {
         let totalMinutes = Int((seconds / 60).rounded())
-        if totalMinutes < 1 {
-            return L("少于 1 分钟", "< 1 min")
-        }
-        if totalMinutes < 60 {
-            return L("\(totalMinutes) 分钟", "\(totalMinutes) min")
-        }
+        if totalMinutes < 1 { return L("< 1 分钟", "< 1 min") }
+        if totalMinutes < 60 { return L("\(totalMinutes) 分钟", "\(totalMinutes) min") }
         let hours = totalMinutes / 60
         let minutes = totalMinutes % 60
         return minutes == 0
@@ -422,22 +619,234 @@ struct HomeDashboardView: View {
         value.formatted(.number.grouping(.automatic))
     }
 
-    private enum Metric: Hashable {
-        case inputTime
-        case characters
-        case speed
-        case saved
+    private func hotkeyStyleLabel(_ style: ProcessingMode.HotkeyStyle) -> String {
+        switch style {
+        case .hold: return L("按住录制", "Hold")
+        case .toggle: return L("按下切换", "Toggle")
+        }
+    }
+
+    private func heatmapWeeks(weekCount: Int) -> [[HeatmapDay]] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let today = calendar.startOfDay(for: Date())
+        let daysSinceSunday = calendar.component(.weekday, from: today) - 1
+        let currentWeekStart = calendar.date(byAdding: .day, value: -daysSinceSunday, to: today) ?? today
+        let firstWeekStart = calendar.date(
+            byAdding: .weekOfYear, value: -(weekCount - 1), to: currentWeekStart
+        ) ?? currentWeekStart
+        let activityByDay = Dictionary(uniqueKeysWithValues: activityDays.map {
+            ($0.dayIdentifier, $0)
+        })
+        let formatter = dayIdentifierFormatter(calendar: calendar)
+
+        return (0..<weekCount).map { weekOffset in
+            (0..<7).map { weekdayOffset in
+                let offset = weekOffset * 7 + weekdayOffset
+                let date = calendar.date(byAdding: .day, value: offset, to: firstWeekStart) ?? firstWeekStart
+                let identifier = formatter.string(from: date)
+                let isFuture = date > today
+                let activity = activityByDay[identifier]
+                return HeatmapDay(
+                    date: date,
+                    recordCount: isFuture ? 0 : (activity?.recordCount ?? 0),
+                    durationSeconds: isFuture ? 0 : (activity?.durationSeconds ?? 0),
+                    characterCount: isFuture ? 0 : (activity?.characterCount ?? 0),
+                    isFuture: isFuture
+                )
+            }
+        }
+    }
+
+    private func activityLevel(for count: Int) -> Int {
+        switch count {
+        case 0: return 0
+        case 1: return 1
+        case 2...3: return 2
+        case 4...6: return 3
+        default: return 4
+        }
+    }
+
+    private func heatmapColor(level: Int) -> Color {
+        switch level {
+        case 1: return TF.settingsAccentBlue.opacity(0.18)
+        case 2: return TF.settingsAccentBlue.opacity(0.36)
+        case 3: return TF.settingsAccentBlue.opacity(0.58)
+        case 4: return TF.settingsAccentBlue.opacity(0.90)
+        default: return TF.settingsCardAlt
+        }
+    }
+
+    private func activityTooltip(for day: HeatmapDay) -> String {
+        let date = activityDateLabel(for: day.date)
+        if day.isFuture { return date }
+        return L(
+            "\(date)\n听写时长：\(formatDuration(day.durationSeconds))\n字数：\(formatNumber(day.characterCount))",
+            "\(date)\nDictation time: \(formatDuration(day.durationSeconds))\nWords: \(formatNumber(day.characterCount))"
+        )
+    }
+
+    private func heatmapTooltipCard(for day: HeatmapDay) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(activityDateLabel(for: day.date))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(TF.settingsText)
+
+            heatmapTooltipDetail(
+                icon: "clock",
+                label: L("听写时长", "Dictation time"),
+                value: formatDuration(day.durationSeconds)
+            )
+            heatmapTooltipDetail(
+                icon: "text.word.spacing",
+                label: L("字数", "Words"),
+                value: formatNumber(day.characterCount)
+            )
+        }
+        .padding(13)
+        .frame(minWidth: 180, alignment: .leading)
+    }
+
+    private func heatmapTooltipDetail(icon: String, label: String, value: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(TF.settingsAccentBlue)
+                .frame(width: 16)
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(TF.settingsTextSecondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(TF.settingsText)
+                .layoutPriority(1)
+        }
+    }
+
+    private func activityDateLabel(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: L("zh_CN", "en_US"))
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
+    }
+
+    private func dayIdentifierFormatter(calendar: Calendar) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }
+
+    private struct HeatmapDay: Identifiable {
+        let date: Date
+        let recordCount: Int
+        let durationSeconds: Double
+        let characterCount: Int
+        let isFuture: Bool
+        var id: Date { date }
+    }
+
+    private struct HeatmapCellAnchorPreferenceKey: PreferenceKey {
+        static var defaultValue: [Date: Anchor<CGRect>] = [:]
+
+        static func reduce(
+            value: inout [Date: Anchor<CGRect>],
+            nextValue: () -> [Date: Anchor<CGRect>]
+        ) {
+            value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+        }
+    }
+
+    private struct HeatmapMonthMarker: Identifiable {
+        let id: String
+        let label: String
+        let weekIndex: Int
+    }
+}
+
+/// Pure summary logic kept separate from SwiftUI so streak behavior is easy to
+/// validate and remains deterministic at local calendar-day boundaries.
+struct HomeActivitySummary: Equatable {
+    let activeDays: Int
+    let currentStreak: Int
+    let longestStreak: Int
+
+    init(
+        activityDays: [HistoryStore.ActivityDay],
+        today: Date = Date(),
+        calendar inputCalendar: Calendar = .current
+    ) {
+        let calendar = inputCalendar
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+
+        let activeDates = Set(activityDays.lazy.filter { $0.recordCount > 0 }.compactMap {
+            formatter.date(from: $0.dayIdentifier).map(calendar.startOfDay(for:))
+        })
+        activeDays = activeDates.count
+
+        let sortedDates = activeDates.sorted()
+        var longest = 0
+        var running = 0
+        var previous: Date?
+        for date in sortedDates {
+            if let previous,
+               calendar.dateComponents([.day], from: previous, to: date).day == 1 {
+                running += 1
+            } else {
+                running = 1
+            }
+            longest = max(longest, running)
+            previous = date
+        }
+        longestStreak = longest
+
+        let localToday = calendar.startOfDay(for: today)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: localToday) ?? localToday
+        var cursor: Date?
+        if activeDates.contains(localToday) {
+            cursor = localToday
+        } else if activeDates.contains(yesterday) {
+            cursor = yesterday
+        } else {
+            cursor = nil
+        }
+
+        var current = 0
+        while let day = cursor, activeDates.contains(day) {
+            current += 1
+            cursor = calendar.date(byAdding: .day, value: -1, to: day)
+        }
+        currentStreak = current
+    }
+}
+
+private extension View {
+    func dashboardCard() -> some View {
+        background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(TF.settingsCard)
+                .shadow(color: Color.black.opacity(0.035), radius: 12, y: 4)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(TF.settingsBorder, lineWidth: 1)
+        )
     }
 }
 
 /// A very light perspective dot field used only behind the Home dashboard.
-/// The dots form a low-amplitude wave so the page gains depth without adding
-/// another card or competing with the dashboard content.
 struct HomeDottedWaveBackground: View {
     var body: some View {
         Canvas { context, size in
-            // A square lattice projected into screen space. Its two axes run
-            // diagonally left/right, which reads as a surface viewed at 45°.
             let projectedX: CGFloat = 7.8
             let projectedY: CGFloat = 7.2
             let originX = size.width * 0.50
@@ -463,16 +872,13 @@ struct HomeDottedWaveBackground: View {
                     let wave = sin(nx * 6.2 + ny * 1.4)
                         * cos(ny * 2.3 - nx * 0.55)
                         * envelope
-
-                    // Height is projected upward with a slight leftward drift,
-                    // so crests visibly rise from the receding diamond plane.
                     let x = baseX - wave * 5.5
                     let y = baseY - wave * 46
                     let nearFactor = 0.72
                         + min(max(baseY / max(size.height, 1), 0), 1) * 0.28
                     let crest = (wave + envelope + 1) / 3
                     let radius = (0.78 + crest * 0.52) * nearFactor
-                    let opacity = (0.075 + envelope * (0.025 + crest * 0.055)) * nearFactor
+                    let opacity = (0.055 + envelope * (0.018 + crest * 0.04)) * nearFactor
                     let dot = CGRect(
                         x: x - radius,
                         y: y - radius,
