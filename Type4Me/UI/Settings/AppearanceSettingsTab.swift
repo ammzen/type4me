@@ -6,6 +6,9 @@ import SwiftUI
 
 struct AppearanceSettingsTab: View, SettingsCardHelpers {
 
+    @AppStorage(RecordingIndicatorStyle.storageKey)
+    private var indicatorStyle = RecordingIndicatorStyle.defaultValue
+
     @AppStorage(RecordingVisualStyle.storageKey)
     private var visualStyle = RecordingVisualStyle.defaultValue
 
@@ -27,8 +30,13 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
     @AppStorage("tf_language")
     private var language = AppLanguage.systemDefault
 
+    private var isCompact: Bool {
+        indicatorStyle == RecordingIndicatorStyle.compact.rawValue
+    }
+
     private var presentation: FloatingBarPresentation {
         FloatingBarPresentation(
+            indicatorStyle: RecordingIndicatorStyle(rawValue: indicatorStyle) ?? .regular,
             visualStyle: RecordingVisualStyle(rawValue: visualStyle) ?? .timeline,
             showsLiveTranscript: showLiveTranscript,
             enablesHoverTranscriptPreview: hoverTranscriptPreview
@@ -57,6 +65,8 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
             // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
             settingsGroupCard(L("录音显示", "Recording Display"), icon: "macwindow") {
+                indicatorStyleRow
+                SettingsDivider()
                 visualStyleRow
                 SettingsDivider()
                 liveTranscriptRow
@@ -82,27 +92,46 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
 
     // MARK: - Row Builders
 
+    private var indicatorStyleRow: some View {
+        settingsOptionRow(L("指示条外观", "Indicator Style")) {
+            settingsDropdown(
+                selection: $indicatorStyle,
+                options: RecordingIndicatorStyle.allCases.map { ($0.rawValue, $0.displayName) }
+            )
+        }
+    }
+
     private var visualStyleRow: some View {
-        settingsOptionRow(L("录音动效", "Visual Style")) {
+        settingsOptionRow(
+            L("录音动效", "Visual Style"),
+            subtitle: isCompact ? L("仅常规外观可用", "Available in Regular only") : nil
+        ) {
             settingsDropdown(
                 selection: $visualStyle,
                 options: RecordingVisualStyle.allCases.map { ($0.rawValue, $0.displayName) }
             )
+            .disabled(isCompact)
+            .opacity(isCompact ? 0.6 : 1.0)
         }
     }
 
     private var liveTranscriptRow: some View {
         settingsToggleRow(
             L("实时展示文本", "Live Transcript"),
-            subtitle: L("开启后在录音时显示识别文本", "Show recognized text while recording"),
-            isOn: $showLiveTranscript
+            subtitle: isCompact
+                ? L("仅常规外观可用", "Available in Regular only")
+                : L("开启后在录音时显示识别文本", "Show recognized text while recording"),
+            isOn: $showLiveTranscript,
+            isEnabled: !isCompact
         )
     }
 
     private var hoverPreviewRow: some View {
         settingsToggleRow(
             L("悬停文字预览", "Hover Text Preview"),
-            isOn: $hoverTranscriptPreview
+            subtitle: isCompact ? L("仅常规外观可用", "Available in Regular only") : nil,
+            isOn: $hoverTranscriptPreview,
+            isEnabled: !isCompact
         )
     }
 

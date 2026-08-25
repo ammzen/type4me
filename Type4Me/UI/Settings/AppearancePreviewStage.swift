@@ -54,7 +54,7 @@ struct AppearancePreviewStage: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(TF.settingsCardAlt.opacity(0.6))
 
-                    if presentation.visualStyle.showsRecordingPanel {
+                    if presentation.showsRecordingIndicator {
                         FloatingBarView(
                             state: demoState,
                             presentationOverride: presentation

@@ -124,6 +124,19 @@ enum TF {
     static let transcriptPopupCorner: CGFloat = 10
     static let transcriptPopupGap: CGFloat = 10
 
+    // MARK: Compact Recording Indicator
+
+    static let compactIndicatorWidth: CGFloat = barWidthCompact
+    static let compactIndicatorHeight: CGFloat = 24
+    static let compactIndicatorControlVisualSize: CGFloat = 15
+    static let compactIndicatorWaveBarWidth: CGFloat = 2
+    static let compactIndicatorWaveMinHeight: CGFloat = 2
+    static let compactIndicatorWaveMaxHeight: CGFloat = 18
+    static let compactStatusMaxWidth: CGFloat = barWidth
+
+    static let compactIndicatorActive = floatingControlLight
+    static let compactIndicatorInactive = recordingTooltipBadge
+
     // MARK: Animation
 
     static let springSnappy = Animation.spring(response: 0.35, dampingFraction: 0.8)

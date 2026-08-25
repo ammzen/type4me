@@ -8,14 +8,71 @@ final class AppearancePreviewTests: XCTestCase {
 
     func testFloatingBarPresentationInit() {
         let presentation = FloatingBarPresentation(
+            indicatorStyle: .regular,
             visualStyle: .dual,
             showsLiveTranscript: false,
             enablesHoverTranscriptPreview: false
         )
 
+        XCTAssertEqual(presentation.indicatorStyle, .regular)
         XCTAssertEqual(presentation.visualStyle, .dual)
         XCTAssertFalse(presentation.showsLiveTranscript)
         XCTAssertFalse(presentation.enablesHoverTranscriptPreview)
+        XCTAssertTrue(presentation.showsRecordingIndicator)
+    }
+
+    func testFloatingBarPresentation_compactShowsRecordingIndicatorEvenWhenVisualStyleHidden() {
+        let compactHidden = FloatingBarPresentation(
+            indicatorStyle: .compact,
+            visualStyle: .hidden,
+            showsLiveTranscript: true,
+            enablesHoverTranscriptPreview: true
+        )
+        XCTAssertTrue(compactHidden.showsRecordingIndicator)
+
+        let regularHidden = FloatingBarPresentation(
+            indicatorStyle: .regular,
+            visualStyle: .hidden,
+            showsLiveTranscript: true,
+            enablesHoverTranscriptPreview: true
+        )
+        XCTAssertFalse(regularHidden.showsRecordingIndicator)
+    }
+
+    func testRecordingIndicatorStyle_allCases() {
+        XCTAssertEqual(RecordingIndicatorStyle.allCases.count, 2)
+        XCTAssertEqual(RecordingIndicatorStyle.regular.rawValue, "regular")
+        XCTAssertEqual(RecordingIndicatorStyle.compact.rawValue, "compact")
+        XCTAssertEqual(RecordingIndicatorStyle.defaultValue, "regular")
+        XCTAssertEqual(RecordingIndicatorStyle.regular.displayName, L("常规", "Regular"))
+        XCTAssertEqual(RecordingIndicatorStyle.compact.displayName, L("紧凑型", "Compact"))
+    }
+
+    func testRecordingIndicatorStyle_currentResolution() {
+        let suite = "Type4MeTests.RecordingIndicatorStyle.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // Missing key falls back to .regular
+        XCTAssertEqual(RecordingIndicatorStyle.current(userDefaults: defaults), .regular)
+
+        // Stored "compact"
+        defaults.set("compact", forKey: RecordingIndicatorStyle.storageKey)
+        XCTAssertEqual(RecordingIndicatorStyle.current(userDefaults: defaults), .compact)
+
+        // Invalid raw value falls back to .regular
+        defaults.set("invalid_style", forKey: RecordingIndicatorStyle.storageKey)
+        XCTAssertEqual(RecordingIndicatorStyle.current(userDefaults: defaults), .regular)
+    }
+
+    func testCompactIndicatorDesignDimensionsMatchSpecification() {
+        XCTAssertEqual(TF.compactIndicatorWidth, 180)
+        XCTAssertEqual(TF.compactIndicatorHeight, 24)
+        XCTAssertEqual(TF.compactIndicatorControlVisualSize, 15)
+        XCTAssertEqual(TF.compactIndicatorWaveBarWidth, 2)
+        XCTAssertEqual(TF.compactIndicatorWaveMinHeight, 2)
+        XCTAssertEqual(TF.compactIndicatorWaveMaxHeight, 18)
+        XCTAssertEqual(TF.compactStatusMaxWidth, TF.barWidth)
     }
 
     func testRecordingVisualStyle_allCases() {
