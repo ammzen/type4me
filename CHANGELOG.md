@@ -9,7 +9,16 @@ v2.2.0 将运行中的常用控制集中到菜单栏，并为自动化录音、�
 - **URL Scheme 自动化录音 (#194)**：支持 `type4me://start`、`stop`、`toggle`，可供 Stream Deck、快捷指令、Raycast、Alfred、BetterTouchTool、Hammerspoon 和脚本免模拟键盘事件调用
 - **小米 MiMo-V2.5-ASR (#211)**：新增 MiMo 批量语音识别服务；设置与菜单栏为所有非实时服务提供统一标记
 - **外观设置与实时预览**：新增独立的外观页面，将录音动效、实时文本、悬停预览和文本格式选项集中管理，并用真实录音条和格式化结果即时预览效果
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/ad6a3d2e-3a4c-4d83-90af-56f0abc3dd74" width="900" alt="外观设置中的录音条与文本输出预览" />
+</p>
+
 - **紧凑型录音指示条**：新增与录音动效独立的 Compact 样式，以更小的声纹胶囊呈现录音、处理和完成状态
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/e3a3dbd8-e08c-41f3-bc13-c49cf478d1d5" width="900" alt="紧凑型录音指示条及完成和取消操作提示" />
+</p>
 
 ### 改进与修复 (Improvements & Fixes)
 - **跨 App 文本注入安全性**：注入前确认目标 App 已真正回到前台；目标已退出或无法确认时安全保留到剪贴板，避免口述内容粘贴到错误应用
