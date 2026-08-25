@@ -14,6 +14,7 @@
 
 
 - **语音识别**：内置本地识别引擎、媲美云端引擎准确率；支持多家云端引擎厂商；支持流式识别、边说边出字，说完无需等待、快速输入；
+- **更多识别引擎**：新增小米 MiMo-V2.5-ASR 批量识别；设置与菜单栏会清晰标注非实时服务；
 - **8 种默认模式**：内置快速模式、智能感知、翻译、随便问、Mac 操作、语音润色、Prompt 优化与代办模式，可自定义添加任意处理模版；
 - **Intelli Sense**：根据当前 App、输入控件和有限上下文安全润色文字；还可按需学习稳定的纠错、表达和列表结构偏好；
 - **Ask Anything**：围绕选中文本直接提问，并把连续追问保存为会话，随时搜索、恢复或继续追问；
@@ -21,11 +22,13 @@
 - **Mac 操作**：用语音直接执行常用 macOS 系统操作与 Type4Me 功能控制；
 - **语音改口**：刚打出的文字有误或想换个说法？按下快捷键直接语音说出修改指令，精准替换、局部微调、支持一键撤销；
 - **多快捷键**：每个模式可绑定多个全局快捷键，支持按住说话与点按开关；
+- **菜单栏控制中心**：直接查看运行状态，切换模式、麦克风、ASR 与翻译目标，并快速控制录音、历史、改口、权限和更新；
+- **外观预览与紧凑录音条**：外观页面可实时预览录音条与格式化输出；新增紧凑声纹样式，适合更小的桌面占用；
 - **模型接入**：支持主流厂商API接入；文本处理支持使用Ollama接本地模型；
 - **词汇管理**：支持热词、映射词，2种模式。热词用于校正语音识别引擎，映射词可作为兜底或个性化场景使用（如 Web coding -> Vibe Coding, "我的邮箱地址" -> xxx@gmail.com）；
 - **历史记录**：存储所有历史识别记录，包括原始文本和处理后文本，支持导出CSV；
 - **配套Skill**：真正做到100%准确率，打造只属于你的输入法，[点这里安装Skill](https://github.com/joewongjc/type4me-vocab-skill)后跟你的agent说"Qwen3.5 不要识别成 Queen 3.5"，他就能自动帮你管理热词和映射词，同类错误不再犯
-- **URL Scheme**：支持从 Stream Deck、快捷指令、Raycast / Alfred、终端、浏览器或脚本直接控制录音（开始、结束、切换），以及打开设置、管理词库、静默写入热词与片段替换规则；
+- **URL Scheme**：支持从 Stream Deck、快捷指令、Raycast / Alfred、终端、浏览器或脚本直接控制录音（开始、结束、切换）；后台调用不抢前台焦点，注入目标无法确认时安全保留文本到剪贴板；同样可打开设置、管理词库、静默写入热词与片段替换规则；
 
 ## 立即体验
 
@@ -35,8 +38,8 @@
 
 | 版本                                                         | 说明                                                         | 安装包大小   |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | ------ |
-| ✨推荐：**[云端版本（点击下载）](https://github.com/joewongjc/type4me/releases/download/v2.1.1/Type4Me-v2.1.1-cloud.dmg)** | 支持云端识别 (Intel + Apple Silicon)，需配置语音、大模型API Key。语音识别推荐火山-豆包语音/Soniox、体验最好。火山注册有送额度，单价都十分便宜。[配置指引](https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr) | ~10MB  |
-| **[本地版本（点击下载）](https://github.com/joewongjc/type4me/releases/download/v2.1.1/Type4Me-v2.1.1-local-apple-silicon.dmg)** | 内嵌 SenseVoice + Qwen3-ASR 本地识别引擎 (Apple Silicon only，约占用8GB内存，建议32GB以上)，大模型依旧需要配置API Key或Ollama本地服务。 | ~700MB |
+| ✨推荐：**[云端版本（点击下载）](https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-cloud.dmg)** | 支持云端识别 (Intel + Apple Silicon)，需配置语音、大模型API Key。语音识别推荐火山-豆包语音/Soniox、体验最好。火山注册有送额度，单价都十分便宜。[配置指引](https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr) | ~10MB  |
+| **[本地版本（点击下载）](https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-local-apple-silicon.dmg)** | 内嵌 SenseVoice + Qwen3-ASR 本地识别引擎 (Apple Silicon only，约占用8GB内存，建议32GB以上)，大模型依旧需要配置API Key或Ollama本地服务。 | ~700MB |
 
 系统要求：macOS 14+ (Sonoma)
 
@@ -84,7 +87,7 @@ Type4Me 不只是把语音识别成文字。
 
 同一段语音，可以直接转写、智能整理、翻译、提问，也可以让 AI 帮你生成成品，甚至直接操作 Mac。
 
-v2.1.0 新安装默认提供 8 种模式：
+当前版本新安装默认提供 8 种模式：
 
 | 模式            | 适合做什么                | 默认快捷键                         |
 | ------------- | -------------------- | ----------------------------- |
@@ -106,7 +109,7 @@ v2.1.0 新安装默认提供 8 种模式：
   <img src="docs/screenshots/screenshot-modes.png" width="480" alt="模式快捷键设置" />
 </p>
 
-<!-- SCREENSHOT TODO (v2.1.0): 多快捷键绑定配置截图（若需进一步展示多个 hold/toggle 快捷键细节） -->
+<!-- SCREENSHOT TODO: 多快捷键绑定配置截图（若需进一步展示多个 hold/toggle 快捷键细节） -->
 
 ---
 
@@ -200,7 +203,7 @@ v2.1.0 新安装默认提供 8 种模式：
 
 新安装默认目标语言为**英语**。
 
-<!-- SCREENSHOT TODO (v2.1.0): 翻译目标语言选择器截图；在 v2.1.0 正式构建上截取并隐藏敏感信息 -->
+<!-- SCREENSHOT TODO: 翻译目标语言选择器截图；在正式构建上截取并隐藏敏感信息 -->
 
 适合：
 
@@ -649,7 +652,7 @@ open 'type4me://vocabulary/snippets?trigger=ghosty&replacement=Ghostty&silent=tr
 
 对最近一次仍可可靠定位的 Type4Me 输入，按下改口快捷键（默认 `Fn + R`）并说出修改指令；Type4Me 只替换授权范围，目标已变化或无法定位时会安全失败。成功后可一键或语音撤销。
 
-<!-- SCREENSHOT TODO (v2.1.0): 真实 Revise 工作流截图（展示原文、改口状态与撤销效果）；目前暂时展示原型示意图 -->
+<!-- SCREENSHOT TODO: 真实 Revise 工作流截图（展示原文、改口状态与撤销效果）；目前暂时展示原型示意图 -->
 
 <p align="center">
   <img src="docs/screenshots/prototype-revise.png" width="480" alt="Type4Me 语音改口（原型示意图）" />
@@ -720,6 +723,7 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 
 
 - **Speech Recognition**: Built-in local recognition engine with accuracy rivaling cloud engines; supports multiple cloud ASR providers; real-time streaming recognition with instant text output;
+- **More ASR Engines**: Adds Xiaomi MiMo-V2.5-ASR batch recognition; Settings and the menu bar clearly identify non-realtime providers;
 - **8 Default Modes**: Built-in Quick Mode, Intelli Sense, Translation, Ask Anything, Mac Actions, Voice Polish, Prompt Optimization, and Task Delegation; fully customizable with user-defined templates;
 - **Intelli Sense (Optional)**: Safely polishes text using the current app, input control, and limited context; optionally learns stable corrections, expression preferences, and list structure;
 - **Ask Anything**: Ask questions about selected text, save follow-ups into conversation history, and search, resume, or continue conversations anytime;
@@ -727,11 +731,13 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 - **Mac Actions**: Execute common macOS system actions and Type4Me controls directly by voice;
 - **Voice Revise**: Made a typo or want to rephrase? Press a hotkey to speak revisions directly—precision replacement, local slot targeting, and one-click undo;
 - **Multiple Hotkeys**: Bind multiple global shortcuts per mode with hold-to-talk or toggle behavior;
+- **Menu Bar Control Center**: View runtime status, switch modes, microphones, ASR providers, and translation targets, and quickly control recording, history, revise, permissions, and updates;
+- **Appearance Preview & Compact Indicator**: Preview the recording bar and formatted output live in Appearance settings; a compact waveform style keeps the desktop footprint smaller;
 - **Model Integration**: Supports mainstream provider APIs; text processing works with Ollama local models;
 - **Vocabulary Management**: Two modes: hotwords and snippet replacements. Hotwords improve ASR accuracy for proper nouns; snippets enable personalized substitutions (e.g., "Web coding" -> "Vibe Coding", "my email" -> xxx@gmail.com);
 - **History**: Stores all recognition records including raw and processed text, with CSV export;
 - **Companion Skill**: Achieve 100% recognition accuracy. [Install the Skill](https://github.com/joewongjc/type4me-vocab-skill) and tell your agent "Don't recognize Qwen3.5 as Queen 3.5" to automatically manage hotwords and snippets. Same mistakes won't happen again.
-- **URL Scheme**: Control recording directly (start, stop, toggle) from Stream Deck, Shortcuts, Raycast / Alfred, Terminal, or scripts without simulating keystrokes; open Settings, manage vocabulary, and silently write hotwords/snippets.
+- **URL Scheme**: Control recording directly (start, stop, toggle) from Stream Deck, Shortcuts, Raycast / Alfred, Terminal, or scripts without simulating keystrokes; background calls keep the foreground app intact and fall back safely to the clipboard when an injection target cannot be confirmed; open Settings, manage vocabulary, and silently write hotwords/snippets.
 
 ## Get Started
 
@@ -741,8 +747,8 @@ Two editions, sharing the same config files. You can switch between them at any 
 
 | Edition | Description | Size |
 | ------- | ----------- | ---- |
-| ✨Recommended: **[Cloud Edition (Download)](https://github.com/joewongjc/type4me/releases/download/v2.1.1/Type4Me-v2.1.1-cloud.dmg)** | Cloud recognition (Intel + Apple Silicon). Requires ASR and LLM API keys. Recommended: Volcano/Doubao or Soniox for best experience. [Setup Guide](https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr) | ~10MB |
-| **[Local Edition (Download)](https://github.com/joewongjc/type4me/releases/download/v2.1.1/Type4Me-v2.1.1-local-apple-silicon.dmg)** | Bundled SenseVoice + Qwen3-ASR local recognition (Apple Silicon only, ~8GB RAM, 32GB+ recommended). LLM still requires API key or local Ollama. | ~700MB |
+| ✨Recommended: **[Cloud Edition (Download)](https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-cloud.dmg)** | Cloud recognition (Intel + Apple Silicon). Requires ASR and LLM API keys. Recommended: Volcano/Doubao or Soniox for best experience. [Setup Guide](https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr) | ~10MB |
+| **[Local Edition (Download)](https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-local-apple-silicon.dmg)** | Bundled SenseVoice + Qwen3-ASR local recognition (Apple Silicon only, ~8GB RAM, 32GB+ recommended). LLM still requires API key or local Ollama. | ~700MB |
 
 System requirements: macOS 14+ (Sonoma)
 
@@ -812,7 +818,7 @@ Type4Me is more than just transcribing speech to text.
 
 From a single voice clip, you can transcribe directly, intelligently polish, translate, ask questions, have AI generate ready-to-use deliverables, or even execute macOS system actions.
 
-v2.1.0 provides 8 default modes out of the box:
+New installations include 8 default modes out of the box:
 
 | Mode | Best For | Default Shortcut |
 | ---- | -------- | ---------------- |
@@ -834,7 +840,7 @@ All shortcuts are fully customizable. Each mode can bind **multiple global short
   <img src="docs/screenshots/screenshot-modes.png" width="480" alt="Mode Shortcut Settings" />
 </p>
 
-<!-- SCREENSHOT TODO (v2.1.0): Multiple hotkey bindings configuration screenshot (if needed to illustrate multiple hold/toggle shortcuts in detail). -->
+<!-- SCREENSHOT TODO: Multiple hotkey bindings configuration screenshot (if needed to illustrate multiple hold/toggle shortcuts in detail). -->
 
 ---
 
@@ -928,7 +934,7 @@ Supports automatic source language detection and translating into **18 target la
 
 The default target language for new installations is **English**.
 
-<!-- SCREENSHOT TODO (v2.1.0): Translation target-language selector; capture on the v2.1.0 build, redact credentials, and supply matching zh/en alt text. -->
+<!-- SCREENSHOT TODO: Translation target-language selector; capture on a release build, redact credentials, and supply matching zh/en alt text. -->
 
 Best for:
 
@@ -1371,7 +1377,7 @@ open 'type4me://vocabulary/snippets?trigger=ghosty&replacement=Ghostty&silent=tr
 
 For the most recent Type4Me insertion that can still be located reliably, press the Revise shortcut (default `Fn + R`) and speak an edit instruction. Type4Me limits changes to the authorized scope and fails safely when the target changed or cannot be found. Successful revisions can be undone by button or voice.
 
-<!-- SCREENSHOT TODO (v2.1.0): Real Revise workflow screenshot showing source text, revise status, and undo result; currently showing prototype mockup. -->
+<!-- SCREENSHOT TODO: Real Revise workflow screenshot showing source text, revise status, and undo result; currently showing prototype mockup. -->
 
 <p align="center">
   <img src="docs/screenshots/prototype-revise.png" width="480" alt="Type4Me Voice Revise (Prototype)" />
