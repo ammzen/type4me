@@ -12,7 +12,14 @@ struct AppearancePreviewStage: View {
     @State private var demoState = DemoState()
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
 
-    static let formattingSample = "我刚刚在MacBook上测试Type4Me 2.1，“这个效果很好”。"
+    static let formattingSamples = [
+        "我刚刚在MacBook上测试Type4Me 2.1，“这个效果很好”。",
+        "I've tested Type4Me on macOS, “it's fast and accurate”."
+    ]
+
+    static var formattingSample: String {
+        formattingSamples.joined(separator: "\n")
+    }
 
     private var floatingBarSampleText: String {
         L(
@@ -22,7 +29,9 @@ struct AppearancePreviewStage: View {
     }
 
     private var formattedOutputText: String {
-        TextOutputFormatter.format(Self.formattingSample, options: formattingOptions)
+        Self.formattingSamples
+            .map { TextOutputFormatter.format($0, options: formattingOptions) }
+            .joined(separator: "\n")
     }
 
     var body: some View {
@@ -71,13 +80,14 @@ struct AppearancePreviewStage: View {
                             .foregroundStyle(TF.settingsTextTertiary)
                         Text(Self.formattingSample)
                             .font(.system(size: 13))
+                            .lineSpacing(3)
                             .foregroundStyle(TF.settingsText)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
 
                     Divider()
-                        .frame(height: 52)
+                        .frame(height: 60)
 
                     // Formatted Text
                     VStack(alignment: .leading, spacing: 5) {
@@ -86,6 +96,7 @@ struct AppearancePreviewStage: View {
                             .foregroundStyle(TF.settingsTextTertiary)
                         Text(formattedOutputText)
                             .font(.system(size: 13))
+                            .lineSpacing(3)
                             .foregroundStyle(TF.settingsText)
                             .fixedSize(horizontal: false, vertical: true)
                     }

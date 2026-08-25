@@ -46,13 +46,13 @@ final class AppearancePreviewTests: XCTestCase {
             usesCornerQuotes: false,
             trailingPunctuationMode: .off
         )
-        let sample = AppearancePreviewStage.formattingSample
-        let formatted = TextOutputFormatter.format(sample, options: options)
+        let zhSample = AppearancePreviewStage.formattingSamples[0]
+        let formattedZh = TextOutputFormatter.format(zhSample, options: options)
 
         // Should contain spacing between CJK and Latin / Numbers
-        XCTAssertTrue(formatted.contains("MacBook 上测试 Type4Me 2.1"))
+        XCTAssertTrue(formattedZh.contains("MacBook 上测试 Type4Me 2.1"))
         // Quotes remain curly
-        XCTAssertTrue(formatted.contains("“这个效果很好”。"))
+        XCTAssertTrue(formattedZh.contains("“这个效果很好”。"))
     }
 
     func testAppearanceFormattingSample_cornerQuotesEnabled() {
@@ -61,13 +61,18 @@ final class AppearancePreviewTests: XCTestCase {
             usesCornerQuotes: true,
             trailingPunctuationMode: .off
         )
-        let sample = AppearancePreviewStage.formattingSample
-        let formatted = TextOutputFormatter.format(sample, options: options)
+        let zhSample = AppearancePreviewStage.formattingSamples[0]
+        let enSample = AppearancePreviewStage.formattingSamples[1]
+        let formattedZh = TextOutputFormatter.format(zhSample, options: options)
+        let formattedEn = TextOutputFormatter.format(enSample, options: options)
 
-        // Quotes are converted to corner quotes
-        XCTAssertTrue(formatted.contains("「这个效果很好」"))
-        XCTAssertFalse(formatted.contains("“"))
-        XCTAssertFalse(formatted.contains("”"))
+        // Chinese quotes are converted to corner quotes
+        XCTAssertTrue(formattedZh.contains("「这个效果很好」"))
+        XCTAssertFalse(formattedZh.contains("“"))
+        XCTAssertFalse(formattedZh.contains("”"))
+
+        // English quotes are converted and apostrophe preserved
+        XCTAssertTrue(formattedEn.contains("「it’s fast and accurate」") || formattedEn.contains("「it's fast and accurate」"))
     }
 
     func testAppearanceFormattingSample_stripTrailingPeriods() {
@@ -76,12 +81,17 @@ final class AppearancePreviewTests: XCTestCase {
             usesCornerQuotes: false,
             trailingPunctuationMode: .period
         )
-        let sample = AppearancePreviewStage.formattingSample
-        let formatted = TextOutputFormatter.format(sample, options: options)
+        let zhSample = AppearancePreviewStage.formattingSamples[0]
+        let enSample = AppearancePreviewStage.formattingSamples[1]
+        let formattedZh = TextOutputFormatter.format(zhSample, options: options)
+        let formattedEn = TextOutputFormatter.format(enSample, options: options)
 
-        // Trailing period removed
-        XCTAssertTrue(formatted.hasSuffix("“这个效果很好”"))
-        XCTAssertFalse(formatted.hasSuffix("。"))
+        // Trailing periods removed from both Chinese and English lines
+        XCTAssertTrue(formattedZh.hasSuffix("“这个效果很好”"))
+        XCTAssertFalse(formattedZh.hasSuffix("。"))
+
+        XCTAssertTrue(formattedEn.hasSuffix("“it's fast and accurate”") || formattedEn.hasSuffix("“it’s fast and accurate”"))
+        XCTAssertFalse(formattedEn.hasSuffix("."))
     }
 
     func testAppearanceFormattingSample_removeSpaces() {
@@ -90,11 +100,11 @@ final class AppearancePreviewTests: XCTestCase {
             usesCornerQuotes: false,
             trailingPunctuationMode: .off
         )
-        let sample = AppearancePreviewStage.formattingSample
-        let formatted = TextOutputFormatter.format(sample, options: options)
+        let zhSample = AppearancePreviewStage.formattingSamples[0]
+        let formattedZh = TextOutputFormatter.format(zhSample, options: options)
 
         // Spacing removed
-        XCTAssertTrue(formatted.contains("在MacBook上测试Type4Me 2.1"))
+        XCTAssertTrue(formattedZh.contains("在MacBook上测试Type4Me 2.1"))
     }
 
     func testAppearanceFormattingSample_combinedOptions() {
@@ -103,12 +113,15 @@ final class AppearancePreviewTests: XCTestCase {
             usesCornerQuotes: true,
             trailingPunctuationMode: .period
         )
-        let sample = AppearancePreviewStage.formattingSample
-        let formatted = TextOutputFormatter.format(sample, options: options)
+        let formatted = AppearancePreviewStage.formattingSamples
+            .map { TextOutputFormatter.format($0, options: options) }
+            .joined(separator: "\n")
 
         XCTAssertTrue(formatted.contains("在 MacBook 上测试 Type4Me 2.1"))
-        XCTAssertTrue(formatted.hasSuffix("「这个效果很好」"))
-        XCTAssertFalse(formatted.hasSuffix("。"))
+        XCTAssertTrue(formatted.contains("「这个效果很好」"))
+        XCTAssertTrue(formatted.contains("fast and accurate」"))
+        XCTAssertFalse(formatted.contains("。"))
+        XCTAssertFalse(formatted.hasSuffix("."))
     }
 
     // MARK: - DemoState Lifecycle & Isolation Tests
