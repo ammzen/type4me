@@ -64,21 +64,13 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
                 SettingsDivider()
                 volumeReductionRow
                 SettingsDivider()
-                micKeepAliveRow
-                SettingsDivider()
-                crossModeFinishRow
-            }
-
-            Spacer().frame(height: 16)
-
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-            // CARD 2: 语音识别设置
-            // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-            settingsGroupCard(L("语音识别设置", "Speech Recognition"), icon: "waveform") {
                 startSoundRow
                 SettingsDivider()
                 speakerSelectionRow
+                SettingsDivider()
+                micKeepAliveRow
+                SettingsDivider()
+                crossModeFinishRow
             }
 
             Spacer().frame(height: 16)

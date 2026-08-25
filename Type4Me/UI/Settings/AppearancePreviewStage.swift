@@ -62,29 +62,34 @@ struct AppearancePreviewStage: View {
                 SettingsDivider()
                     .padding(.vertical, 10)
 
-                // Text Output Comparison
-                VStack(alignment: .leading, spacing: 12) {
+                // Text Output Comparison (左右布局)
+                HStack(alignment: .top, spacing: 18) {
                     // Raw Speech
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 5) {
                         Text(L("语音识别", "Recognized Speech"))
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(TF.settingsTextTertiary)
                         Text(Self.formattingSample)
                             .font(.system(size: 13))
                             .foregroundStyle(TF.settingsText)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+
+                    Divider()
+                        .frame(height: 52)
 
                     // Formatted Text
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 5) {
                         Text(L("文本输出", "Text Output"))
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(TF.settingsTextTertiary)
                         Text(formattedOutputText)
                             .font(.system(size: 13))
                             .foregroundStyle(TF.settingsText)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
                 .padding(.horizontal, 4)
                 .padding(.vertical, 4)

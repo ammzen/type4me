@@ -191,6 +191,18 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 dismissModeHint()
             }
         }
+        .onChange(of: effectiveShowsLiveTranscript) { _, showsLive in
+            guard state.barPhase == .recording else { return }
+            if showsLive && !state.segments.isEmpty {
+                let text = state.transcriptionText
+                let textWidth = measureText(text)
+                let needed = min(TF.barWidth, max(TF.barWidthCompact, textWidth + TF.recordingChromeWidth))
+                recordingPeakWidth = needed
+            } else {
+                let defaultWidth = min(TF.barWidth, max(TF.barWidthCompact, measureText(recordingDisplayText) + TF.recordingChromeWidth))
+                recordingPeakWidth = defaultWidth
+            }
+        }
         .onDisappear {
             modeHintTask?.cancel()
             transcriptHoverExitTask?.cancel()
@@ -208,6 +220,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .clipShape(Capsule())
             }
             .shadow(color: Color(white: 0.08, opacity: 0.5), radius: 5, x: 0, y: 0)
+            .animation(TF.springSnappy, value: capsuleWidth)
     }
 
     // MARK: - Content by Phase
