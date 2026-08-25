@@ -33,9 +33,14 @@ protocol FloatingBarState: AnyObject, Observable {
 }
 
 struct FloatingBarPresentation: Equatable {
+    var indicatorStyle: RecordingIndicatorStyle = .regular
     var visualStyle: RecordingVisualStyle
     var showsLiveTranscript: Bool
     var enablesHoverTranscriptPreview: Bool
+
+    var showsRecordingIndicator: Bool {
+        indicatorStyle == .compact || visualStyle.showsRecordingPanel
+    }
 }
 
 /// Dark-themed floating transcription bar.
@@ -68,12 +73,19 @@ struct FloatingBarView<S: FloatingBarState>: View {
     @State private var showsModeHint = false
     @State private var modeHintTask: Task<Void, Never>?
     @State private var recordingActionLocked = false
+    @AppStorage(RecordingIndicatorStyle.storageKey) private var indicatorStyle = RecordingIndicatorStyle.defaultValue
     @AppStorage(LiveTranscriptDisplayPreference.storageKey) private var showLiveTranscript = LiveTranscriptDisplayPreference.defaultValue
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
     @AppStorage(RecordingVisualStyle.storageKey) private var visualStyle = RecordingVisualStyle.defaultValue
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
 
     // MARK: - Presentation Resolution
+
+    private var effectiveIndicatorStyle: RecordingIndicatorStyle {
+        presentationOverride?.indicatorStyle
+            ?? RecordingIndicatorStyle(rawValue: indicatorStyle)
+            ?? .regular
+    }
 
     private var effectiveRecordingVisualStyle: RecordingVisualStyle {
         presentationOverride?.visualStyle
@@ -82,11 +94,22 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private var effectiveShowsLiveTranscript: Bool {
-        presentationOverride?.showsLiveTranscript ?? showLiveTranscript
+        guard effectiveIndicatorStyle == .regular else { return false }
+        return presentationOverride?.showsLiveTranscript ?? showLiveTranscript
     }
 
     private var effectiveHoverTranscriptPreview: Bool {
-        presentationOverride?.enablesHoverTranscriptPreview ?? hoverTranscriptPreview
+        guard effectiveIndicatorStyle == .regular else { return false }
+        return presentationOverride?.enablesHoverTranscriptPreview ?? hoverTranscriptPreview
+    }
+
+    private var usesCompactPresentation: Bool {
+        effectiveIndicatorStyle == .compact && state.barPhase != .hidden
+    }
+
+    private var usesCompactRecordingLayout: Bool {
+        effectiveIndicatorStyle == .compact
+            && (state.barPhase == .preparing || state.barPhase == .recording)
     }
 
     // MARK: - Transcript Popup
@@ -103,10 +126,15 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private var shouldRenderCapsule: Bool {
-        state.barPhase != .hidden && recordingVisualStyle.showsRecordingPanel
+        guard state.barPhase != .hidden else { return false }
+        if usesCompactPresentation {
+            return true
+        }
+        return recordingVisualStyle.showsRecordingPanel
     }
 
     private var showTranscriptPopup: Bool {
+        guard !usesCompactPresentation else { return false }
         guard recordingVisualStyle.showsRecordingPanel else { return false }
         guard showsTranscriptInCurrentPhase else { return false }
         if state.pinsTranscriptPopup {
@@ -126,9 +154,13 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private var activeTopOverlay: FloatingBarTopOverlay? {
-        guard recordingVisualStyle.showsRecordingPanel else { return nil }
+        if effectiveIndicatorStyle == .regular {
+            guard recordingVisualStyle.showsRecordingPanel else { return nil }
+        }
         if showTranscriptPopup { return .transcript }
-        if let hoveredAction, state.barPhase == .recording { return .action(hoveredAction) }
+        if let hoveredAction, state.barPhase == .recording || state.barPhase == .preparing {
+            return .action(hoveredAction)
+        }
         if showsModeHint,
            (state.barPhase == .preparing || state.barPhase == .recording) {
             return .mode
@@ -136,7 +168,53 @@ struct FloatingBarView<S: FloatingBarState>: View {
         return nil
     }
 
+    private var capsuleHeight: CGFloat {
+        usesCompactPresentation ? TF.compactIndicatorHeight : TF.barHeight
+    }
+
+    private var compactStatusIntrinsicWidth: CGFloat {
+        let textFont = NSFont.systemFont(ofSize: 12, weight: .medium)
+        func measure(_ str: String) -> CGFloat {
+            ceil((str as NSString).size(withAttributes: [.font: textFont]).width)
+        }
+
+        let basePadding: CGFloat = 20.0
+        let iconWidth: CGFloat = 18.0
+
+        switch state.barPhase {
+        case .preparing, .recording, .hidden:
+            return TF.compactIndicatorWidth
+        case .processing, .recovering:
+            let textW = measure(state.effectiveProcessingLabel)
+            return basePadding + iconWidth + textW
+        case .done:
+            let textW = measure(state.feedbackMessage)
+            var actionW: CGFloat = 0
+            if state.activityKind == .revise && state.latestReviseUndoTicketID != nil {
+                actionW = measure(L("撤销", "Undo")) + 22.0
+            }
+            return basePadding + iconWidth + textW + (actionW > 0 ? (actionW + 6.0) : 0)
+        case .error:
+            let textW = measure(state.feedbackMessage)
+            return basePadding + iconWidth + textW
+        }
+    }
+
+    private var compactCapsuleWidth: CGFloat {
+        switch state.barPhase {
+        case .preparing, .recording:
+            return TF.compactIndicatorWidth
+        case .processing, .recovering, .done, .error:
+            return min(TF.compactStatusMaxWidth, max(44.0, compactStatusIntrinsicWidth))
+        case .hidden:
+            return 0
+        }
+    }
+
     private var capsuleWidth: CGFloat {
+        if usesCompactPresentation {
+            return compactCapsuleWidth
+        }
         switch state.barPhase {
         case .preparing:
             let defaultWidth = measureText(recordingDisplayText) + TF.recordingChromeWidth
@@ -176,7 +254,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
             handlePhaseChange(newPhase)
         }
         .onChange(of: state.segments) { _, newSegments in
-            guard state.barPhase == .recording, effectiveShowsLiveTranscript else { return }
+            guard !usesCompactPresentation, state.barPhase == .recording, effectiveShowsLiveTranscript else { return }
             let text = newSegments.map(\.text).joined()
             let textWidth = measureText(text)
             let needed = min(TF.barWidth, max(TF.barWidthCompact, textWidth + TF.recordingChromeWidth))
@@ -187,12 +265,12 @@ struct FloatingBarView<S: FloatingBarState>: View {
             }
         }
         .onChange(of: state.transcriptionText) { _, text in
-            if !text.isEmpty {
+            if !text.isEmpty && !usesCompactPresentation {
                 dismissModeHint()
             }
         }
         .onChange(of: effectiveShowsLiveTranscript) { _, showsLive in
-            guard state.barPhase == .recording else { return }
+            guard !usesCompactPresentation, state.barPhase == .recording else { return }
             if showsLive && !state.segments.isEmpty {
                 let text = state.transcriptionText
                 let textWidth = measureText(text)
@@ -213,7 +291,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var capsuleBar: some View {
         barContent
-            .frame(width: capsuleWidth, height: TF.barHeight)
+            .frame(width: capsuleWidth, height: capsuleHeight)
             .clipShape(Capsule())
             .background {
                 capsuleBackground
@@ -221,16 +299,42 @@ struct FloatingBarView<S: FloatingBarState>: View {
             }
             .shadow(color: Color(white: 0.08, opacity: 0.5), radius: 5, x: 0, y: 0)
             .animation(TF.springSnappy, value: capsuleWidth)
+            .animation(TF.springSnappy, value: capsuleHeight)
     }
 
     // MARK: - Content by Phase
 
     @ViewBuilder
     private var barContent: some View {
+        if usesCompactPresentation {
+            compactPhaseContent
+        } else {
+            regularPhaseContent
+        }
+    }
+
+    @ViewBuilder
+    private var compactPhaseContent: some View {
         switch state.barPhase {
-        case .preparing:
-            recordingContent
-        case .recording:
+        case .preparing, .recording:
+            compactRecordingContent
+        case .processing:
+            compactStatusContent(phase: .processing, text: state.effectiveProcessingLabel)
+        case .recovering:
+            compactStatusContent(phase: .recovering, text: state.effectiveProcessingLabel)
+        case .done:
+            compactDoneContent
+        case .error:
+            compactStatusContent(phase: .error, text: state.feedbackMessage)
+        case .hidden:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var regularPhaseContent: some View {
+        switch state.barPhase {
+        case .preparing, .recording:
             recordingContent
         case .processing:
             processingContent
@@ -242,6 +346,151 @@ struct FloatingBarView<S: FloatingBarState>: View {
             errorContent
         case .hidden:
             EmptyView()
+        }
+    }
+
+    private var compactRecordingContent: some View {
+        HStack(spacing: 0) {
+            compactRecordingButton(.finish)
+                .frame(width: 32, height: TF.compactIndicatorHeight)
+
+            CompactAudioIndicator(meter: state.audioLevel)
+                .frame(maxWidth: .infinity, maxHeight: TF.compactIndicatorHeight)
+
+            compactRecordingButton(.cancel)
+                .frame(width: 32, height: TF.compactIndicatorHeight)
+        }
+        .frame(width: TF.compactIndicatorWidth, height: TF.compactIndicatorHeight)
+    }
+
+    @ViewBuilder
+    private func compactStatusContent(phase: FloatingBarPhase, text: String) -> some View {
+        HStack(spacing: 6) {
+            compactPhaseIcon(phase)
+
+            Text(text)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: TF.compactIndicatorHeight)
+        .accessibilityLabel(text)
+    }
+
+    @ViewBuilder
+    private var compactDoneContent: some View {
+        HStack(spacing: 6) {
+            compactDoneIcon
+
+            Text(state.feedbackMessage)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            if state.activityKind == .revise && state.latestReviseUndoTicketID != nil {
+                Button(action: {
+                    state.performReviseUndo()
+                }) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 9, weight: .semibold))
+                        Text(L("撤销", "Undo"))
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundStyle(TF.floatingBackground)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(TF.compactIndicatorActive)
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: TF.compactIndicatorHeight)
+        .accessibilityLabel(state.feedbackMessage)
+    }
+
+    @ViewBuilder
+    private func compactPhaseIcon(_ phase: FloatingBarPhase) -> some View {
+        switch phase {
+        case .processing:
+            ProgressView()
+                .scaleEffect(0.42)
+                .frame(width: 12, height: 12)
+        case .recovering:
+            Circle()
+                .fill(TF.recording)
+                .frame(width: 6, height: 6)
+                .shadow(color: TF.recording.opacity(0.4), radius: 2)
+        case .error:
+            if let icon = feedbackIcon {
+                Image(systemName: icon.symbol)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(icon.color)
+            } else {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(TF.settingsAccentRed)
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var compactDoneIcon: some View {
+        if let icon = feedbackIcon {
+            Image(systemName: icon.symbol)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(icon.color)
+        } else {
+            Image(systemName: "checkmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(TF.success)
+        }
+    }
+
+    private func compactRecordingButton(_ action: RecordingControlAction) -> some View {
+        ZStack {
+            Circle()
+                .fill(TF.compactIndicatorActive)
+                .frame(
+                    width: TF.compactIndicatorControlVisualSize,
+                    height: TF.compactIndicatorControlVisualSize
+                )
+                .overlay {
+                    if action == .finish {
+                        RoundedRectangle(cornerRadius: 1, style: .continuous)
+                            .fill(TF.floatingBackground)
+                            .frame(width: 6, height: 6)
+                    } else {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .heavy))
+                            .foregroundStyle(TF.floatingBackground)
+                    }
+                }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .accessibilityLabel(action == .finish
+            ? L("完成录制", "Finish Recording")
+            : L("取消录制", "Cancel Recording"))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction {
+            triggerRecordingAction(action)
+        }
+        .overlay {
+            FloatingBarButtonInteraction(
+                onHoverChanged: { hovered in
+                    guard !recordingActionLocked else { return }
+                    hoveredAction = hovered ? action : (hoveredAction == action ? nil : hoveredAction)
+                },
+                onClick: { triggerRecordingAction(action) }
+            )
         }
     }
 
@@ -449,27 +698,30 @@ struct FloatingBarView<S: FloatingBarState>: View {
         ZStack {
             TF.floatingBackground
 
-            if state.barPhase == .recording && recordingVisualStyle.showsBackgroundEffect {
-                AudioRipple(meter: state.audioLevel, style: recordingVisualStyle)
-                    .id(recordingVisualStyle.rawValue)
-            }
+            if !usesCompactPresentation {
+                if state.barPhase == .recording,
+                   recordingVisualStyle.showsBackgroundEffect {
+                    AudioRipple(meter: state.audioLevel, style: recordingVisualStyle)
+                        .id(recordingVisualStyle.rawValue)
+                }
 
-            if (state.barPhase == .processing || state.barPhase == .recovering || state.barPhase == .done),
-               recordingVisualStyle.showsBackgroundEffect {
-                ProcessingProgress(
-                    style: recordingVisualStyle,
-                    finishTime: state.processingFinishTime,
-                    processingStartDate: processingStartDate,
-                    doneStartDate: doneStartDate
-                )
-            }
+                if (state.barPhase == .processing || state.barPhase == .recovering || state.barPhase == .done),
+                   recordingVisualStyle.showsBackgroundEffect {
+                    ProcessingProgress(
+                        style: recordingVisualStyle,
+                        finishTime: state.processingFinishTime,
+                        processingStartDate: processingStartDate,
+                        doneStartDate: doneStartDate
+                    )
+                }
 
-            if state.barPhase == .error {
-                LinearGradient(
-                    colors: [TF.settingsAccentRed.opacity(0.16), .clear],
-                    startPoint: .leading,
-                    endPoint: UnitPoint(x: 0.45, y: 0.5)
-                )
+                if state.barPhase == .error {
+                    LinearGradient(
+                        colors: [TF.settingsAccentRed.opacity(0.16), .clear],
+                        startPoint: .leading,
+                        endPoint: UnitPoint(x: 0.45, y: 0.5)
+                    )
+                }
             }
         }
     }
@@ -599,9 +851,14 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private func alignedActionHint(_ action: RecordingControlAction) -> some View {
-        let distanceFromCenter = capsuleWidth / 2
-            - TF.recordingEdgeInset
-            - TF.recordingControlSize / 2
+        let distanceFromCenter: CGFloat
+        if usesCompactRecordingLayout {
+            distanceFromCenter = capsuleWidth / 2 - 16
+        } else {
+            distanceFromCenter = capsuleWidth / 2
+                - TF.recordingEdgeInset
+                - TF.recordingControlSize / 2
+        }
         let horizontalOffset = action == .finish ? -distanceFromCenter : distanceFromCenter
 
         return actionHintBubble(action)

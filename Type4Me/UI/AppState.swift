@@ -24,6 +24,30 @@ enum RecordingControlAction: Equatable {
     case cancel
 }
 
+enum RecordingIndicatorStyle: String, CaseIterable {
+    static let storageKey = "tf_recordingIndicatorStyle"
+    static let defaultValue = Self.regular.rawValue
+
+    case regular
+    case compact
+
+    var displayName: String {
+        switch self {
+        case .regular:
+            return L("常规", "Regular")
+        case .compact:
+            return L("紧凑型", "Compact")
+        }
+    }
+
+    static func current(userDefaults: UserDefaults = .standard) -> Self {
+        guard let raw = userDefaults.string(forKey: storageKey),
+              let style = Self(rawValue: raw)
+        else { return .regular }
+        return style
+    }
+}
+
 enum RecordingVisualStyle: String, CaseIterable {
     static let storageKey = "tf_visualStyle"
     static let defaultValue = Self.timeline.rawValue
