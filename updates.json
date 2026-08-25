@@ -1,6 +1,17 @@
 {
-  "latest": "2.1.1",
+  "latest": "2.2.0",
   "releases": [
+    {
+      "version": "2.2.0",
+      "date": "2026-08-25",
+      "notes": "- 新增菜单栏运行控制中心，可查看录音状态与输入设备，并切换模式、麦克风、ASR 和翻译目标\n- 支持 type4me://start、stop、toggle URL Scheme，方便 Stream Deck、快捷指令、Raycast 等自动化工具控制录音\n- 新增小米 MiMo-V2.5-ASR 批量识别服务，并为所有非实时服务提供统一标记\n- 新增外观设置、录音条与文本输出实时预览，以及独立的紧凑型录音指示条\n- 改进跨 App 文本注入、剪贴板留存、后台 URL 调用、批量识别异常处理和系统模式本地化",
+      "cloud_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-cloud.dmg",
+      "cloud_dmg_size": 11071334,
+      "cloud_dmg_sha256": "6fea1b1284adebd60dc6e453b14bb28f9b5009bf821f0ba5e16e79db2b7552a6",
+      "local_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-local-apple-silicon.dmg",
+      "local_dmg_size": 716765001,
+      "local_dmg_sha256": "1fef184a033685c32295e7e0533737a5c7b3fba76b14f5bd83fabfa97ff2292d"
+    },
     {
       "version": "2.1.1",
       "date": "2026-08-23",
