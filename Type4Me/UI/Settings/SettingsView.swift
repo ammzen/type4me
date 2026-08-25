@@ -10,6 +10,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case modes
     case history
     case preferences
+    case appearance
     case about
     case debug
     #if HAS_CLOUD_SUBSCRIPTION
@@ -38,6 +39,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .modes:       return L("模式", "Modes")
         case .history:     return L("历史", "History")
         case .preferences: return L("设置", "Settings")
+        case .appearance:  return L("外观", "Appearance")
         case .about:       return L("关于", "About")
         case .debug:       return L("调试", "Debug")
         #if HAS_CLOUD_SUBSCRIPTION
@@ -55,6 +57,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .modes:       return L("推理与默认行为", "Processing & defaults")
         case .history:     return L("会话与日志保留", "Sessions & logs")
         case .preferences: return L("偏好与系统权限", "Preferences & permissions")
+        case .appearance:  return L("录音显示与文本输出", "Recording display & text output")
         case .about:       return L("版本、许可证与支持", "Version, license & support")
         case .debug:       return L("运行状态、日志与诊断", "Runtime, logs & diagnostics")
         #if HAS_CLOUD_SUBSCRIPTION
@@ -72,6 +75,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .modes:       return "slider.horizontal.3"
         case .history:     return "clock.arrow.circlepath"
         case .preferences: return "gearshape"
+        case .appearance:  return "paintbrush"
         case .about:       return "questionmark.circle"
         case .debug:       return "ladybug"
         #if HAS_CLOUD_SUBSCRIPTION
@@ -341,10 +345,10 @@ struct SettingsView: View {
     private var settingsSubtabs: [SettingsTab] {
         #if HAS_CLOUD_SUBSCRIPTION
         if edition == .member {
-            return [.preferences, .modes, .about]
+            return [.preferences, .appearance, .modes, .about]
         }
         #endif
-        return [.preferences, .models, .modes, .about]
+        return [.preferences, .appearance, .models, .modes, .about]
     }
 
     private var settingsSectionPicker: some View {
@@ -442,7 +446,7 @@ struct SettingsView: View {
             fixedPage { VocabularyTab() }
         case .history:
             fixedPage { HistoryTab(isActive: selectedTab == .history) }
-        case .preferences, .models, .modes, .about:
+        case .preferences, .appearance, .models, .modes, .about:
             settingsHubPage
         case .debug:
             if debugPanelEnabled {
@@ -476,6 +480,8 @@ struct SettingsView: View {
         switch selectedTab {
         case .preferences:
             settingsScrollableContent { GeneralSettingsTab(showsHeader: false) }
+        case .appearance:
+            settingsScrollableContent { AppearanceSettingsTab() }
         case .models:
             #if HAS_CLOUD_SUBSCRIPTION
             if edition != .member {

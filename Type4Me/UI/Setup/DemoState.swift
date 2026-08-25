@@ -27,6 +27,12 @@ final class DemoState {
 
     // MARK: Private
 
+    enum DemoMode {
+        case quickLoop
+        case appearancePreview
+    }
+
+    private(set) var demoMode: DemoMode = .quickLoop
     private var demoTask: Task<Void, Never>?
     private var audioTimer: Timer?
 
@@ -35,12 +41,33 @@ final class DemoState {
     /// Starts the auto-looping quick mode demo animation.
     func startQuickModeDemo() {
         stop()
+        demoMode = .quickLoop
         demoTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.runOneCycle()
             }
         }
+    }
+
+    /// Starts a stable recording state with simulated audio for Appearance Preview.
+    func startAppearancePreview(sampleText: String) {
+        stop()
+        demoMode = .appearancePreview
+        segments = [
+            TranscriptionSegment(text: sampleText, isConfirmed: true)
+        ]
+        recordingStartDate = Date()
+        barPhase = .recording
+        startAudioSimulation()
+    }
+
+    /// Updates the sample text shown in Appearance Preview without resetting timers.
+    func updateAppearancePreview(sampleText: String) {
+        guard demoMode == .appearancePreview, barPhase == .recording else { return }
+        segments = [
+            TranscriptionSegment(text: sampleText, isConfirmed: true)
+        ]
     }
 
     /// Stops all timers and resets state.
@@ -53,6 +80,7 @@ final class DemoState {
         audioLevel.current = 0
         recordingStartDate = nil
         processingFinishTime = nil
+        demoMode = .quickLoop
     }
 
     // MARK: - One Demo Cycle
@@ -137,6 +165,7 @@ extension DemoState: FloatingBarState {
 
     func performRecordingControlAction(_ action: RecordingControlAction) {
         guard barPhase == .preparing || barPhase == .recording else { return }
+        guard demoMode == .quickLoop else { return }
         switch action {
         case .finish:
             barPhase = .processing
