@@ -474,7 +474,8 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     private var reviseHotkeyRow: some View {
         settingsOptionRow(
             L("改口快捷键", "Revise Hotkey"),
-            subtitle: L("默认 fn + R", "Default: fn + R")
+            subtitle: L("默认 fn + R", "Default: fn + R"),
+            controlWidth: SettingsControlWidth.provider
         ) {
             HotkeyRecorderView(
                 keyCode: Binding(
