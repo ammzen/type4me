@@ -32,6 +32,12 @@ protocol FloatingBarState: AnyObject, Observable {
     func performReviseUndo()
 }
 
+struct FloatingBarPresentation: Equatable {
+    var visualStyle: RecordingVisualStyle
+    var showsLiveTranscript: Bool
+    var enablesHoverTranscriptPreview: Bool
+}
+
 /// Dark-themed floating transcription bar.
 ///
 /// Design: state changes are immediate; recording starts directly in the full
@@ -42,7 +48,15 @@ protocol FloatingBarState: AnyObject, Observable {
 struct FloatingBarView<S: FloatingBarState>: View {
 
     let state: S
+    let presentationOverride: FloatingBarPresentation?
 
+    init(
+        state: S,
+        presentationOverride: FloatingBarPresentation? = nil
+    ) {
+        self.state = state
+        self.presentationOverride = presentationOverride
+    }
 
     /// High-water mark: only grows during recording, never shrinks (prevents ASR correction jitter)
     @State private var recordingPeakWidth: CGFloat = TF.barHeight
@@ -59,15 +73,31 @@ struct FloatingBarView<S: FloatingBarState>: View {
     @AppStorage(RecordingVisualStyle.storageKey) private var visualStyle = RecordingVisualStyle.defaultValue
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
 
+    // MARK: - Presentation Resolution
+
+    private var effectiveRecordingVisualStyle: RecordingVisualStyle {
+        presentationOverride?.visualStyle
+            ?? RecordingVisualStyle(rawValue: visualStyle)
+            ?? .timeline
+    }
+
+    private var effectiveShowsLiveTranscript: Bool {
+        presentationOverride?.showsLiveTranscript ?? showLiveTranscript
+    }
+
+    private var effectiveHoverTranscriptPreview: Bool {
+        presentationOverride?.enablesHoverTranscriptPreview ?? hoverTranscriptPreview
+    }
+
     // MARK: - Transcript Popup
 
     private var recordingVisualStyle: RecordingVisualStyle {
-        RecordingVisualStyle(rawValue: visualStyle) ?? .timeline
+        effectiveRecordingVisualStyle
     }
 
     private var showsTranscriptInCurrentPhase: Bool {
         LiveTranscriptDisplayPreference.showsTranscript(
-            isEnabled: showLiveTranscript,
+            isEnabled: effectiveShowsLiveTranscript,
             phase: state.barPhase
         )
     }
@@ -86,7 +116,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
             return !state.segments.isEmpty
         }
         guard recordingVisualStyle.showsRecordingPanel,
-              hoverTranscriptPreview,
+              effectiveHoverTranscriptPreview,
               isTranscriptHoverActive,
               state.barPhase == .recording,
               !state.segments.isEmpty
@@ -112,7 +142,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
             let defaultWidth = measureText(recordingDisplayText) + TF.recordingChromeWidth
             return max(TF.barWidthCompact, defaultWidth)
         case .recording:
-            guard showLiveTranscript, !state.segments.isEmpty else {
+            guard effectiveShowsLiveTranscript, !state.segments.isEmpty else {
                 let defaultWidth = measureText(recordingDisplayText) + TF.recordingChromeWidth
                 return max(TF.barWidthCompact, defaultWidth)
             }
@@ -146,7 +176,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
             handlePhaseChange(newPhase)
         }
         .onChange(of: state.segments) { _, newSegments in
-            guard state.barPhase == .recording, showLiveTranscript else { return }
+            guard state.barPhase == .recording, effectiveShowsLiveTranscript else { return }
             let text = newSegments.map(\.text).joined()
             let textWidth = measureText(text)
             let needed = min(TF.barWidth, max(TF.barWidthCompact, textWidth + TF.recordingChromeWidth))
@@ -159,6 +189,18 @@ struct FloatingBarView<S: FloatingBarState>: View {
         .onChange(of: state.transcriptionText) { _, text in
             if !text.isEmpty {
                 dismissModeHint()
+            }
+        }
+        .onChange(of: effectiveShowsLiveTranscript) { _, showsLive in
+            guard state.barPhase == .recording else { return }
+            if showsLive && !state.segments.isEmpty {
+                let text = state.transcriptionText
+                let textWidth = measureText(text)
+                let needed = min(TF.barWidth, max(TF.barWidthCompact, textWidth + TF.recordingChromeWidth))
+                recordingPeakWidth = needed
+            } else {
+                let defaultWidth = min(TF.barWidth, max(TF.barWidthCompact, measureText(recordingDisplayText) + TF.recordingChromeWidth))
+                recordingPeakWidth = defaultWidth
             }
         }
         .onDisappear {
@@ -178,6 +220,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .clipShape(Capsule())
             }
             .shadow(color: Color(white: 0.08, opacity: 0.5), radius: 5, x: 0, y: 0)
+            .animation(TF.springSnappy, value: capsuleWidth)
     }
 
     // MARK: - Content by Phase
@@ -223,7 +266,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
             .mask {
-                if showLiveTranscript && !state.segments.isEmpty && recordingPeakWidth >= TF.barWidth {
+                if effectiveShowsLiveTranscript && !state.segments.isEmpty && recordingPeakWidth >= TF.barWidth {
                     HStack(spacing: 0) {
                         LinearGradient(
                             colors: [.clear, .white],
@@ -246,7 +289,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private var recordingDisplayText: String {
-        guard showLiveTranscript, !state.segments.isEmpty else {
+        guard effectiveShowsLiveTranscript, !state.segments.isEmpty else {
             return state.activityKind == .revise ? L("说说你想怎么改", "Say how to revise") : L("倾听中", "Listening")
         }
         return state.transcriptionText

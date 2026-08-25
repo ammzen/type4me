@@ -18,8 +18,9 @@ struct HotkeyRecorderView: View {
             // Display current hotkey
             Text(displayText)
                 .font(.system(size: 13))
+                .lineLimit(1)
                 .foregroundStyle(isRecording ? TF.settingsAccentRed : TF.settingsText)
-                .frame(minWidth: 106, minHeight: 36, alignment: .leading)
+                .frame(minWidth: 106, minHeight: 32, alignment: .leading)
                 .padding(.horizontal, 12)
                 .background(
                     RoundedRectangle(cornerRadius: 8).fill(TF.settingsCardAlt)
@@ -36,17 +37,17 @@ struct HotkeyRecorderView: View {
 
             if isRecording {
                 Button(L("取消", "Cancel")) { stopRecording() }
-                    .recorderControlButtonStyle()
+                    .buttonStyle(RecorderControlButtonStyle())
             } else {
                 Button(L("录制", "Record")) { startRecording() }
-                    .recorderControlButtonStyle()
+                    .buttonStyle(RecorderControlButtonStyle())
 
                 if keyCode != nil {
                     Button(L("清除", "Clear")) {
                         keyCode = nil
                         modifiers = nil
                     }
-                    .recorderControlButtonStyle(isDestructive: true)
+                    .buttonStyle(RecorderControlButtonStyle(isDestructive: true))
                 }
             }
         }
@@ -355,17 +356,27 @@ struct HotkeyRecorderView: View {
     }
 }
 
-private extension View {
-    func recorderControlButtonStyle(isDestructive: Bool = false) -> some View {
-        self
-            .buttonStyle(.plain)
+private struct RecorderControlButtonStyle: ButtonStyle {
+    var isDestructive: Bool = false
+    @State private var isHovered = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
             .font(.system(size: 12, weight: .medium))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: true)
             .foregroundStyle(isDestructive ? TF.settingsTextTertiary : TF.settingsText)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .frame(height: 32)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(TF.settingsCardAlt)
+                    .fill(isHovered ? TF.settingsCardAlt.opacity(0.85) : TF.settingsCardAlt)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(TF.settingsBorder.opacity(isHovered ? 0.8 : 0.4), lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.75 : 1.0)
+            .onHover { isHovered = $0 }
     }
 }
