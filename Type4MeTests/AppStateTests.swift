@@ -254,8 +254,12 @@ final class AppStateTests: XCTestCase {
         )
         XCTAssertEqual(shortBar.panelSize, NSSize(width: 196, height: 71))
         XCTAssertEqual(
-            FloatingBarPanelLayout.fallback(for: .compact).panelSize,
+            FloatingBarPanelLayout.fallback(for: .compact, showsLiveTranscript: false).panelSize,
             NSSize(width: 196, height: 40)
+        )
+        XCTAssertEqual(
+            FloatingBarPanelLayout.fallback(for: .compact, showsLiveTranscript: true).panelSize,
+            NSSize(width: 196, height: 64)
         )
 
         let fullBar = FloatingBarPanelLayout(

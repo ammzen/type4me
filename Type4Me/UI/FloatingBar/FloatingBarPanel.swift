@@ -20,10 +20,21 @@ struct FloatingBarPanelLayout: Equatable {
         )
     }
 
-    static func fallback(for style: RecordingIndicatorStyle) -> FloatingBarPanelLayout {
+    static func fallback(
+        for style: RecordingIndicatorStyle,
+        showsLiveTranscript: Bool = LiveTranscriptDisplayPreference.isEnabled()
+    ) -> FloatingBarPanelLayout {
+        let height: CGFloat
+        if style == .compact {
+            height = showsLiveTranscript
+                ? TF.compactTranscriptExpandedHeight
+                : TF.compactIndicatorHeight
+        } else {
+            height = TF.barHeight
+        }
         let size = NSSize(
             width: TF.barWidthCompact,
-            height: style == .compact ? TF.compactIndicatorHeight : TF.barHeight
+            height: height
         )
         return FloatingBarPanelLayout(contentSize: size, capsuleSize: size)
     }

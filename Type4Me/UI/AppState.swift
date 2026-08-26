@@ -135,6 +135,11 @@ enum LiveTranscriptDisplayPreference {
     static let storageKey = "tf_showLiveTranscript"
     static let defaultValue = true
 
+    static func isEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        guard userDefaults.object(forKey: storageKey) != nil else { return defaultValue }
+        return userDefaults.bool(forKey: storageKey)
+    }
+
     /// Disabling live text only affects the active recording phase. Recovery
     /// and final-result feedback can still show text that needs the user's attention.
     static func showsTranscript(isEnabled: Bool, phase: FloatingBarPhase) -> Bool {
