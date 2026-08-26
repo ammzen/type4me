@@ -524,6 +524,21 @@ actor HistoryStore {
 
     // MARK: - Statistics
 
+    /// Effective recognition/activity statuses that represent successful or
+    /// delivered user input (including completed dictations, fallbacks, and Mac actions).
+    static let activeStatuses: [String] = [
+        "completed",
+        "stream_recovered",
+        "llm_error",
+        "translation_error",
+        "action_success",
+        "action_failed",
+        "action_unmatched"
+    ]
+
+    static let activeStatusSQLCondition: String =
+        "status IN ('completed', 'stream_recovered', 'llm_error', 'translation_error', 'action_success', 'action_failed', 'action_unmatched')"
+
     struct Statistics: Sendable {
         let totalDuration: Double
         let totalCharacters: Int
@@ -532,6 +547,25 @@ actor HistoryStore {
         var averageSpeed: Double {
             guard totalDuration > 0 else { return 0 }
             return Double(totalCharacters) / totalDuration * 60  // 字/分钟
+        }
+    }
+
+    struct ActivityDay: Equatable, Sendable {
+        let dayIdentifier: String
+        let recordCount: Int
+        let durationSeconds: Double
+        let characterCount: Int
+
+        init(
+            dayIdentifier: String,
+            recordCount: Int,
+            durationSeconds: Double = 0,
+            characterCount: Int = 0
+        ) {
+            self.dayIdentifier = dayIdentifier
+            self.recordCount = recordCount
+            self.durationSeconds = durationSeconds
+            self.characterCount = characterCount
         }
     }
 
@@ -548,7 +582,7 @@ actor HistoryStore {
 
     /// 获取统计信息，可选日期范围过滤（ISO8601 字符串）
     func getStatistics(from: String? = nil, to: String? = nil) async -> Statistics {
-        var conditions: [String] = []
+        var conditions: [String] = [Self.activeStatusSQLCondition]
         var params: [String] = []
         if let from {
             conditions.append("created_at >= ?")
@@ -558,7 +592,7 @@ actor HistoryStore {
             conditions.append("created_at < ?")
             params.append(to)
         }
-        let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        let whereClause = "WHERE " + conditions.joined(separator: " AND ")
         let sql = """
         SELECT
             COALESCE(SUM(CASE WHEN character_count IS NOT NULL THEN duration_seconds ELSE 0 END), 0),
@@ -583,6 +617,37 @@ actor HistoryStore {
         return Statistics(totalDuration: 0, totalCharacters: 0, recordCount: 0)
     }
 
+    /// Returns one compact row per local calendar day that contains an active
+    /// dictation or action. The dashboard uses this for its heatmap and streak summaries,
+    /// avoiding loading dictated text or full history records into memory.
+    func getActivityDays() async -> [ActivityDay] {
+        let sql = """
+        SELECT
+            date(created_at, 'localtime') AS local_day,
+            COUNT(*),
+            COALESCE(SUM(duration_seconds), 0),
+            COALESCE(SUM(COALESCE(character_count, 0)), 0)
+        FROM recognition_history
+        WHERE \(Self.activeStatusSQLCondition)
+        GROUP BY local_day
+        ORDER BY local_day ASC;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        var days: [ActivityDay] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            days.append(ActivityDay(
+                dayIdentifier: column(stmt, 0),
+                recordCount: Int(sqlite3_column_int(stmt, 1)),
+                durationSeconds: sqlite3_column_double(stmt, 2),
+                characterCount: Int(sqlite3_column_int(stmt, 3))
+            ))
+        }
+        return days
+    }
+
     func getUsageBreakdown(now: Date = Date()) async -> [UsageBreakdown] {
         let iso = ISO8601DateFormatter()
         let lastDay = iso.string(from: now.addingTimeInterval(-24 * 60 * 60))
@@ -604,6 +669,7 @@ actor HistoryStore {
             COALESCE(SUM(duration_seconds), 0),
             COUNT(*)
         FROM recognition_history
+        WHERE \(Self.activeStatusSQLCondition)
         GROUP BY 1
         ORDER BY CASE WHEN model_name = ? THEN 1 ELSE 0 END,
                  5 DESC,

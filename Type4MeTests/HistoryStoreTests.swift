@@ -456,6 +456,94 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(rows.dropLast().map(\.allTimeDuration), rows.dropLast().map(\.allTimeDuration).sorted(by: >))
     }
 
+    func testActivityDaysGroupsCompletedRecordsByLocalCalendarDay() async {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+
+        await store.insert(HistoryRecord(
+            id: "today-1", createdAt: today.addingTimeInterval(60), durationSeconds: 1,
+            rawText: "a", processingMode: nil, processedText: nil,
+            finalText: "a", status: "completed", characterCount: 1, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "today-2", createdAt: today.addingTimeInterval(120), durationSeconds: 1,
+            rawText: "b", processingMode: nil, processedText: nil,
+            finalText: "b", status: "action_success", characterCount: 2, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "yesterday", createdAt: yesterday.addingTimeInterval(60), durationSeconds: 3,
+            rawText: "c", processingMode: nil, processedText: nil,
+            finalText: "c", status: "stream_recovered", characterCount: 5, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "cancelled", createdAt: today.addingTimeInterval(180), durationSeconds: 10,
+            rawText: "d", processingMode: nil, processedText: nil,
+            finalText: "d", status: "cancelled", characterCount: 10, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "cancelled-processed", createdAt: today.addingTimeInterval(200), durationSeconds: 10,
+            rawText: "e", processingMode: nil, processedText: nil,
+            finalText: "e", status: "cancelled_processed", characterCount: 10, asrProvider: nil
+        ))
+
+        let rows = await store.getActivityDays()
+        let byDay = Dictionary(uniqueKeysWithValues: rows.map { ($0.dayIdentifier, $0.recordCount) })
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+
+        XCTAssertEqual(byDay[formatter.string(from: today)], 2)
+        XCTAssertEqual(byDay[formatter.string(from: yesterday)], 1)
+        let todayRow = rows.first { $0.dayIdentifier == formatter.string(from: today) }
+        XCTAssertEqual(todayRow?.durationSeconds ?? 0, 2, accuracy: 0.01)
+        XCTAssertEqual(todayRow?.characterCount, 3)
+        XCTAssertEqual(rows.count, 2)
+    }
+
+    func testStatisticsFiltersByActiveStatusesAndDateRange() async {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let today = calendar.startOfDay(for: Date())
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+
+        await store.insert(HistoryRecord(
+            id: "stat-1", createdAt: today.addingTimeInterval(10), durationSeconds: 30,
+            rawText: "hello", processingMode: nil, processedText: nil,
+            finalText: "hello", status: "completed", characterCount: 5, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "stat-2", createdAt: today.addingTimeInterval(20), durationSeconds: 30,
+            rawText: "action", processingMode: nil, processedText: nil,
+            finalText: "action", status: "action_success", characterCount: 6, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "stat-3", createdAt: yesterday.addingTimeInterval(10), durationSeconds: 60,
+            rawText: "yesterday", processingMode: nil, processedText: nil,
+            finalText: "yesterday", status: "llm_error", characterCount: 9, asrProvider: nil
+        ))
+        await store.insert(HistoryRecord(
+            id: "stat-cancelled", createdAt: today.addingTimeInterval(30), durationSeconds: 100,
+            rawText: "cancel", processingMode: nil, processedText: nil,
+            finalText: "cancel", status: "cancelled_unprocessed", characterCount: 6, asrProvider: nil
+        ))
+
+        let allStats = await store.getStatistics()
+        XCTAssertEqual(allStats.recordCount, 3)
+        XCTAssertEqual(allStats.totalDuration, 120, accuracy: 0.01)
+        XCTAssertEqual(allStats.totalCharacters, 20)
+        XCTAssertEqual(allStats.averageSpeed, 10, accuracy: 0.01)
+
+        let iso = ISO8601DateFormatter()
+        let todayStats = await store.getStatistics(from: iso.string(from: today))
+        XCTAssertEqual(todayStats.recordCount, 2)
+        XCTAssertEqual(todayStats.totalDuration, 60, accuracy: 0.01)
+        XCTAssertEqual(todayStats.totalCharacters, 11)
+    }
+
     func testShrinkMemoryDoesNotThrowOrCorrupt() async {
         let record = HistoryRecord(
             id: UUID().uuidString, createdAt: Date(), durationSeconds: 1.0,
