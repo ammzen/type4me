@@ -11,6 +11,29 @@ final class HomeActivitySummaryTests: XCTestCase {
         XCTAssertEqual(veryWide.weekCount, 104)
     }
 
+    func testHeatmapActivityLevelThresholds() {
+        // 0 records -> Level 0
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 0, recordCount: 0), 0)
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 100, recordCount: 0), 0)
+
+        // >0 records with 0...500 characters (including 0 characters floor) -> Level 1
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 0, recordCount: 1), 1)
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 1, recordCount: 1), 1)
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 500, recordCount: 2), 1)
+
+        // 501...2000 characters -> Level 2
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 501, recordCount: 1), 2)
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 2000, recordCount: 5), 2)
+
+        // 2001...5000 characters -> Level 3
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 2001, recordCount: 1), 3)
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 5000, recordCount: 10), 3)
+
+        // 5001+ characters -> Level 4
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 5001, recordCount: 1), 4)
+        XCTAssertEqual(HomeHeatmapLayout.activityLevel(characterCount: 20000, recordCount: 20), 4)
+    }
+
     func testSummarizesActiveAndLongestStreaks() {
         let fixture = makeFixture()
         let days = [
@@ -64,6 +87,33 @@ final class HomeActivitySummaryTests: XCTestCase {
 
         XCTAssertEqual(summary.currentStreak, 0)
         XCTAssertEqual(summary.longestStreak, 2)
+    }
+
+    func testStreakCalculationWithNonGregorianSystemCalendar() {
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = TimeZone(secondsFromGMT: 8 * 60 * 60)!
+        let today = gregorian.date(from: DateComponents(
+            year: 2026, month: 8, day: 25, hour: 12
+        ))!
+
+        var buddhistCalendar = Calendar(identifier: .buddhist)
+        buddhistCalendar.timeZone = gregorian.timeZone
+
+        let days = [
+            HistoryStore.ActivityDay(dayIdentifier: "2026-08-23", recordCount: 1),
+            HistoryStore.ActivityDay(dayIdentifier: "2026-08-24", recordCount: 2),
+            HistoryStore.ActivityDay(dayIdentifier: "2026-08-25", recordCount: 1),
+        ]
+
+        let summary = HomeActivitySummary(
+            activityDays: days,
+            today: today,
+            calendar: buddhistCalendar
+        )
+
+        XCTAssertEqual(summary.activeDays, 3)
+        XCTAssertEqual(summary.currentStreak, 3)
+        XCTAssertEqual(summary.longestStreak, 3)
     }
 
     private func makeFixture() -> (calendar: Calendar, today: Date) {

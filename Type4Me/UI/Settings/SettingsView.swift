@@ -433,8 +433,12 @@ struct SettingsView: View {
             ZStack {
                 HomeDottedWaveBackground()
                 tabPage {
-                HomeDashboardView(isActive: selectedTab == .general) {
-                        requestNavigation(to: .modes)
+                    HomeDashboardView(isActive: selectedTab == .general) { modeId in
+                        requestNavigation(to: .modes) {
+                            if let modeId {
+                                NotificationCenter.default.post(name: .selectMode, object: modeId)
+                            }
+                        }
                     }
                 }
             }

@@ -524,6 +524,21 @@ actor HistoryStore {
 
     // MARK: - Statistics
 
+    /// Effective recognition/activity statuses that represent successful or
+    /// delivered user input (including completed dictations, fallbacks, and Mac actions).
+    static let activeStatuses: [String] = [
+        "completed",
+        "stream_recovered",
+        "llm_error",
+        "translation_error",
+        "action_success",
+        "action_failed",
+        "action_unmatched"
+    ]
+
+    static let activeStatusSQLCondition: String =
+        "status IN ('completed', 'stream_recovered', 'llm_error', 'translation_error', 'action_success', 'action_failed', 'action_unmatched')"
+
     struct Statistics: Sendable {
         let totalDuration: Double
         let totalCharacters: Int
@@ -567,7 +582,7 @@ actor HistoryStore {
 
     /// 获取统计信息，可选日期范围过滤（ISO8601 字符串）
     func getStatistics(from: String? = nil, to: String? = nil) async -> Statistics {
-        var conditions: [String] = []
+        var conditions: [String] = [Self.activeStatusSQLCondition]
         var params: [String] = []
         if let from {
             conditions.append("created_at >= ?")
@@ -577,7 +592,7 @@ actor HistoryStore {
             conditions.append("created_at < ?")
             params.append(to)
         }
-        let whereClause = conditions.isEmpty ? "" : "WHERE " + conditions.joined(separator: " AND ")
+        let whereClause = "WHERE " + conditions.joined(separator: " AND ")
         let sql = """
         SELECT
             COALESCE(SUM(CASE WHEN character_count IS NOT NULL THEN duration_seconds ELSE 0 END), 0),
@@ -602,8 +617,8 @@ actor HistoryStore {
         return Statistics(totalDuration: 0, totalCharacters: 0, recordCount: 0)
     }
 
-    /// Returns one compact row per local calendar day that contains a completed
-    /// dictation. The dashboard uses this for its heatmap and streak summaries,
+    /// Returns one compact row per local calendar day that contains an active
+    /// dictation or action. The dashboard uses this for its heatmap and streak summaries,
     /// avoiding loading dictated text or full history records into memory.
     func getActivityDays() async -> [ActivityDay] {
         let sql = """
@@ -613,7 +628,7 @@ actor HistoryStore {
             COALESCE(SUM(duration_seconds), 0),
             COALESCE(SUM(COALESCE(character_count, 0)), 0)
         FROM recognition_history
-        WHERE status = 'completed'
+        WHERE \(Self.activeStatusSQLCondition)
         GROUP BY local_day
         ORDER BY local_day ASC;
         """
@@ -654,6 +669,7 @@ actor HistoryStore {
             COALESCE(SUM(duration_seconds), 0),
             COUNT(*)
         FROM recognition_history
+        WHERE \(Self.activeStatusSQLCondition)
         GROUP BY 1
         ORDER BY CASE WHEN model_name = ? THEN 1 ELSE 0 END,
                  5 DESC,

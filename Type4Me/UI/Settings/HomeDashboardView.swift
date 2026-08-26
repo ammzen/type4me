@@ -14,13 +14,29 @@ struct HomeHeatmapLayout: Equatable {
         let columns = Int(floor((usableWidth + gap) / (cellSize + gap)))
         weekCount = max(12, min(104, columns))
     }
+
+    /// Determines the heatmap activity level based on total characters dictacted,
+    /// with a floor at Level 1 for any day with active sessions (even if 0 characters).
+    static func activityLevel(characterCount: Int, recordCount: Int) -> Int {
+        guard recordCount > 0 else { return 0 }
+        switch characterCount {
+        case ..<501:
+            return 1
+        case 501...2000:
+            return 2
+        case 2001...5000:
+            return 3
+        default:
+            return 4
+        }
+    }
 }
 
 /// A compact landing dashboard: usage totals and activity stay visually
 /// dominant, while configured mode shortcuts remain available at a glance.
 struct HomeDashboardView: View {
     let isActive: Bool
-    let openModesEditor: () -> Void
+    let openModesEditor: (UUID?) -> Void
 
     @Environment(AppState.self) private var appState
     @State private var statistics: HistoryStore.Statistics?
@@ -214,6 +230,8 @@ struct HomeDashboardView: View {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(heatmapColor(level: level))
                         .frame(width: 12, height: 12)
+                        .help(legendTooltip(for: level))
+                        .accessibilityLabel(legendTooltip(for: level))
                 }
                 Text(L("多", "More"))
             }
@@ -297,9 +315,8 @@ struct HomeDashboardView: View {
                     VStack(spacing: layout.gap) {
                         ForEach(week) { day in
                             RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(heatmapColor(level: activityLevel(for: day.recordCount)))
+                                .fill(heatmapColor(level: activityLevel(characterCount: day.characterCount, recordCount: day.recordCount)))
                                 .frame(width: layout.cellSize, height: layout.cellSize)
-                                .help(activityTooltip(for: day))
                                 .accessibilityLabel(activityTooltip(for: day))
                                 .onHover { isHovering in
                                     updateHeatmapHover(day, isHovering: isHovering)
@@ -351,6 +368,13 @@ struct HomeDashboardView: View {
     }
 
     private func updateHeatmapHover(_ day: HeatmapDay, isHovering: Bool) {
+        guard !day.isFuture else {
+            if hoveredHeatmapDay?.id == day.id {
+                hoveredHeatmapDay = nil
+            }
+            visibleHeatmapDay = nil
+            return
+        }
         heatmapHoverGeneration += 1
         let generation = heatmapHoverGeneration
         let showDelay = 0.06
@@ -408,7 +432,7 @@ struct HomeDashboardView: View {
             }
         }
 
-        return HStack(alignment: .top, spacing: layout.gap) {
+        return HStack(alignment: .top, spacing: 0) {
             Color.clear.frame(width: 17, height: 12)
             GeometryReader { _ in
                 ZStack(alignment: .topLeading) {
@@ -433,7 +457,7 @@ struct HomeDashboardView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(L("快捷键", "Shortcuts"))
+                    Text(L("我的模式", "My Modes"))
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(TF.settingsText)
                     Text(L("按模式快速输入", "Dictate by mode"))
@@ -443,7 +467,7 @@ struct HomeDashboardView: View {
 
                 Spacer(minLength: 4)
 
-                Button(action: openModesEditor) {
+                Button(action: { openModesEditor(nil) }) {
                     Image(systemName: "slider.horizontal.3")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(isModesButtonHovered ? Color.white : TF.settingsTextSecondary)
@@ -475,7 +499,7 @@ struct HomeDashboardView: View {
                     }
 
                     if modes.count > 6 {
-                        Button(action: openModesEditor) {
+                        Button(action: { openModesEditor(nil) }) {
                             Text(L("查看全部 \(modes.count) 个模式", "View all \(modes.count) modes"))
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(TF.settingsTextSecondary)
@@ -491,7 +515,7 @@ struct HomeDashboardView: View {
     }
 
     private func shortcutRow(_ mode: ProcessingMode) -> some View {
-        Button(action: openModesEditor) {
+        Button(action: { openModesEditor(mode.id) }) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Text(mode.localizedDisplayName)
@@ -525,48 +549,90 @@ struct HomeDashboardView: View {
         }
     }
 
+    @ViewBuilder
     private func hotkeyBadge(_ mode: ProcessingMode) -> some View {
         let bindings = mode.hotkeyBindings
-        let visible = Array(bindings.prefix(1))
-        let overflow = bindings.count - visible.count
-
-        return HStack(spacing: 5) {
-            if bindings.isEmpty {
-                Text(L("未设置", "Not set"))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(TF.settingsTextTertiary)
-            } else {
-                ForEach(visible) { binding in
-                    hotkeyChip(binding)
-                }
-                if overflow > 0 {
-                    Text("+\(overflow)")
-                        .font(.system(size: 9, weight: .semibold, design: .rounded))
-                        .foregroundStyle(TF.settingsTextSecondary)
+        if bindings.isEmpty {
+            Text(L("未设置", "Not set"))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(TF.settingsTextTertiary)
+        } else if bindings.count == 1 {
+            hotkeyChip(bindings[0])
+        } else {
+            ViewThatFits(in: .horizontal) {
+                ForEach((1...bindings.count).reversed(), id: \.self) { count in
+                    hotkeyRowCandidate(bindings: bindings, visibleCount: count)
                 }
             }
         }
-        .lineLimit(1)
+    }
+
+    private func hotkeyRowCandidate(bindings: [HotkeyBinding], visibleCount: Int) -> some View {
+        let visible = Array(bindings.prefix(visibleCount))
+        let overflow = bindings.count - visibleCount
+
+        return HStack(spacing: 5) {
+            ForEach(visible) { binding in
+                hotkeyChip(binding)
+            }
+            if overflow > 0 {
+                Text("+\(overflow)")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(TF.settingsTextSecondary)
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func hotkeyChip(_ binding: HotkeyBinding) -> some View {
+        let accent = hotkeyStyleColor(binding.style)
         let key = HotkeyRecorderView.keyDisplayName(keyCode: binding.keyCode, modifiers: binding.modifiers)
-        return Text(key)
-            .font(.system(size: 10, weight: .semibold, design: .rounded))
-            .foregroundStyle(TF.settingsText)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .padding(.horizontal, 7)
-            .frame(height: 24)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(TF.settingsBg)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(TF.settingsBorder, lineWidth: 1)
-            )
-            .help("\(key) · \(hotkeyStyleLabel(binding.style))")
+        return HStack(spacing: 4) {
+            Image(systemName: hotkeyStyleIcon(binding.style))
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(accent)
+
+            Text(key)
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(TF.settingsText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .padding(.horizontal, 7)
+        .frame(height: 24)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(accent.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(accent.opacity(0.35), lineWidth: 1)
+        )
+        .help(hotkeyChipTooltip(binding))
+    }
+
+    private func hotkeyChipTooltip(_ binding: HotkeyBinding) -> String {
+        let key = HotkeyRecorderView.keyDisplayName(
+            keyCode: binding.keyCode, modifiers: binding.modifiers)
+        return "\(key) · \(hotkeyStyleLabel(binding.style))"
+    }
+
+    private func hotkeyStyleIcon(_ style: ProcessingMode.HotkeyStyle) -> String {
+        switch style {
+        case .hold:
+            return "hand.tap.fill"
+        case .toggle:
+            return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    private func hotkeyStyleColor(_ style: ProcessingMode.HotkeyStyle) -> Color {
+        switch style {
+        case .hold:
+            return Color(red: 0.20, green: 0.60, blue: 0.86)
+        case .toggle:
+            return Color(red: 0.36, green: 0.56, blue: 0.32)
+        }
     }
 
     // MARK: - Formatting and data
@@ -601,6 +667,7 @@ struct HomeDashboardView: View {
     }
 
     private func formatDuration(_ seconds: Double) -> String {
+        if seconds <= 0 { return L("0 分钟", "0 min") }
         let totalMinutes = Int((seconds / 60).rounded())
         if totalMinutes < 1 { return L("< 1 分钟", "< 1 min") }
         if totalMinutes < 60 { return L("\(totalMinutes) 分钟", "\(totalMinutes) min") }
@@ -654,14 +721,8 @@ struct HomeDashboardView: View {
         }
     }
 
-    private func activityLevel(for count: Int) -> Int {
-        switch count {
-        case 0: return 0
-        case 1: return 1
-        case 2...3: return 2
-        case 4...6: return 3
-        default: return 4
-        }
+    private func activityLevel(characterCount: Int, recordCount: Int) -> Int {
+        HomeHeatmapLayout.activityLevel(characterCount: characterCount, recordCount: recordCount)
     }
 
     private func heatmapColor(level: Int) -> Color {
@@ -674,12 +735,27 @@ struct HomeDashboardView: View {
         }
     }
 
+    private func legendTooltip(for level: Int) -> String {
+        switch level {
+        case 0:
+            return L("0 字", "0 characters")
+        case 1:
+            return L("1 ~ 500 字", "1 – 500 characters")
+        case 2:
+            return L("501 ~ 2,000 字", "501 – 2,000 characters")
+        case 3:
+            return L("2,001 ~ 5,000 字", "2,001 – 5,000 characters")
+        default:
+            return L("5,000+ 字", "5,000+ characters")
+        }
+    }
+
     private func activityTooltip(for day: HeatmapDay) -> String {
         let date = activityDateLabel(for: day.date)
         if day.isFuture { return date }
         return L(
             "\(date)\n听写时长：\(formatDuration(day.durationSeconds))\n字数：\(formatNumber(day.characterCount))",
-            "\(date)\nDictation time: \(formatDuration(day.durationSeconds))\nWords: \(formatNumber(day.characterCount))"
+            "\(date)\nDictation time: \(formatDuration(day.durationSeconds))\nCharacters: \(formatNumber(day.characterCount))"
         )
     }
 
@@ -696,7 +772,7 @@ struct HomeDashboardView: View {
             )
             heatmapTooltipDetail(
                 icon: "text.word.spacing",
-                label: L("字数", "Words"),
+                label: L("字数", "Characters"),
                 value: formatNumber(day.characterCount)
             )
         }
@@ -777,7 +853,8 @@ struct HomeActivitySummary: Equatable {
         today: Date = Date(),
         calendar inputCalendar: Calendar = .current
     ) {
-        let calendar = inputCalendar
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = inputCalendar.timeZone
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
