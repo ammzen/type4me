@@ -1,6 +1,17 @@
 {
-  "latest": "2.2.0",
+  "latest": "2.3.0",
   "releases": [
+    {
+      "version": "2.3.0",
+      "date": "2026-08-26",
+      "notes": "- 全新 Liquid Glass 录音指示条，支持动态预设与低功耗静态 Siri 样式\n- 操作提示与取消按钮可分别显示或隐藏，同时继续支持 Esc 取消\n- 首页新增紧凑数据概览、活动热力图和常用模式快捷入口\n- 改进长转写文本布局、流畅取消交互及录音状态稳定性\n- 优化外观预览、减少动态效果支持与热力图悬停体验",
+      "cloud_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v2.3.0/Type4Me-v2.3.0-cloud.dmg",
+      "cloud_dmg_size": 11486531,
+      "cloud_dmg_sha256": "10dbf22bb16f18891912dc636f0cd308246dda23a3529ae2327722bd436aa78d",
+      "local_dmg_url": "https://github.com/joewongjc/type4me/releases/download/v2.3.0/Type4Me-v2.3.0-local-apple-silicon.dmg",
+      "local_dmg_size": 716955845,
+      "local_dmg_sha256": "a07d32c30d44652cc0d88fb8d2f5029d8fb6d60d957581738b13afe622fffa1f"
+    },
     {
       "version": "2.2.0",
       "date": "2026-08-25",
