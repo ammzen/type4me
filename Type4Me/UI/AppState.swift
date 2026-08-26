@@ -1467,9 +1467,8 @@ final class AppState {
         processingLabelOverride = nil
         pinsTranscriptPopup = false
         barPhase = .preparing
-        // Keep the transparent panel alive for every style so a live settings
-        // change from `.hidden` can reveal the indicator immediately. The view
-        // itself is responsible for rendering nothing for `.hidden`.
+        // Notify the controller for every style so a live settings change from
+        // `.hidden` can reveal the indicator immediately.
         onShowPanel?()
     }
 

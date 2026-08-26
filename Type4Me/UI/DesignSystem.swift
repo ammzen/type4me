@@ -99,15 +99,16 @@ enum TF {
     static let barWidthCompact: CGFloat = 180
     static let barHeight: CGFloat = 55
     static let barBottomOffset: CGFloat = 48
+    static let floatingPanelShadowInset: CGFloat = 8
     static let recordingFinishControlSize: CGFloat = 45
     static let recordingCancelControlSize: CGFloat = 35
-    static let recordingControlSize: CGFloat = recordingFinishControlSize
     static let recordingLeadingInset: CGFloat = 5
     static let recordingTrailingInset: CGFloat = 10
     static let recordingEdgeInset: CGFloat = recordingTrailingInset
     static let recordingControlGap: CGFloat = 8
     static let recordingTooltipGap: CGFloat = 5
     static let recordingTooltipMaxWidth: CGFloat = 180
+    static let recordingCapsuleSpringResponse = 0.3
     static let recordingTooltipBadge = Color(
         red: 138 / 255,
         green: 138 / 255,
@@ -133,7 +134,7 @@ enum TF {
 
     static let transcriptPopupWidth: CGFloat = 350
     static let transcriptPopupMaxHeight: CGFloat = 120
-    static let transcriptPopupCorner: CGFloat = 10
+    static let transcriptPopupCorner: CGFloat = cornerLG
     static let transcriptPopupGap: CGFloat = 10
 
     // MARK: Compact Recording Indicator
