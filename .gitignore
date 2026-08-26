@@ -15,6 +15,7 @@ xcuserdata/
 # Local agent context
 .ai/
 .devlead/
+.context/
 
 # macOS
 .DS_Store
