@@ -294,7 +294,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(expandedFrame.minY, frame.minY)
     }
 
-    func testFloatingPanelControllerEnablesMouseOnlyForVisibleContent() {
+    func testFloatingPanelControllerEnablesMouseOnlyForVisibleContent() async throws {
         let appState = AppState()
         let controller = FloatingBarController(state: appState)
         appState.barPhase = .recording
@@ -316,9 +316,17 @@ final class AppStateTests: XCTestCase {
         controller.updatePanelLayout(previewLayout)
         XCTAssertEqual(controller.panel.frame.size, previewLayout.panelSize)
 
+        controller.panel.alphaValue = 0
+        controller.panel.orderFrontRegardless()
+        defer { controller.panel.orderOut(nil) }
+
         controller.updatePanelLayout(visibleLayout)
+        XCTAssertEqual(controller.panel.frame.size, previewLayout.panelSize)
+
+        try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(controller.panel.frame.size, visibleLayout.panelSize)
 
+        controller.panel.orderOut(nil)
         appState.barPhase = .hidden
         controller.updatePanelLayout(.hidden)
         XCTAssertTrue(controller.panel.ignoresMouseEvents)
