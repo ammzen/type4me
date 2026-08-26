@@ -56,13 +56,16 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     let state: S
     let presentationOverride: FloatingBarPresentation?
+    let onPanelLayoutChange: ((FloatingBarPanelLayout) -> Void)?
 
     init(
         state: S,
-        presentationOverride: FloatingBarPresentation? = nil
+        presentationOverride: FloatingBarPresentation? = nil,
+        onPanelLayoutChange: ((FloatingBarPanelLayout) -> Void)? = nil
     ) {
         self.state = state
         self.presentationOverride = presentationOverride
+        self.onPanelLayoutChange = onPanelLayoutChange
     }
 
     /// High-water mark: only grows during recording, never shrinks (prevents ASR correction jitter)
@@ -266,6 +269,42 @@ struct FloatingBarView<S: FloatingBarState>: View {
         }
     }
 
+    private var panelLayout: FloatingBarPanelLayout {
+        guard shouldRenderCapsule else { return .hidden }
+
+        let capsuleSize = NSSize(width: capsuleWidth, height: capsuleHeight)
+        guard let overlay = activeTopOverlay else {
+            return FloatingBarPanelLayout(contentSize: capsuleSize)
+        }
+
+        let overlaySize = topOverlaySize(overlay)
+        let contentWidth: CGFloat
+        let horizontalOverflow: CGFloat
+
+        switch overlay {
+        case .transcript:
+            contentWidth = max(capsuleSize.width, overlaySize.width)
+            horizontalOverflow = 0
+        case .mode:
+            contentWidth = max(capsuleSize.width, overlaySize.width)
+            horizontalOverflow = 0
+        case .action(let action):
+            contentWidth = capsuleSize.width
+            horizontalOverflow = actionOverlayOverflow(
+                action: action,
+                bubbleWidth: overlaySize.width
+            )
+        }
+
+        return FloatingBarPanelLayout(
+            contentSize: NSSize(
+                width: contentWidth,
+                height: capsuleSize.height + topOverlayGap + overlaySize.height
+            ),
+            horizontalOverflow: horizontalOverflow
+        )
+    }
+
     var body: some View {
         VStack(spacing: topOverlayGap) {
             if let overlay = activeTopOverlay {
@@ -278,8 +317,13 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .id("floating_capsule_bar")
             }
         }
-        .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .onAppear {
+            onPanelLayoutChange?(panelLayout)
+        }
+        .onChange(of: panelLayout) { _, layout in
+            onPanelLayoutChange?(layout)
+        }
         .onChange(of: state.barPhase) { _, newPhase in
             handlePhaseChange(newPhase)
         }
@@ -322,7 +366,14 @@ struct FloatingBarView<S: FloatingBarState>: View {
             .overlay {
                 capsuleBorder
             }
-            .shadow(color: Color.black.opacity(0.35), radius: 6, x: 0, y: 2)
+            .shadow(
+                color: onPanelLayoutChange == nil
+                    ? Color.black.opacity(0.35)
+                    : .clear,
+                radius: 6,
+                x: 0,
+                y: 2
+            )
             // Critically damped (dampingFraction 1.0) so the width never
             // overshoots and settles back leftward between characters. An
             // underdamped spring makes the right edge/cancel button wiggle
@@ -878,7 +929,69 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     /// Measure actual rendered width using the same font as the floating bar text.
     private func measureText(_ string: String) -> CGFloat {
-        ceil((string as NSString).size(withAttributes: [.font: floatingBarFont]).width)
+        measureText(string, font: floatingBarFont)
+    }
+
+    private func measureText(_ string: String, font: NSFont) -> CGFloat {
+        ceil((string as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    private func topOverlaySize(_ overlay: FloatingBarTopOverlay) -> NSSize {
+        switch overlay {
+        case .transcript:
+            return NSSize(
+                width: TF.transcriptPopupWidth,
+                height: transcriptPopupHeight
+            )
+        case .mode:
+            let font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+            let maxWidth = TF.barWidth + TF.recordingTooltipOverhang * 2
+            return NSSize(
+                width: min(maxWidth, measureText(localizedCurrentModeName, font: font) + 24),
+                height: ceil(font.boundingRectForFont.height) + 18
+            )
+        case .action(let action):
+            return actionHintSize(action)
+        }
+    }
+
+    private var transcriptPopupHeight: CGFloat {
+        let textWidth = TF.transcriptPopupWidth - 24
+        let bounds = (state.transcriptionText as NSString).boundingRect(
+            with: NSSize(width: textWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: floatingBarFont]
+        )
+        // TranscriptPopup adds 12 pt vertical padding on both sides and a
+        // one-point scroll anchor after the text.
+        return min(TF.transcriptPopupMaxHeight, max(1, ceil(bounds.height) + 25))
+    }
+
+    private func actionHintSize(_ action: RecordingControlAction) -> NSSize {
+        let labelFont = NSFont.systemFont(ofSize: 14, weight: .semibold)
+        let shortcutFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        var width = measureText(actionTitle(action), font: labelFont) + 24
+        var contentHeight = ceil(labelFont.boundingRectForFont.height)
+
+        if action == .cancel {
+            width += 7 + measureText("esc", font: shortcutFont) + 14
+            contentHeight = max(contentHeight, ceil(shortcutFont.boundingRectForFont.height) + 4)
+        }
+
+        return NSSize(
+            width: min(TF.recordingTooltipMaxWidth, width),
+            height: contentHeight + 18
+        )
+    }
+
+    private func actionOverlayOverflow(
+        action: RecordingControlAction,
+        bubbleWidth: CGFloat
+    ) -> CGFloat {
+        max(
+            0,
+            abs(actionHorizontalOffset(action)) + bubbleWidth / 2 - capsuleWidth / 2
+        )
     }
 
     // MARK: - Top overlays
@@ -898,6 +1011,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         case .transcript:
             TranscriptPopup(
                 text: state.transcriptionText,
+                height: transcriptPopupHeight,
                 onHoverChanged: updateTranscriptHover
             )
         case .mode:
@@ -918,6 +1032,12 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private func alignedActionHint(_ action: RecordingControlAction) -> some View {
+        return actionHintBubble(action)
+            .offset(x: actionHorizontalOffset(action))
+            .frame(width: capsuleWidth)
+    }
+
+    private func actionHorizontalOffset(_ action: RecordingControlAction) -> CGFloat {
         let distanceFromCenter: CGFloat
         if usesCompactRecordingLayout {
             distanceFromCenter = capsuleWidth / 2 - 16
@@ -926,18 +1046,19 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 - TF.recordingEdgeInset
                 - TF.recordingControlSize / 2
         }
-        let horizontalOffset = action == .finish ? -distanceFromCenter : distanceFromCenter
+        return action == .finish ? -distanceFromCenter : distanceFromCenter
+    }
 
-        return actionHintBubble(action)
-            .offset(x: horizontalOffset)
-            .frame(width: capsuleWidth)
+    private func actionTitle(_ action: RecordingControlAction) -> String {
+        _ = language
+        return action == .finish
+            ? L("完成录制", "Finish Recording")
+            : L("取消录制", "Cancel Recording")
     }
 
     private func actionHintBubble(_ action: RecordingControlAction) -> some View {
         HStack(spacing: 7) {
-            Text(action == .finish
-                ? L("完成录制", "Finish Recording")
-                : L("取消录制", "Cancel Recording"))
+            Text(actionTitle(action))
 
             if action == .cancel {
                 Text("esc")
@@ -970,8 +1091,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(TF.floatingText)
             .lineLimit(1)
+            .truncationMode(.tail)
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
+            .frame(maxWidth: TF.barWidth + TF.recordingTooltipOverhang * 2)
             .background(
                 RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous)
                     .fill(TF.floatingBackground)
@@ -1017,6 +1140,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
 private struct TranscriptPopup: View {
     let text: String
+    let height: CGFloat
     let onHoverChanged: (Bool) -> Void
 
     var body: some View {
@@ -1033,9 +1157,7 @@ private struct TranscriptPopup: View {
                     .id("transcript-end")
             }
             .scrollIndicators(.hidden)
-            .frame(width: TF.transcriptPopupWidth)
-            .frame(maxHeight: TF.transcriptPopupMaxHeight)
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: TF.transcriptPopupWidth, height: height)
             .background(
                 RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous)
                     .fill(TF.floatingBackground)
@@ -1048,7 +1170,6 @@ private struct TranscriptPopup: View {
                 FloatingBarHoverTracker(onHoverChanged: onHoverChanged)
             }
             .clipShape(RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous))
-            .shadow(color: Color.black.opacity(0.3), radius: 8, y: -2)
             .onAppear { proxy.scrollTo("transcript-end", anchor: .bottom) }
             .onChange(of: text) { _, _ in
                 proxy.scrollTo("transcript-end", anchor: .bottom)
@@ -1198,7 +1319,6 @@ struct FloatingBarHoverTracker: NSViewRepresentable {
 
 final class HoverTrackingNSView: NSView {
     var onHoverChanged: ((Bool) -> Void)?
-    private var enterWorkItem: DispatchWorkItem?
 
     /// Tracking areas should observe hover without intercepting SwiftUI button
     /// clicks or scroll-wheel events from controls underneath this helper view.
@@ -1215,22 +1335,18 @@ final class HoverTrackingNSView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        enterWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, let window = self.window else { return }
-            // Re-check mouse position at trigger time: updateTrackingAreas()
-            // sends synthetic mouseEntered when the tracking area is recreated
-            // with the cursor inside (e.g. bar grows during recording).
-            let mouseInView = self.convert(window.mouseLocationOutsideOfEventStream, from: nil)
-            guard self.bounds.contains(mouseInView) else { return }
-            self.onHoverChanged?(true)
-        }
-        enterWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        guard containsMouse(event) else { return }
+        onHoverChanged?(true)
     }
 
     override func mouseExited(with event: NSEvent) {
-        enterWorkItem?.cancel()
+        // Resizing the panel rebuilds tracking areas and can synthesize an exit
+        // even though the pointer never left the visible view.
+        guard !containsMouse(event) else { return }
         onHoverChanged?(false)
+    }
+
+    private func containsMouse(_ event: NSEvent) -> Bool {
+        bounds.contains(convert(event.locationInWindow, from: nil))
     }
 }

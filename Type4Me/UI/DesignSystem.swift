@@ -133,7 +133,7 @@ enum TF {
 
     static let transcriptPopupWidth: CGFloat = 350
     static let transcriptPopupMaxHeight: CGFloat = 120
-    static let transcriptPopupCorner: CGFloat = 10
+    static let transcriptPopupCorner: CGFloat = cornerLG
     static let transcriptPopupGap: CGFloat = 10
 
     // MARK: Compact Recording Indicator

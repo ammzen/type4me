@@ -241,8 +241,88 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(TF.recordingTooltipGap, 5)
         XCTAssertEqual(TF.transcriptPopupWidth, 350)
         XCTAssertEqual(TF.transcriptPopupMaxHeight, 120)
-        XCTAssertEqual(TF.transcriptPopupCorner, 10)
+        XCTAssertEqual(TF.transcriptPopupCorner, TF.cornerLG)
         XCTAssertEqual(TF.transcriptPopupGap, 10)
+    }
+
+    func testFloatingPanelLayoutTracksOnlyVisibleBounds() {
+        XCTAssertEqual(FloatingBarPanelLayout.hidden.panelSize, NSSize(width: 1, height: 1))
+
+        let shortBar = FloatingBarPanelLayout(
+            contentSize: NSSize(width: TF.barWidthCompact, height: TF.barHeight)
+        )
+        XCTAssertEqual(shortBar.panelSize, NSSize(width: 180, height: 55))
+        XCTAssertEqual(
+            FloatingBarPanelLayout.fallback(for: .compact).panelSize,
+            NSSize(width: 180, height: 24)
+        )
+
+        let fullBar = FloatingBarPanelLayout(
+            contentSize: NSSize(width: TF.barWidth, height: TF.barHeight)
+        )
+        XCTAssertEqual(fullBar.panelSize, NSSize(width: 400, height: 55))
+
+        let transcript = FloatingBarPanelLayout(
+            contentSize: NSSize(
+                width: TF.transcriptPopupWidth,
+                height: TF.barHeight + TF.transcriptPopupGap + 60
+            )
+        )
+        XCTAssertEqual(transcript.panelSize, NSSize(width: 350, height: 125))
+
+        let action = FloatingBarPanelLayout(
+            contentSize: NSSize(width: TF.barWidthCompact, height: TF.barHeight + 5 + 35),
+            horizontalOverflow: 60
+        )
+        XCTAssertEqual(action.panelSize, NSSize(width: 300, height: 95))
+    }
+
+    func testFloatingPanelFrameKeepsBarBottomCentered() {
+        let visibleFrame = NSRect(x: 100, y: 50, width: 1000, height: 800)
+        let frame = FloatingBarPanel.bottomCenteredFrame(
+            size: NSSize(width: 180, height: 55),
+            visibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(frame.midX, visibleFrame.midX)
+        XCTAssertEqual(frame.minY, visibleFrame.minY + TF.barBottomOffset)
+
+        let expandedFrame = FloatingBarPanel.bottomCenteredFrame(
+            size: NSSize(width: 400, height: 185),
+            visibleFrame: visibleFrame
+        )
+        XCTAssertEqual(expandedFrame.minY, frame.minY)
+    }
+
+    func testFloatingPanelControllerEnablesMouseOnlyForVisibleContent() {
+        let appState = AppState()
+        let controller = FloatingBarController(state: appState)
+        appState.barPhase = .recording
+
+        let visibleLayout = FloatingBarPanelLayout(
+            contentSize: NSSize(width: TF.barWidthCompact, height: TF.barHeight)
+        )
+        controller.updatePanelLayout(visibleLayout)
+        XCTAssertFalse(controller.panel.ignoresMouseEvents)
+        XCTAssertEqual(controller.panel.frame.size, visibleLayout.panelSize)
+        XCTAssertTrue(controller.panel.hasShadow)
+
+        let previewLayout = FloatingBarPanelLayout(
+            contentSize: NSSize(
+                width: TF.transcriptPopupWidth,
+                height: TF.barHeight + TF.transcriptPopupGap + TF.transcriptPopupMaxHeight
+            )
+        )
+        controller.updatePanelLayout(previewLayout)
+        XCTAssertEqual(controller.panel.frame.size, previewLayout.panelSize)
+
+        controller.updatePanelLayout(visibleLayout)
+        XCTAssertEqual(controller.panel.frame.size, visibleLayout.panelSize)
+
+        appState.barPhase = .hidden
+        controller.updatePanelLayout(.hidden)
+        XCTAssertTrue(controller.panel.ignoresMouseEvents)
+        XCTAssertEqual(controller.panel.frame.size, FloatingBarPanelLayout.hidden.panelSize)
     }
 
     func testFloatingIndicatorHoverTrackingDoesNotInterceptControls() {
@@ -252,7 +332,8 @@ final class AppStateTests: XCTestCase {
         var clickCount = 0
         buttonTarget.onClick = { clickCount += 1 }
 
-        XCTAssertFalse(panel.ignoresMouseEvents)
+        XCTAssertTrue(panel.ignoresMouseEvents)
+        panel.ignoresMouseEvents = false
         XCTAssertTrue(panel.acceptsMouseMovedEvents)
         XCTAssertNil(tracker.hitTest(NSPoint(x: 22, y: 22)))
         XCTAssertTrue(buttonTarget.acceptsFirstMouse(for: nil))

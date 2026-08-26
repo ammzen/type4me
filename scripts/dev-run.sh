@@ -18,6 +18,9 @@ fi
 if [ -z "$SIGNING_IDENTITY" ]; then
     SIGNING_IDENTITY="$(find_identity 'Developer ID Application:')"
 fi
+if [ -z "$SIGNING_IDENTITY" ]; then
+    SIGNING_IDENTITY="$(find_identity 'Type4Me Dev')"
+fi
 
 if [ -z "$SIGNING_IDENTITY" ]; then
     if [ "${ALLOW_ADHOC_SIGNING:-0}" = "1" ]; then
