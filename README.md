@@ -22,7 +22,8 @@
 - **语音改口**：刚打出的文字有误或想换个说法？按下快捷键直接语音说出修改指令，精准替换、局部微调、支持一键撤销；
 - **多快捷键**：每个模式可绑定多个全局快捷键，支持按住说话与点按开关；
 - **菜单栏控制中心**：直接查看运行状态，切换模式、麦克风、ASR 与翻译目标，并快速控制录音、历史、改口、权限和更新；
-- **外观预览与紧凑录音条**：外观页面可实时预览录音条与格式化输出；新增紧凑声纹样式，适合更小的桌面占用；
+- **Liquid Glass 录音与外观控制**：常规录音条可选择多种液态玻璃视觉或静态节能样式；外观页面可实时预览，并可按需显示操作提示和取消按钮；
+- **首页使用概览**：在首页集中查看输入时长、字数、效率、活跃热力图与各模式快捷键；
 - **模型接入**：支持主流厂商API接入；文本处理支持使用Ollama接本地模型；
 - **词汇管理**：支持热词、映射词，2种模式。热词用于校正语音识别引擎，映射词可作为兜底或个性化场景使用（如 Web coding -> Vibe Coding, "我的邮箱地址" -> xxx@gmail.com）；
 - **历史记录**：存储所有历史识别记录，包括原始文本和处理后文本，支持导出CSV；
@@ -37,8 +38,8 @@
 
 | 版本                                                         | 说明                                                         | 安装包大小   |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | ------ |
-| ✨推荐：**[云端版本（点击下载）](https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-cloud.dmg)** | 支持云端识别 (Intel + Apple Silicon)，需配置语音、大模型API Key。语音识别推荐火山-豆包语音/Soniox、体验最好。火山注册有送额度，单价都十分便宜。[配置指引](https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr) | ~10MB  |
-| **[本地版本（点击下载）](https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-local-apple-silicon.dmg)** | 内嵌 SenseVoice + Qwen3-ASR 本地识别引擎 (Apple Silicon only，约占用8GB内存，建议32GB以上)，大模型依旧需要配置API Key或Ollama本地服务。 | ~700MB |
+| ✨推荐：**[云端版本（点击下载）](https://github.com/joewongjc/type4me/releases/download/v2.3.0/Type4Me-v2.3.0-cloud.dmg)** | 支持云端识别 (Intel + Apple Silicon)，需配置语音、大模型API Key。语音识别推荐火山-豆包语音/Soniox、体验最好。火山注册有送额度，单价都十分便宜。[配置指引](https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr) | ~10MB  |
+| **[本地版本（点击下载）](https://github.com/joewongjc/type4me/releases/download/v2.3.0/Type4Me-v2.3.0-local-apple-silicon.dmg)** | 内嵌 SenseVoice + Qwen3-ASR 本地识别引擎 (Apple Silicon only，约占用8GB内存，建议32GB以上)，大模型依旧需要配置API Key或Ollama本地服务。 | ~700MB |
 
 系统要求：macOS 14+ (Sonoma)
 
@@ -723,14 +724,15 @@ ASR Provider 架构设计为可插拔：实现 `ASRProviderConfig`（定义凭�
 
 - **Speech Recognition**: Built-in local recognition engine with accuracy rivaling cloud engines; supports multiple cloud ASR providers; real-time streaming recognition with instant text output;
 - **8 Default Modes**: Built-in Quick Mode, Intelli Sense, Translation, Ask Anything, Mac Actions, Voice Polish, Prompt Optimization, and Task Delegation; fully customizable with user-defined templates;
-- **Intelli Sense (Optional)**: Safely polishes text using the current app, input control, and limited context; optionally learns stable corrections, expression preferences, and list structure;
+- **Intelli Sense**: Safely polishes text using the current app, input control, and limited context; optionally learns stable corrections, expression preferences, and list structure;
 - **Ask Anything**: Ask questions about selected text, save follow-ups into conversation history, and search, resume, or continue conversations anytime;
 - **Unified Translation**: Automatically detects source language, translates into one of 18 selectable target languages, with output validation and retry;
 - **Mac Actions**: Execute common macOS system actions and Type4Me controls directly by voice;
 - **Voice Revise**: Made a typo or want to rephrase? Press a hotkey to speak revisions directly—precision replacement, local slot targeting, and one-click undo;
 - **Multiple Hotkeys**: Bind multiple global shortcuts per mode with hold-to-talk or toggle behavior;
 - **Menu Bar Control Center**: View runtime status, switch modes, microphones, ASR providers, and translation targets, and quickly control recording, history, revise, permissions, and updates;
-- **Appearance Preview & Compact Indicator**: Preview the recording bar and formatted output live in Appearance settings; a compact waveform style keeps the desktop footprint smaller;
+- **Liquid Glass Recording & Appearance Controls**: Choose a Liquid Glass visual or static power-saving style for the regular recording bar; preview it live in Appearance settings and choose whether to show operation hints and the cancel button;
+- **Home Activity Overview**: See input time, word count, efficiency, an activity heatmap, and each mode's hotkeys together on the Home page;
 - **Model Integration**: Supports mainstream provider APIs; text processing works with Ollama local models;
 - **Vocabulary Management**: Two modes: hotwords and snippet replacements. Hotwords improve ASR accuracy for proper nouns; snippets enable personalized substitutions (e.g., "Web coding" -> "Vibe Coding", "my email" -> xxx@gmail.com);
 - **History**: Stores all recognition records including raw and processed text, with CSV export;
@@ -745,8 +747,8 @@ Two editions, sharing the same config files. You can switch between them at any 
 
 | Edition | Description | Size |
 | ------- | ----------- | ---- |
-| ✨Recommended: **[Cloud Edition (Download)](https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-cloud.dmg)** | Cloud recognition (Intel + Apple Silicon). Requires ASR and LLM API keys. Recommended: Volcano/Doubao or Soniox for best experience. [Setup Guide](https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr) | ~10MB |
-| **[Local Edition (Download)](https://github.com/joewongjc/type4me/releases/download/v2.2.0/Type4Me-v2.2.0-local-apple-silicon.dmg)** | Bundled SenseVoice + Qwen3-ASR local recognition (Apple Silicon only, ~8GB RAM, 32GB+ recommended). LLM still requires API key or local Ollama. | ~700MB |
+| ✨Recommended: **[Cloud Edition (Download)](https://github.com/joewongjc/type4me/releases/download/v2.3.0/Type4Me-v2.3.0-cloud.dmg)** | Cloud recognition (Intel + Apple Silicon). Requires ASR and LLM API keys. Recommended: Volcano/Doubao or Soniox for best experience. [Setup Guide](https://my.feishu.cn/wiki/QdEnwBMfUi0mN4k3ucMcNYhUnXr) | ~10MB |
+| **[Local Edition (Download)](https://github.com/joewongjc/type4me/releases/download/v2.3.0/Type4Me-v2.3.0-local-apple-silicon.dmg)** | Bundled SenseVoice + Qwen3-ASR local recognition (Apple Silicon only, ~8GB RAM, 32GB+ recommended). LLM still requires API key or local Ollama. | ~700MB |
 
 System requirements: macOS 14+ (Sonoma)
 
@@ -1431,7 +1433,7 @@ If you're an AI agent (Claude Code, Cursor, Copilot, etc.) tasked with building,
 
 ### Read these files first
 
-1. `CLAUDE.md` - full architecture guide, credential storage, key files, development patterns, and how to add new ASR/LLM providers
+1. `AGENTS.md` - full architecture guide, credential storage, key files, development patterns, and how to add new ASR/LLM providers
 2. `Package.swift` - Swift Package Manager dependencies and build targets
 3. `scripts/deploy.sh` - the build & deploy pipeline (calls `scripts/package-app.sh`)
 
@@ -1528,7 +1530,7 @@ For non-Dev packaging, a signing identity can be supplied explicitly with
 - **Local ASR**: dual-engine design. SenseVoice (streaming partial results) + Qwen3-ASR (final calibration via MLX/Metal). Both run as Python WebSocket servers managed by `SenseVoiceServerManager`
 - **Cloud ASR**: 12 providers implemented (Volcano, StepFun batch, MiMo batch, OpenAI, Deepgram, Cartesia, AssemblyAI, ElevenLabs, Grok, Soniox, Bailian, Baidu)
 - **Credentials**: stored at `~/Library/Application Support/Type4Me/credentials.json` (mode 0600), never in code or environment variables. GUI apps cannot read shell env vars from `~/.zshrc`
-- **ASR provider architecture**: plugin-based. To add a new provider: implement `ASRProviderConfig` + `SpeechRecognizer` protocol, register in `ASRProviderRegistry.all`. See `CLAUDE.md` for details
+- **ASR provider architecture**: plugin-based. To add a new provider: implement `ASRProviderConfig` + `SpeechRecognizer` protocol, register in `ASRProviderRegistry.all`. See `AGENTS.md` for details
 - **Audio format**: 16kHz mono PCM16-LE, 200ms chunks (6400 bytes)
 - **Text injection**: clipboard-based Cmd+V paste with save/restore
 

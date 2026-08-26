@@ -1,10 +1,10 @@
 # Type4Me 液态玻璃录音指示条开发设计
 
 > 文档类型：开发设计
-> 文档状态：当前有效（设计完成，待实现）
+> 文档状态：当前有效（已实现，持续验证）
 > 设计日期：2026-08-25
-> 最后校验：2026-08-25
-> 实现基线：`acbc41d`（当前工作树，待实现）
+> 最后校验：2026-08-26
+> 实现基线：`06c06a0`
 > 对应产品设计：[product-design.md](product-design.md)
 > 上游文档：[外观设置增强开发设计](../appearance-settings-enhancements/development-design.md)、[紧凑型录音指示条开发设计](../compact-recording-indicator/development-design.md)
 

@@ -1,7 +1,7 @@
 # Type4Me 文档中心
 
 > 文档状态：当前有效
-> 最后整理：2026-08-12
+> 最后整理：2026-08-26
 
 这里是仓库文档的唯一入口。功能设计、开发设计和历史材料不再平铺在 `docs/` 根目录。
 
@@ -21,8 +21,10 @@
 
 | 功能 | 文档 | 类型 | 状态 | 设计日期 | 实现基线 |
 |---|---|---|---|---:|---|
-| 液态玻璃录音指示条 | [产品设计](features/liquid-glass-recording-indicator/product-design.md) | 产品设计 | 设计完成，待实现 | 2026-08-25 | 当前工作树（待实现） |
-| 液态玻璃录音指示条 | [开发设计](features/liquid-glass-recording-indicator/development-design.md) | 开发设计 | 设计完成，待实现 | 2026-08-25 | 当前工作树（待实现） |
+| 液态玻璃录音指示条 | [产品设计](features/liquid-glass-recording-indicator/product-design.md) | 产品设计 | 当前有效（已实现，持续验证） | 2026-08-25 | `06c06a0` |
+| 液态玻璃录音指示条 | [开发设计](features/liquid-glass-recording-indicator/development-design.md) | 开发设计 | 当前有效（已实现，持续验证） | 2026-08-25 | `06c06a0` |
+| 录音外观增强 | [产品设计](features/appearance-settings-enhancements/product-design.md) | 产品设计 | 当前有效（已实现，持续验证） | 2026-08-25 | `06c06a0` |
+| 录音外观增强 | [开发设计](features/appearance-settings-enhancements/development-design.md) | 开发设计 | 当前有效（已实现，持续验证） | 2026-08-25 | `06c06a0` |
 | 改口 | [产品设计](features/revise/product-design.md) | 产品设计 | 设计完成，待实现 | 2026-08-18 | — |
 | 改口 | [开发设计](features/revise/development-design.md) | 开发设计 | 设计完成，待实现 | 2026-08-18 | 当前工作树（待实现） |
 | 运行时性能 | [运行时内存优化二期](features/runtime/runtime-memory-optimization-v2-design.md) | 专项开发设计 | 设计完成，待评审与实现 | 2026-08-15 | 当前工作树（待合并） |
@@ -62,7 +64,9 @@ docs/
 ├── README.md                         # 当前入口与规范
 ├── features/                         # 当前功能设计
 │   ├── ask-anything/
+│   ├── appearance-settings-enhancements/
 │   ├── intelli-sense/
+│   ├── liquid-glass-recording-indicator/
 │   ├── revise/
 │   └── translation/
 ├── guides/                           # 当前维护与操作指南
@@ -79,7 +83,7 @@ docs/
 
 以下文档与产物按代码职责留在原目录，不搬入 `docs/`：
 
-- `README.md`、`CHANGELOG.md`、`CLAUDE.md`：仓库入口、版本记录和代理说明；
+- `README.md`、`CHANGELOG.md`、`AGENTS.md`（及其 `CLAUDE.md` 符号链接）：仓库入口、版本记录和代理说明；
 - `Evaluation/IntelliSenseEval/README.md`：独立评测包使用说明；
 - `tests/*.md`、`tests/*.html`：Prompt 实验和测试报告；
 - `scripts/*.html`：脚本生成的本地质量报告；
