@@ -77,19 +77,15 @@ struct HomeDashboardView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(L("说出来，别打字", "Speak, don't type"))
+            Text(L("说出想法，即刻成文", "Say it. Shape it."))
                 .font(.system(size: 38, weight: .bold))
                 .tracking(-1.1)
                 .foregroundStyle(TF.settingsText)
 
-            HStack(spacing: 7) {
-                Image(systemName: "lock")
-                    .font(.system(size: 11, weight: .semibold))
-                Text(L("识别历史保存在本机", "Recognition history stays on this Mac"))
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .foregroundStyle(TF.settingsTextSecondary)
-            .accessibilityElement(children: .combine)
+            Text(L("用你的声音完成写作，把时间留给更重要的事。",
+                   "Turn your voice into polished text and save time for what matters."))
+                .font(.system(size: 14))
+                .foregroundStyle(TF.settingsTextTertiary)
         }
     }
 
