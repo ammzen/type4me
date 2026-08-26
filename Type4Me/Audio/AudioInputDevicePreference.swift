@@ -411,11 +411,17 @@ final class AudioInputDeviceMonitor {
 
     func replaceCachedDevices(
         _ devices: [AudioInputDevice],
-        systemDefaultInput: AudioInputDevice? = nil
+        systemDefaultInput: AudioInputDevice?
     ) {
         lock.lock()
         cachedDevices = devices
         cachedSystemDefaultInput = systemDefaultInput
+        lock.unlock()
+    }
+
+    func replaceCachedDevices(_ devices: [AudioInputDevice]) {
+        lock.lock()
+        cachedDevices = devices
         lock.unlock()
     }
 

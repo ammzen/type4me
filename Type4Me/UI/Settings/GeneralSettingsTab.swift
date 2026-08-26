@@ -298,9 +298,7 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
     }
 
     private func refreshMicrophones() {
-        let devices = AudioCaptureEngine.availableAudioInputDevices()
-        availableMicrophones = devices
-        AudioInputDeviceMonitor.shared.replaceCachedDevices(devices)
+        availableMicrophones = AudioInputDeviceMonitor.shared.refreshSynchronously()
     }
 
     private var microphonePreferenceDropdown: some View {
