@@ -136,9 +136,9 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(appState.pinsTranscriptPopup)
     }
 
-    func testHiddenRecordingVisualKeepsHostPanelAliveForLivePreferenceChanges() {
+    func testStaticRecordingVisualKeepsHostPanelAliveForLivePreferenceChanges() {
         let previousStyle = UserDefaults.standard.string(forKey: RecordingVisualStyle.storageKey)
-        UserDefaults.standard.set(RecordingVisualStyle.hidden.rawValue, forKey: RecordingVisualStyle.storageKey)
+        UserDefaults.standard.set(RecordingVisualStyle.staticGlass.rawValue, forKey: RecordingVisualStyle.storageKey)
         defer {
             if let previousStyle {
                 UserDefaults.standard.set(previousStyle, forKey: RecordingVisualStyle.storageKey)
@@ -167,21 +167,76 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(hideCount, 0)
     }
 
-    func testRecordingVisualStylesIncludeEffectlessAndHiddenAsDistinctChoices() {
-        XCTAssertEqual(RecordingVisualStyle.allCases.count, 5)
-        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.effectless))
-        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.hidden))
-        XCTAssertTrue(RecordingVisualStyle.effectless.showsRecordingPanel)
-        XCTAssertFalse(RecordingVisualStyle.effectless.showsBackgroundEffect)
-        XCTAssertFalse(RecordingVisualStyle.hidden.showsRecordingPanel)
-        XCTAssertFalse(RecordingVisualStyle.hidden.showsBackgroundEffect)
+    func testRecordingVisualStylesInclude11LiquidGlassPresets() {
+        XCTAssertEqual(RecordingVisualStyle.allCases.count, 11)
+        XCTAssertEqual(RecordingVisualStyle.defaultValue, "siri")
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.siri))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.blueDrop))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.chromaticMetal))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.frost))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.opal))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.voiceWave))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.violetEmber))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.aurora))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.chrome))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.spectrum))
+        XCTAssertTrue(RecordingVisualStyle.allCases.contains(.staticGlass))
+
+        XCTAssertFalse(RecordingVisualStyle.staticGlass.isAnimated)
+        XCTAssertTrue(RecordingVisualStyle.siri.isAnimated)
+        XCTAssertTrue(RecordingVisualStyle.blueDrop.isAnimated)
+    }
+
+    func testRecordingVisualStyleMigrationFromLegacySchema() {
+        let suite = "Type4MeTests.VisualMigration.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        // 1. classic -> siri
+        defaults.set(0, forKey: RecordingVisualStyle.schemaVersionKey)
+        defaults.set("classic", forKey: RecordingVisualStyle.storageKey)
+        RecordingVisualStyle.migrateLegacyPreferenceIfNeeded(userDefaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: RecordingVisualStyle.storageKey), RecordingVisualStyle.siri.rawValue)
+        XCTAssertEqual(defaults.integer(forKey: RecordingVisualStyle.schemaVersionKey), 2)
+
+        // 2. dual -> voiceWave
+        defaults.set(0, forKey: RecordingVisualStyle.schemaVersionKey)
+        defaults.set("dual", forKey: RecordingVisualStyle.storageKey)
+        RecordingVisualStyle.migrateLegacyPreferenceIfNeeded(userDefaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: RecordingVisualStyle.storageKey), RecordingVisualStyle.voiceWave.rawValue)
+
+        // 3. timeline -> spectrum
+        defaults.set(0, forKey: RecordingVisualStyle.schemaVersionKey)
+        defaults.set("timeline", forKey: RecordingVisualStyle.storageKey)
+        RecordingVisualStyle.migrateLegacyPreferenceIfNeeded(userDefaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: RecordingVisualStyle.storageKey), RecordingVisualStyle.spectrum.rawValue)
+
+        // 4. effectless -> static
+        defaults.set(0, forKey: RecordingVisualStyle.schemaVersionKey)
+        defaults.set("effectless", forKey: RecordingVisualStyle.storageKey)
+        RecordingVisualStyle.migrateLegacyPreferenceIfNeeded(userDefaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: RecordingVisualStyle.storageKey), RecordingVisualStyle.staticGlass.rawValue)
+
+        // 5. hidden -> static
+        defaults.set(0, forKey: RecordingVisualStyle.schemaVersionKey)
+        defaults.set("hidden", forKey: RecordingVisualStyle.storageKey)
+        RecordingVisualStyle.migrateLegacyPreferenceIfNeeded(userDefaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: RecordingVisualStyle.storageKey), RecordingVisualStyle.staticGlass.rawValue)
+
+        // 6. Schema 2 does not overwrite user changes
+        defaults.set("chrome", forKey: RecordingVisualStyle.storageKey)
+        RecordingVisualStyle.migrateLegacyPreferenceIfNeeded(userDefaults: defaults)
+        XCTAssertEqual(defaults.string(forKey: RecordingVisualStyle.storageKey), "chrome")
     }
 
     func testFloatingIndicatorDesignDimensionsMatchSpecification() {
         XCTAssertEqual(TF.barHeight, 55)
         XCTAssertEqual(TF.barWidthCompact, 180)
         XCTAssertEqual(TF.barWidth, 400)
-        XCTAssertEqual(TF.recordingControlSize, 35)
+        XCTAssertEqual(TF.recordingFinishControlSize, 45)
+        XCTAssertEqual(TF.recordingCancelControlSize, 35)
+        XCTAssertEqual(TF.recordingLeadingInset, 5)
+        XCTAssertEqual(TF.recordingTrailingInset, 10)
         XCTAssertEqual(TF.recordingEdgeInset, 10)
         XCTAssertEqual(TF.recordingTooltipGap, 5)
         XCTAssertEqual(TF.transcriptPopupWidth, 350)
@@ -203,7 +258,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(buttonTarget.acceptsFirstMouse(for: nil))
         XCTAssertTrue(buttonTarget.hitTest(NSPoint(x: 22, y: 22)) === buttonTarget)
 
-        let event = NSEvent.mouseEvent(
+        let downEvent = NSEvent.mouseEvent(
             with: .leftMouseDown,
             location: NSPoint(x: 22, y: 22),
             modifierFlags: [],
@@ -214,8 +269,56 @@ final class AppStateTests: XCTestCase {
             clickCount: 1,
             pressure: 1
         )
-        buttonTarget.mouseDown(with: try! XCTUnwrap(event))
-        XCTAssertEqual(clickCount, 1)
+        let upEvent = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: NSPoint(x: 22, y: 22),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 2,
+            clickCount: 1,
+            pressure: 0
+        )
+        buttonTarget.mouseDown(with: try! XCTUnwrap(downEvent))
+        XCTAssertEqual(clickCount, 0) // Does not trigger on mouseDown alone
+        buttonTarget.mouseUp(with: try! XCTUnwrap(upEvent))
+        XCTAssertEqual(clickCount, 1) // Triggers on mouseUp inside bounds
+
+        // Test drag-to-cancel: release outside bounds should not trigger click
+        var pressStates: [Bool] = []
+        buttonTarget.onPressChanged = { pressStates.append($0) }
+        buttonTarget.mouseDown(with: try! XCTUnwrap(downEvent))
+        XCTAssertEqual(pressStates.last, true)
+
+        let outsideDragEvent = NSEvent.mouseEvent(
+            with: .leftMouseDragged,
+            location: NSPoint(x: 100, y: 100),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 3,
+            clickCount: 1,
+            pressure: 1
+        )
+        buttonTarget.mouseDragged(with: try! XCTUnwrap(outsideDragEvent))
+        XCTAssertEqual(pressStates.last, true) // stays pressed during drag across screen
+
+        let outsideUpEvent = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: NSPoint(x: 100, y: 100),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 4,
+            clickCount: 1,
+            pressure: 0
+        )
+        buttonTarget.mouseUp(with: try! XCTUnwrap(outsideUpEvent))
+        XCTAssertEqual(pressStates.last, false) // unpressed on mouseUp
+        XCTAssertEqual(clickCount, 1) // clickCount still 1 (release outside bounds does not trigger click)
     }
 
     func testFloatingIndicatorActionCallbacksAreForwarded() {

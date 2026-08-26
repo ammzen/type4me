@@ -21,6 +21,8 @@
 
 | 功能 | 文档 | 类型 | 状态 | 设计日期 | 实现基线 |
 |---|---|---|---|---:|---|
+| 液态玻璃录音指示条 | [产品设计](features/liquid-glass-recording-indicator/product-design.md) | 产品设计 | 设计完成，待实现 | 2026-08-25 | 当前工作树（待实现） |
+| 液态玻璃录音指示条 | [开发设计](features/liquid-glass-recording-indicator/development-design.md) | 开发设计 | 设计完成，待实现 | 2026-08-25 | 当前工作树（待实现） |
 | 改口 | [产品设计](features/revise/product-design.md) | 产品设计 | 设计完成，待实现 | 2026-08-18 | — |
 | 改口 | [开发设计](features/revise/development-design.md) | 开发设计 | 设计完成，待实现 | 2026-08-18 | 当前工作树（待实现） |
 | 运行时性能 | [运行时内存优化二期](features/runtime/runtime-memory-optimization-v2-design.md) | 专项开发设计 | 设计完成，待评审与实现 | 2026-08-15 | 当前工作树（待合并） |
