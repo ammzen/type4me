@@ -43,7 +43,7 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
     private var presentation: FloatingBarPresentation {
         FloatingBarPresentation(
             indicatorStyle: RecordingIndicatorStyle(rawValue: indicatorStyle) ?? .regular,
-            visualStyle: RecordingVisualStyle(rawValue: visualStyle) ?? .timeline,
+            visualStyle: RecordingVisualStyle(rawValue: visualStyle) ?? .siri,
             showsLiveTranscript: showLiveTranscript,
             enablesHoverTranscriptPreview: hoverTranscriptPreview,
             showsTooltips: showTooltips,
@@ -119,7 +119,10 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
     }
 
     private var visualStyleRow: some View {
-        settingsOptionRow(L("录音动效", "Visual Style")) {
+        settingsOptionRow(
+            L("录音视觉", "Recording Visual"),
+            subtitle: L("选择常规指示条的液态玻璃球与文字光效。", "Choose the liquid-glass orb and text glow for the regular indicator.")
+        ) {
             settingsDropdown(
                 selection: $visualStyle,
                 options: RecordingVisualStyle.allCases.map { ($0.rawValue, $0.displayName) }

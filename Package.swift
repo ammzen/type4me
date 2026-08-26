@@ -20,7 +20,7 @@ if hasCloudSubscription { swiftDefines.append(.define("HAS_CLOUD_SUBSCRIPTION"))
 if hasCppJiebaBridge { swiftDefines.append(.define("HAS_CPPJIEBA")) }
 if isDevBuild { swiftDefines.append(.define("TYPE4ME_DEV_BUILD")) }
 
-var excludes = ["Resources"]
+var excludes = ["Resources", "UI/FloatingBar/LiquidGlass/LiquidGlassShaders.metal"]
 if !hasCloudSubscription { excludes.append("CloudSubscription") }
 
 var targets: [Target] = [

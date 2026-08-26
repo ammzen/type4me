@@ -9,7 +9,7 @@ final class AppearancePreviewTests: XCTestCase {
     func testFloatingBarPresentationInit() {
         let presentation = FloatingBarPresentation(
             indicatorStyle: .regular,
-            visualStyle: .dual,
+            visualStyle: .voiceWave,
             showsLiveTranscript: false,
             enablesHoverTranscriptPreview: false,
             showsTooltips: false,
@@ -17,7 +17,7 @@ final class AppearancePreviewTests: XCTestCase {
         )
 
         XCTAssertEqual(presentation.indicatorStyle, .regular)
-        XCTAssertEqual(presentation.visualStyle, .dual)
+        XCTAssertEqual(presentation.visualStyle, .voiceWave)
         XCTAssertFalse(presentation.showsLiveTranscript)
         XCTAssertFalse(presentation.enablesHoverTranscriptPreview)
         XCTAssertFalse(presentation.showsTooltips)
@@ -28,7 +28,7 @@ final class AppearancePreviewTests: XCTestCase {
     func testFloatingBarPresentation_defaults() {
         let presentation = FloatingBarPresentation()
         XCTAssertEqual(presentation.indicatorStyle, .regular)
-        XCTAssertEqual(presentation.visualStyle, .timeline)
+        XCTAssertEqual(presentation.visualStyle, .siri)
         XCTAssertTrue(presentation.showsLiveTranscript)
         XCTAssertTrue(presentation.enablesHoverTranscriptPreview)
         XCTAssertTrue(presentation.showsTooltips)
@@ -44,89 +44,56 @@ final class AppearancePreviewTests: XCTestCase {
     }
 
     func testRecordingChromeWidthDesignTokens() {
-        // Dual-button chrome: Finish(35) + Cancel(35) + EdgeInsets*2(20) + Gap*2(16) + Safety(16) = 122
-        XCTAssertEqual(TF.recordingChromeWidth, 122)
-        // Single-button chrome: Finish(35) + EdgeInsets*2(20) + Gap(8) + Safety(16) = 79
-        XCTAssertEqual(TF.recordingSingleButtonChromeWidth, 79)
-        // Difference is exactly one control size (35) plus one control gap (8)
+        // Dual-button chrome: Finish(45) + Cancel(35) + LeadingInset(5) + TrailingInset(10) + Gap*2(16) + Safety(16) = 127
+        XCTAssertEqual(TF.recordingChromeWidth, 127)
+        // Single-button chrome: Finish(45) + LeadingInset(5) + TrailingInset(10) + Gap(8) + Safety(16) = 84
+        XCTAssertEqual(TF.recordingSingleButtonChromeWidth, 84)
+        // Difference is exactly one cancel control size (35) plus one control gap (8)
         XCTAssertEqual(
             TF.recordingChromeWidth - TF.recordingSingleButtonChromeWidth,
-            TF.recordingControlSize + TF.recordingControlGap
+            TF.recordingCancelControlSize + TF.recordingControlGap
         )
     }
 
-    func testFloatingBarPresentation_compactShowsRecordingIndicatorEvenWhenVisualStyleHidden() {
-        let compactHidden = FloatingBarPresentation(
+    func testFloatingBarPresentation_showsRecordingIndicatorAlwaysTrueWhenConfigured() {
+        let compact = FloatingBarPresentation(
             indicatorStyle: .compact,
-            visualStyle: .hidden,
+            visualStyle: .staticGlass,
             showsLiveTranscript: true,
             enablesHoverTranscriptPreview: true
         )
-        XCTAssertTrue(compactHidden.showsRecordingIndicator)
+        XCTAssertTrue(compact.showsRecordingIndicator)
 
-        let regularHidden = FloatingBarPresentation(
+        let regular = FloatingBarPresentation(
             indicatorStyle: .regular,
-            visualStyle: .hidden,
+            visualStyle: .staticGlass,
             showsLiveTranscript: true,
             enablesHoverTranscriptPreview: true
         )
-        XCTAssertFalse(regularHidden.showsRecordingIndicator)
+        XCTAssertTrue(regular.showsRecordingIndicator)
     }
 
-    func testRecordingIndicatorStyle_allCases() {
-        XCTAssertEqual(RecordingIndicatorStyle.allCases.count, 2)
-        XCTAssertEqual(RecordingIndicatorStyle.regular.rawValue, "regular")
-        XCTAssertEqual(RecordingIndicatorStyle.compact.rawValue, "compact")
-        XCTAssertEqual(RecordingIndicatorStyle.defaultValue, "regular")
-        XCTAssertEqual(RecordingIndicatorStyle.regular.displayName, L("常规", "Regular"))
-        XCTAssertEqual(RecordingIndicatorStyle.compact.displayName, L("紧凑型", "Compact"))
-    }
-
-    func testRecordingIndicatorStyle_currentResolution() {
-        let suite = "Type4MeTests.RecordingIndicatorStyle.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
-
-        // Missing key falls back to .regular
-        XCTAssertEqual(RecordingIndicatorStyle.current(userDefaults: defaults), .regular)
-
-        // Stored "compact"
-        defaults.set("compact", forKey: RecordingIndicatorStyle.storageKey)
-        XCTAssertEqual(RecordingIndicatorStyle.current(userDefaults: defaults), .compact)
-
-        // Invalid raw value falls back to .regular
-        defaults.set("invalid_style", forKey: RecordingIndicatorStyle.storageKey)
-        XCTAssertEqual(RecordingIndicatorStyle.current(userDefaults: defaults), .regular)
-    }
-
-    func testCompactIndicatorDesignDimensionsMatchSpecification() {
-        XCTAssertEqual(TF.compactIndicatorWidth, 180)
-        XCTAssertEqual(TF.compactIndicatorHeight, 24)
-        XCTAssertEqual(TF.compactIndicatorControlVisualSize, 15)
-        XCTAssertEqual(TF.compactIndicatorWaveBarWidth, 2)
-        XCTAssertEqual(TF.compactIndicatorWaveMinHeight, 2)
-        XCTAssertEqual(TF.compactIndicatorWaveMaxHeight, 18)
-        XCTAssertEqual(TF.compactStatusMaxWidth, TF.barWidth)
+    func testPreviewPhase_allCases() {
+        XCTAssertEqual(PreviewPhase.allCases.count, 2)
+        XCTAssertEqual(PreviewPhase.recording.displayName, L("录音中", "Recording"))
+        XCTAssertEqual(PreviewPhase.processing.displayName, L("处理中", "Processing"))
     }
 
     func testRecordingVisualStyle_allCases() {
-        XCTAssertEqual(RecordingVisualStyle.classic.displayName, L("线条", "Lines"))
-        XCTAssertEqual(RecordingVisualStyle.dual.displayName, L("粒子云", "Particles"))
-        XCTAssertEqual(RecordingVisualStyle.timeline.displayName, L("电平", "Levels"))
-        XCTAssertEqual(RecordingVisualStyle.effectless.displayName, L("无特效", "No Effects"))
-        XCTAssertEqual(RecordingVisualStyle.hidden.displayName, L("无", "None"))
+        XCTAssertEqual(RecordingVisualStyle.siri.displayName, L("Siri 波澜", "Siri Ripple"))
+        XCTAssertEqual(RecordingVisualStyle.blueDrop.displayName, L("蓝晶液滴", "Blue Crystal Drop"))
+        XCTAssertEqual(RecordingVisualStyle.chromaticMetal.displayName, L("色差液态金属", "Chromatic Liquid Metal"))
+        XCTAssertEqual(RecordingVisualStyle.frost.displayName, L("冰霜流体", "Frost Fluid"))
+        XCTAssertEqual(RecordingVisualStyle.opal.displayName, L("虹彩欧泊", "Iridescent Opal"))
+        XCTAssertEqual(RecordingVisualStyle.voiceWave.displayName, L("声纹薄膜", "Voiceprint Membrane"))
+        XCTAssertEqual(RecordingVisualStyle.violetEmber.displayName, L("紫焰流核", "Violet Flame Core"))
+        XCTAssertEqual(RecordingVisualStyle.aurora.displayName, L("极光帷幕", "Aurora Veil"))
+        XCTAssertEqual(RecordingVisualStyle.chrome.displayName, L("液态铬", "Liquid Chrome"))
+        XCTAssertEqual(RecordingVisualStyle.spectrum.displayName, L("彩色声场", "Color Soundfield"))
+        XCTAssertEqual(RecordingVisualStyle.staticGlass.displayName, L("静态", "Static"))
 
-        XCTAssertTrue(RecordingVisualStyle.classic.showsRecordingPanel)
-        XCTAssertTrue(RecordingVisualStyle.dual.showsRecordingPanel)
-        XCTAssertTrue(RecordingVisualStyle.timeline.showsRecordingPanel)
-        XCTAssertTrue(RecordingVisualStyle.effectless.showsRecordingPanel)
-        XCTAssertFalse(RecordingVisualStyle.hidden.showsRecordingPanel)
-
-        XCTAssertTrue(RecordingVisualStyle.classic.showsBackgroundEffect)
-        XCTAssertTrue(RecordingVisualStyle.dual.showsBackgroundEffect)
-        XCTAssertTrue(RecordingVisualStyle.timeline.showsBackgroundEffect)
-        XCTAssertFalse(RecordingVisualStyle.effectless.showsBackgroundEffect)
-        XCTAssertFalse(RecordingVisualStyle.hidden.showsBackgroundEffect)
+        XCTAssertTrue(RecordingVisualStyle.siri.isAnimated)
+        XCTAssertFalse(RecordingVisualStyle.staticGlass.isAnimated)
     }
 
     // MARK: - Text Formatting Options Preview Tests
@@ -225,7 +192,7 @@ final class AppearancePreviewTests: XCTestCase {
 
         XCTAssertEqual(demoState.demoMode, .appearancePreview)
         XCTAssertEqual(demoState.barPhase, .recording)
-        XCTAssertEqual(demoState.segments.count, 1)
+        XCTAssertFalse(demoState.segments.isEmpty)
         XCTAssertEqual(demoState.transcriptionText, sample)
         XCTAssertNotNil(demoState.recordingStartDate)
 

@@ -4,12 +4,25 @@ import SwiftUI
 // MARK: - Appearance Preview Stage
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+enum PreviewPhase: String, CaseIterable {
+    case recording
+    case processing
+
+    var displayName: String {
+        switch self {
+        case .recording: return L("录音中", "Recording")
+        case .processing: return L("处理中", "Processing")
+        }
+    }
+}
+
 struct AppearancePreviewStage: View {
 
     let presentation: FloatingBarPresentation
     let formattingOptions: TextOutputFormattingOptions
 
     @State private var demoState = DemoState()
+    @State private var previewPhase: PreviewPhase = .recording
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
 
     static let formattingSamples = [
@@ -44,6 +57,34 @@ struct AppearancePreviewStage: View {
                 Text(L("预览", "Preview"))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(TF.settingsText)
+
+                Spacer()
+
+                // Phase Switcher
+                HStack(spacing: 2) {
+                    ForEach(PreviewPhase.allCases, id: \.self) { phase in
+                        Button(action: {
+                            previewPhase = phase
+                            updateDemoState()
+                        }) {
+                            Text(phase.displayName)
+                                .font(.system(size: 11, weight: previewPhase == phase ? .semibold : .regular))
+                                .foregroundStyle(previewPhase == phase ? TF.settingsText : TF.settingsTextTertiary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(previewPhase == phase ? TF.settingsCardAlt : Color.clear)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(2)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(TF.settingsCard)
+                )
             }
             .padding(.horizontal, 2)
 
@@ -118,11 +159,20 @@ struct AppearancePreviewStage: View {
             )
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .task(id: floatingBarSampleText) {
-            demoState.startAppearancePreview(sampleText: floatingBarSampleText)
+        .task(id: "\(floatingBarSampleText)_\(previewPhase.rawValue)") {
+            updateDemoState()
         }
         .onDisappear {
             demoState.stop()
+        }
+    }
+
+    private func updateDemoState() {
+        switch previewPhase {
+        case .recording:
+            demoState.startAppearancePreview(sampleText: floatingBarSampleText)
+        case .processing:
+            demoState.startProcessingPreview()
         }
     }
 }

@@ -68,4 +68,12 @@ Pinned commit: 5071904474c3a3d71610d572be618744459ffa26
 
 ---
 
+Orb (Liquid Glass Shaders & Presets)
+Copyright (c) 2026 LerSent001
+License: MIT
+Source: https://github.com/LerSent001/orb
+Pinned commit: fbf6eb81ad85e1125ed62027769bcfefc01d3613
+
+---
+
 Full license texts are available at the respective source repositories.

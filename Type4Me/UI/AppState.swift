@@ -58,32 +58,72 @@ enum AppearancePreferenceDefaults {
 
 enum RecordingVisualStyle: String, CaseIterable {
     static let storageKey = "tf_visualStyle"
-    static let defaultValue = Self.timeline.rawValue
+    static let schemaVersionKey = "tf_recordingVisualStyleSchemaVersion"
+    static let currentSchemaVersion = 2
+    static let defaultValue = Self.siri.rawValue
 
-    case classic
-    case dual
-    case timeline
-    case effectless
-    case hidden
+    case siri
+    case blueDrop
+    case chromaticMetal
+    case frost
+    case opal
+    case voiceWave
+    case violetEmber
+    case aurora
+    case chrome
+    case spectrum
+    case staticGlass = "static"
 
     var displayName: String {
         switch self {
-        case .classic: return L("线条", "Lines")
-        case .dual: return L("粒子云", "Particles")
-        case .timeline: return L("电平", "Levels")
-        case .effectless: return L("无特效", "No Effects")
-        case .hidden: return L("无", "None")
+        case .siri: return L("Siri 波澜", "Siri Ripple")
+        case .blueDrop: return L("蓝晶液滴", "Blue Crystal Drop")
+        case .chromaticMetal: return L("色差液态金属", "Chromatic Liquid Metal")
+        case .frost: return L("冰霜流体", "Frost Fluid")
+        case .opal: return L("虹彩欧泊", "Iridescent Opal")
+        case .voiceWave: return L("声纹薄膜", "Voiceprint Membrane")
+        case .violetEmber: return L("紫焰流核", "Violet Flame Core")
+        case .aurora: return L("极光帷幕", "Aurora Veil")
+        case .chrome: return L("液态铬", "Liquid Chrome")
+        case .spectrum: return L("彩色声场", "Color Soundfield")
+        case .staticGlass: return L("静态", "Static")
         }
     }
 
-    var showsRecordingPanel: Bool { self != .hidden }
-    var showsBackgroundEffect: Bool { self != .effectless && self != .hidden }
+    var isAnimated: Bool {
+        self != .staticGlass
+    }
 
     static func current(userDefaults: UserDefaults = .standard) -> Self {
         guard let raw = userDefaults.string(forKey: storageKey),
               let style = Self(rawValue: raw)
-        else { return .timeline }
+        else { return .siri }
         return style
+    }
+
+    static func migrateLegacyPreferenceIfNeeded(userDefaults: UserDefaults = .standard) {
+        let schema = userDefaults.integer(forKey: schemaVersionKey)
+        guard schema < currentSchemaVersion else { return }
+
+        let raw = userDefaults.string(forKey: storageKey) ?? ""
+        let migrated: RecordingVisualStyle
+        switch raw {
+        case "classic":
+            migrated = .siri
+        case "dual":
+            migrated = .voiceWave
+        case "timeline":
+            migrated = .spectrum
+        case "effectless", "hidden", "static":
+            migrated = .staticGlass
+        case "siri", "blueDrop", "chromaticMetal", "frost", "opal", "voiceWave", "violetEmber", "aurora", "chrome", "spectrum":
+            migrated = RecordingVisualStyle(rawValue: raw) ?? .siri
+        default:
+            migrated = .siri
+        }
+
+        userDefaults.set(migrated.rawValue, forKey: storageKey)
+        userDefaults.set(currentSchemaVersion, forKey: schemaVersionKey)
     }
 }
 

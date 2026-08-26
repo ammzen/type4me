@@ -47,7 +47,8 @@ enum TF {
     )
 
     /// Recording indicator palette from the floating-bar design specification.
-    static let floatingBackground = Color(red: 27 / 255, green: 27 / 255, blue: 27 / 255)
+    static let floatingBackground = Color(red: 17 / 255, green: 18 / 255, blue: 20 / 255) // #111214
+    static let floatingBorder = Color(red: 38 / 255, green: 39 / 255, blue: 41 / 255) // #262729
     static let floatingControl = Color(red: 51 / 255, green: 51 / 255, blue: 51 / 255)
     static let floatingControlLight = Color(red: 251 / 255, green: 251 / 255, blue: 251 / 255)
     static let floatingText = Color.white
@@ -98,8 +99,12 @@ enum TF {
     static let barWidthCompact: CGFloat = 180
     static let barHeight: CGFloat = 55
     static let barBottomOffset: CGFloat = 48
-    static let recordingControlSize: CGFloat = 35
-    static let recordingEdgeInset: CGFloat = 10
+    static let recordingFinishControlSize: CGFloat = 45
+    static let recordingCancelControlSize: CGFloat = 35
+    static let recordingControlSize: CGFloat = recordingFinishControlSize
+    static let recordingLeadingInset: CGFloat = 5
+    static let recordingTrailingInset: CGFloat = 10
+    static let recordingEdgeInset: CGFloat = recordingTrailingInset
     static let recordingControlGap: CGFloat = 8
     static let recordingTooltipGap: CGFloat = 5
     static let recordingTooltipMaxWidth: CGFloat = 180
@@ -110,14 +115,17 @@ enum TF {
     )
     static let recordingTooltipOverhang: CGFloat = max(
         0,
-        recordingTooltipMaxWidth / 2 - recordingEdgeInset - recordingControlSize / 2
+        recordingTooltipMaxWidth / 2 - recordingLeadingInset - recordingFinishControlSize / 2
     )
-    static let recordingChromeWidth: CGFloat = recordingControlSize * 2
-        + recordingEdgeInset * 2
+    static let recordingChromeWidth: CGFloat = recordingFinishControlSize
+        + recordingCancelControlSize
+        + recordingLeadingInset
+        + recordingTrailingInset
         + recordingControlGap * 2
         + 16
-    static let recordingSingleButtonChromeWidth: CGFloat = recordingControlSize
-        + recordingEdgeInset * 2
+    static let recordingSingleButtonChromeWidth: CGFloat = recordingFinishControlSize
+        + recordingLeadingInset
+        + recordingTrailingInset
         + recordingControlGap
         + 16
 

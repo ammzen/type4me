@@ -54,20 +54,61 @@ final class DemoState {
     func startAppearancePreview(sampleText: String) {
         stop()
         demoMode = .appearancePreview
-        segments = [
-            TranscriptionSegment(text: sampleText, isConfirmed: true)
-        ]
+        segments = Self.makePreviewSegments(from: sampleText)
         recordingStartDate = Date()
         barPhase = .recording
         startAudioSimulation()
     }
 
+    /// Starts a stable processing state for Appearance Preview.
+    func startProcessingPreview() {
+        stop()
+        demoMode = .appearancePreview
+        barPhase = .processing
+        audioLevel.current = 0
+    }
+
     /// Updates the sample text shown in Appearance Preview without resetting timers.
     func updateAppearancePreview(sampleText: String) {
         guard demoMode == .appearancePreview, barPhase == .recording else { return }
-        segments = [
-            TranscriptionSegment(text: sampleText, isConfirmed: true)
-        ]
+        segments = Self.makePreviewSegments(from: sampleText)
+    }
+
+    static func makePreviewSegments(from text: String) -> [TranscriptionSegment] {
+        if text.contains("，") {
+            let parts = text.components(separatedBy: "，")
+            if parts.count >= 2 {
+                let confirmed = parts.dropLast().joined(separator: "，") + "，"
+                let active = parts.last ?? ""
+                return [
+                    TranscriptionSegment(text: confirmed, isConfirmed: true),
+                    TranscriptionSegment(text: active, isConfirmed: false),
+                ]
+            }
+        } else if text.contains(",") {
+            let parts = text.components(separatedBy: ",")
+            if parts.count >= 2 {
+                let confirmed = parts.dropLast().joined(separator: ",") + ","
+                let active = (parts.last ?? "").trimmingCharacters(in: .whitespaces)
+                return [
+                    TranscriptionSegment(text: confirmed + " ", isConfirmed: true),
+                    TranscriptionSegment(text: active, isConfirmed: false),
+                ]
+            }
+        }
+
+        let count = text.count
+        if count > 10 {
+            let splitIndex = text.index(text.startIndex, offsetBy: Int(Double(count) * 0.55))
+            let confirmed = String(text[..<splitIndex])
+            let active = String(text[splitIndex...])
+            return [
+                TranscriptionSegment(text: confirmed, isConfirmed: true),
+                TranscriptionSegment(text: active, isConfirmed: false),
+            ]
+        } else {
+            return [TranscriptionSegment(text: text, isConfirmed: false)]
+        }
     }
 
     /// Stops all timers and resets state.
@@ -126,12 +167,19 @@ final class DemoState {
 
     // MARK: - Audio Simulation
 
+    private var simulationStep: Double = 0
+
     private func startAudioSimulation() {
         stopAudioSimulation()
+        simulationStep = 0
         audioTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.audioLevel.current = Float.random(in: 0.15...0.5)
+                self.simulationStep += 0.05
+                let wave1 = sin(self.simulationStep * 3.0) * 0.5 + 0.5
+                let wave2 = sin(self.simulationStep * 7.2) * 0.2 + 0.5
+                let energy = Float(wave1 * 0.7 + wave2 * 0.3) * 0.5 + 0.15
+                self.audioLevel.current = max(0.15, min(0.65, energy))
             }
         }
     }
@@ -140,6 +188,7 @@ final class DemoState {
         audioTimer?.invalidate()
         audioTimer = nil
         audioLevel.current = 0
+        simulationStep = 0
     }
 
     // MARK: - Helpers
