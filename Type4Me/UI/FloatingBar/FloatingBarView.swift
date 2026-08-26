@@ -9,6 +9,26 @@ private enum FloatingBarTopOverlay: Equatable {
     case mode
 }
 
+func recordingActionHorizontalOffset(
+    _ action: RecordingControlAction,
+    capsuleWidth: CGFloat,
+    usesCompactLayout: Bool
+) -> CGFloat {
+    let distanceFromCenter: CGFloat
+    if usesCompactLayout {
+        distanceFromCenter = capsuleWidth / 2 - 16
+    } else if action == .finish {
+        distanceFromCenter = capsuleWidth / 2
+            - TF.recordingLeadingInset
+            - TF.recordingFinishControlSize / 2
+    } else {
+        distanceFromCenter = capsuleWidth / 2
+            - TF.recordingTrailingInset
+            - TF.recordingCancelControlSize / 2
+    }
+    return action == .finish ? -distanceFromCenter : distanceFromCenter
+}
+
 // MARK: - FloatingBarState Protocol
 
 @MainActor
@@ -75,6 +95,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
     @State private var isTranscriptHoverActive = false
     @State private var transcriptHoverExitTask: Task<Void, Never>?
     @State private var hoveredAction: RecordingControlAction?
+    @State private var hintedAction: RecordingControlAction?
+    @State private var actionHintTask: Task<Void, Never>?
     @State private var pressedAction: RecordingControlAction?
     @State private var cancelDragOffset: CGSize = .zero
     @State private var showsModeHint = false
@@ -173,8 +195,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
         guard effectiveShowsTooltips else { return nil }
 
-        if let hoveredAction, state.barPhase == .recording || state.barPhase == .preparing {
-            return .action(hoveredAction)
+        if let hintedAction, state.barPhase == .recording || state.barPhase == .preparing {
+            return .action(hintedAction)
         }
         if showsModeHint,
            (state.barPhase == .preparing || state.barPhase == .recording) {
@@ -274,7 +296,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
         let capsuleSize = NSSize(width: capsuleWidth, height: capsuleHeight)
         guard let overlay = activeTopOverlay else {
-            return FloatingBarPanelLayout(contentSize: capsuleSize)
+            return FloatingBarPanelLayout(
+                contentSize: capsuleSize,
+                capsuleSize: capsuleSize
+            )
         }
 
         let overlaySize = topOverlaySize(overlay)
@@ -301,7 +326,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 width: contentWidth,
                 height: capsuleSize.height + topOverlayGap + overlaySize.height
             ),
-            horizontalOverflow: horizontalOverflow
+            horizontalOverflow: horizontalOverflow,
+            capsuleSize: capsuleSize
         )
     }
 
@@ -309,7 +335,6 @@ struct FloatingBarView<S: FloatingBarState>: View {
         VStack(spacing: topOverlayGap) {
             if let overlay = activeTopOverlay {
                 topOverlay(overlay)
-                    .transition(.opacity.animation(.easeInOut(duration: 0.18)))
             }
 
             if shouldRenderCapsule {
@@ -317,6 +342,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .id("floating_capsule_bar")
             }
         }
+        .padding(TF.floatingPanelShadowInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .onAppear {
             onPanelLayoutChange?(panelLayout)
@@ -350,6 +376,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         .onDisappear {
             modeHintTask?.cancel()
             transcriptHoverExitTask?.cancel()
+            actionHintTask?.cancel()
         }
     }
 
@@ -366,21 +393,20 @@ struct FloatingBarView<S: FloatingBarState>: View {
             .overlay {
                 capsuleBorder
             }
-            .shadow(
-                color: onPanelLayoutChange == nil
-                    ? Color.black.opacity(0.35)
-                    : .clear,
-                radius: 6,
-                x: 0,
-                y: 2
-            )
+            .shadow(color: Color.black.opacity(0.12), radius: 8)
             // Critically damped (dampingFraction 1.0) so the width never
             // overshoots and settles back leftward between characters. An
             // underdamped spring makes the right edge/cancel button wiggle
             // "inward then outward" on every widen while the left (MTKView orb)
             // edge jumps instantly and appears stable.
-            .animation(.spring(response: 0.3, dampingFraction: 1.0), value: capsuleWidth)
-            .animation(.spring(response: 0.3, dampingFraction: 1.0), value: capsuleHeight)
+            .animation(
+                .spring(response: TF.recordingCapsuleSpringResponse, dampingFraction: 1.0),
+                value: capsuleWidth
+            )
+            .animation(
+                .spring(response: TF.recordingCapsuleSpringResponse, dampingFraction: 1.0),
+                value: capsuleHeight
+            )
     }
 
     // MARK: - Content by Phase
@@ -584,7 +610,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 },
                 onHoverChanged: { hovered in
                     guard !recordingActionLocked else { return }
-                    hoveredAction = hovered ? action : (hoveredAction == action ? nil : hoveredAction)
+                    updateActionHover(action, hovering: hovered)
                 },
                 onClick: { triggerRecordingAction(action) }
             )
@@ -706,7 +732,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 } : nil,
                 onHoverChanged: { hovered in
                     guard !recordingActionLocked else { return }
-                    hoveredAction = hovered ? action : (hoveredAction == action ? nil : hoveredAction)
+                    updateActionHover(action, hovering: hovered)
                 },
                 onClick: { triggerRecordingAction(action) }
             )
@@ -720,6 +746,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
         pressedAction = nil
         cancelDragOffset = .zero
         hoveredAction = nil
+        hintedAction = nil
+        actionHintTask?.cancel()
         transcriptHoverExitTask?.cancel()
         isTranscriptHoverActive = false
         state.performRecordingControlAction(action)
@@ -881,6 +909,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
             transcriptHoverExitTask?.cancel()
             isTranscriptHoverActive = false
             hoveredAction = nil
+            hintedAction = nil
+            actionHintTask?.cancel()
             pressedAction = nil
             cancelDragOffset = .zero
         }
@@ -1038,15 +1068,11 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private func actionHorizontalOffset(_ action: RecordingControlAction) -> CGFloat {
-        let distanceFromCenter: CGFloat
-        if usesCompactRecordingLayout {
-            distanceFromCenter = capsuleWidth / 2 - 16
-        } else {
-            distanceFromCenter = capsuleWidth / 2
-                - TF.recordingEdgeInset
-                - TF.recordingControlSize / 2
-        }
-        return action == .finish ? -distanceFromCenter : distanceFromCenter
+        recordingActionHorizontalOffset(
+            action,
+            capsuleWidth: capsuleWidth,
+            usesCompactLayout: usesCompactRecordingLayout
+        )
     }
 
     private func actionTitle(_ action: RecordingControlAction) -> String {
@@ -1084,6 +1110,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         )
         .frame(maxWidth: TF.recordingTooltipMaxWidth)
         .fixedSize(horizontal: true, vertical: false)
+        .shadow(color: Color.black.opacity(0.35), radius: 6, x: 0, y: 2)
     }
 
     private func hintBubble(text: String) -> some View {
@@ -1103,6 +1130,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
                             .strokeBorder(TF.floatingBorder, lineWidth: 0.5)
                     }
             )
+            .fixedSize(horizontal: true, vertical: false)
+            .shadow(color: Color.black.opacity(0.35), radius: 6, x: 0, y: 2)
     }
 
     private func showModeHint() {
@@ -1120,6 +1149,30 @@ struct FloatingBarView<S: FloatingBarState>: View {
         modeHintTask = nil
         if showsModeHint {
             showsModeHint = false
+        }
+    }
+
+    private func updateActionHover(_ action: RecordingControlAction, hovering: Bool) {
+        if hovering {
+            guard hoveredAction != action else { return }
+            actionHintTask?.cancel()
+            hoveredAction = action
+            hintedAction = nil
+            actionHintTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled, hoveredAction == action else { return }
+                hintedAction = action
+            }
+            return
+        }
+
+        guard hoveredAction == action || hintedAction == action else { return }
+        actionHintTask?.cancel()
+        if hoveredAction == action {
+            hoveredAction = nil
+        }
+        if hintedAction == action {
+            hintedAction = nil
         }
     }
 
@@ -1170,6 +1223,7 @@ private struct TranscriptPopup: View {
                 FloatingBarHoverTracker(onHoverChanged: onHoverChanged)
             }
             .clipShape(RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous))
+            .shadow(color: Color.black.opacity(0.35), radius: 6, x: 0, y: 2)
             .onAppear { proxy.scrollTo("transcript-end", anchor: .bottom) }
             .onChange(of: text) { _, _ in
                 proxy.scrollTo("transcript-end", anchor: .bottom)
@@ -1263,11 +1317,20 @@ final class FloatingBarButtonNSView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        guard containsMouse else { return }
         onHoverChanged?(true)
     }
 
     override func mouseExited(with event: NSEvent) {
+        // Panel resizing can rebuild tracking areas and synthesize an exit while
+        // the pointer is still over the control.
+        guard !containsMouse else { return }
         onHoverChanged?(false)
+    }
+
+    private var containsMouse: Bool {
+        guard let window else { return false }
+        return bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1319,6 +1382,11 @@ struct FloatingBarHoverTracker: NSViewRepresentable {
 
 final class HoverTrackingNSView: NSView {
     var onHoverChanged: ((Bool) -> Void)?
+    private var enterWorkItem: DispatchWorkItem?
+
+    deinit {
+        enterWorkItem?.cancel()
+    }
 
     /// Tracking areas should observe hover without intercepting SwiftUI button
     /// clicks or scroll-wheel events from controls underneath this helper view.
@@ -1335,18 +1403,25 @@ final class HoverTrackingNSView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
-        guard containsMouse(event) else { return }
-        onHoverChanged?(true)
+        enterWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.containsMouse else { return }
+            self.onHoverChanged?(true)
+        }
+        enterWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
     override func mouseExited(with event: NSEvent) {
+        enterWorkItem?.cancel()
         // Resizing the panel rebuilds tracking areas and can synthesize an exit
         // even though the pointer never left the visible view.
-        guard !containsMouse(event) else { return }
+        guard !containsMouse else { return }
         onHoverChanged?(false)
     }
 
-    private func containsMouse(_ event: NSEvent) -> Bool {
-        bounds.contains(convert(event.locationInWindow, from: nil))
+    private var containsMouse: Bool {
+        guard let window else { return false }
+        return bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
     }
 }

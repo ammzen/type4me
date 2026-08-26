@@ -233,6 +233,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(TF.barHeight, 55)
         XCTAssertEqual(TF.barWidthCompact, 180)
         XCTAssertEqual(TF.barWidth, 400)
+        XCTAssertEqual(TF.floatingPanelShadowInset, 8)
         XCTAssertEqual(TF.recordingFinishControlSize, 45)
         XCTAssertEqual(TF.recordingCancelControlSize, 35)
         XCTAssertEqual(TF.recordingLeadingInset, 5)
@@ -251,16 +252,16 @@ final class AppStateTests: XCTestCase {
         let shortBar = FloatingBarPanelLayout(
             contentSize: NSSize(width: TF.barWidthCompact, height: TF.barHeight)
         )
-        XCTAssertEqual(shortBar.panelSize, NSSize(width: 180, height: 55))
+        XCTAssertEqual(shortBar.panelSize, NSSize(width: 196, height: 71))
         XCTAssertEqual(
             FloatingBarPanelLayout.fallback(for: .compact).panelSize,
-            NSSize(width: 180, height: 24)
+            NSSize(width: 196, height: 40)
         )
 
         let fullBar = FloatingBarPanelLayout(
             contentSize: NSSize(width: TF.barWidth, height: TF.barHeight)
         )
-        XCTAssertEqual(fullBar.panelSize, NSSize(width: 400, height: 55))
+        XCTAssertEqual(fullBar.panelSize, NSSize(width: 416, height: 71))
 
         let transcript = FloatingBarPanelLayout(
             contentSize: NSSize(
@@ -268,13 +269,13 @@ final class AppStateTests: XCTestCase {
                 height: TF.barHeight + TF.transcriptPopupGap + 60
             )
         )
-        XCTAssertEqual(transcript.panelSize, NSSize(width: 350, height: 125))
+        XCTAssertEqual(transcript.panelSize, NSSize(width: 366, height: 141))
 
         let action = FloatingBarPanelLayout(
             contentSize: NSSize(width: TF.barWidthCompact, height: TF.barHeight + 5 + 35),
             horizontalOverflow: 60
         )
-        XCTAssertEqual(action.panelSize, NSSize(width: 300, height: 95))
+        XCTAssertEqual(action.panelSize, NSSize(width: 316, height: 111))
     }
 
     func testFloatingPanelFrameKeepsBarBottomCentered() {
@@ -285,7 +286,10 @@ final class AppStateTests: XCTestCase {
         )
 
         XCTAssertEqual(frame.midX, visibleFrame.midX)
-        XCTAssertEqual(frame.minY, visibleFrame.minY + TF.barBottomOffset)
+        XCTAssertEqual(
+            frame.minY + TF.floatingPanelShadowInset,
+            visibleFrame.minY + TF.barBottomOffset
+        )
 
         let expandedFrame = FloatingBarPanel.bottomCenteredFrame(
             size: NSSize(width: 400, height: 185),
@@ -294,24 +298,53 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(expandedFrame.minY, frame.minY)
     }
 
+    func testRecordingActionHintsAreCenteredOverTheirControls() {
+        let width: CGFloat = 180
+        let finishOffset = recordingActionHorizontalOffset(
+            .finish,
+            capsuleWidth: width,
+            usesCompactLayout: false
+        )
+        let cancelOffset = recordingActionHorizontalOffset(
+            .cancel,
+            capsuleWidth: width,
+            usesCompactLayout: false
+        )
+
+        XCTAssertEqual(width / 2 + finishOffset, TF.recordingLeadingInset + TF.recordingFinishControlSize / 2)
+        XCTAssertEqual(width / 2 + cancelOffset, width - TF.recordingTrailingInset - TF.recordingCancelControlSize / 2)
+        XCTAssertEqual(
+            width / 2 + recordingActionHorizontalOffset(.finish, capsuleWidth: width, usesCompactLayout: true),
+            16
+        )
+        XCTAssertEqual(
+            width / 2 + recordingActionHorizontalOffset(.cancel, capsuleWidth: width, usesCompactLayout: true),
+            width - 16
+        )
+    }
+
     func testFloatingPanelControllerEnablesMouseOnlyForVisibleContent() async throws {
         let appState = AppState()
         let controller = FloatingBarController(state: appState)
+        // This test injects layouts directly; detach the live SwiftUI reporter.
+        controller.panel.contentView = nil
         appState.barPhase = .recording
 
         let visibleLayout = FloatingBarPanelLayout(
-            contentSize: NSSize(width: TF.barWidthCompact, height: TF.barHeight)
+            contentSize: NSSize(width: TF.barWidthCompact, height: TF.barHeight),
+            capsuleSize: NSSize(width: TF.barWidthCompact, height: TF.barHeight)
         )
         controller.updatePanelLayout(visibleLayout)
         XCTAssertFalse(controller.panel.ignoresMouseEvents)
         XCTAssertEqual(controller.panel.frame.size, visibleLayout.panelSize)
-        XCTAssertTrue(controller.panel.hasShadow)
+        XCTAssertFalse(controller.panel.hasShadow)
 
         let previewLayout = FloatingBarPanelLayout(
             contentSize: NSSize(
                 width: TF.transcriptPopupWidth,
                 height: TF.barHeight + TF.transcriptPopupGap + TF.transcriptPopupMaxHeight
-            )
+            ),
+            capsuleSize: NSSize(width: TF.barWidthCompact, height: TF.barHeight)
         )
         controller.updatePanelLayout(previewLayout)
         XCTAssertEqual(controller.panel.frame.size, previewLayout.panelSize)
@@ -321,10 +354,30 @@ final class AppStateTests: XCTestCase {
         defer { controller.panel.orderOut(nil) }
 
         controller.updatePanelLayout(visibleLayout)
-        XCTAssertEqual(controller.panel.frame.size, previewLayout.panelSize)
-
-        try await Task.sleep(for: .milliseconds(400))
         XCTAssertEqual(controller.panel.frame.size, visibleLayout.panelSize)
+
+        let wideCapsuleLayout = FloatingBarPanelLayout(
+            contentSize: NSSize(
+                width: TF.barWidth,
+                height: TF.barHeight + TF.transcriptPopupGap + TF.transcriptPopupMaxHeight
+            ),
+            capsuleSize: NSSize(width: TF.barWidth, height: TF.barHeight)
+        )
+        controller.updatePanelLayout(wideCapsuleLayout)
+        XCTAssertEqual(controller.panel.frame.size, wideCapsuleLayout.panelSize)
+
+        let animatedCapsuleLayout = FloatingBarPanelLayout(
+            contentSize: visibleLayout.contentSize,
+            capsuleSize: visibleLayout.capsuleSize
+        )
+        controller.updatePanelLayout(animatedCapsuleLayout)
+        XCTAssertEqual(
+            controller.panel.frame.size,
+            NSSize(width: wideCapsuleLayout.panelSize.width, height: animatedCapsuleLayout.panelSize.height)
+        )
+
+        try await Task.sleep(for: .milliseconds(450))
+        XCTAssertEqual(controller.panel.frame.size, animatedCapsuleLayout.panelSize)
 
         controller.panel.orderOut(nil)
         appState.barPhase = .hidden

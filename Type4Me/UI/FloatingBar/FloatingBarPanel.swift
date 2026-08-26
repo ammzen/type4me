@@ -6,6 +6,7 @@ struct FloatingBarPanelLayout: Equatable {
 
     let contentSize: NSSize
     var horizontalOverflow: CGFloat = 0
+    var capsuleSize: NSSize? = nil
 
     var hasVisibleContent: Bool {
         contentSize.width > 0 && contentSize.height > 0
@@ -14,16 +15,17 @@ struct FloatingBarPanelLayout: Equatable {
     var panelSize: NSSize {
         guard hasVisibleContent else { return NSSize(width: 1, height: 1) }
         return NSSize(
-            width: ceil(contentSize.width + 2 * horizontalOverflow),
-            height: ceil(contentSize.height)
+            width: ceil(contentSize.width + 2 * (horizontalOverflow + TF.floatingPanelShadowInset)),
+            height: ceil(contentSize.height + 2 * TF.floatingPanelShadowInset)
         )
     }
 
     static func fallback(for style: RecordingIndicatorStyle) -> FloatingBarPanelLayout {
-        FloatingBarPanelLayout(contentSize: NSSize(
+        let size = NSSize(
             width: TF.barWidthCompact,
             height: style == .compact ? TF.compactIndicatorHeight : TF.barHeight
-        ))
+        )
+        return FloatingBarPanelLayout(contentSize: size, capsuleSize: size)
     }
 }
 
@@ -45,7 +47,7 @@ final class FloatingBarPanel: NSPanel {
         level = .floating
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        hasShadow = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
@@ -73,7 +75,7 @@ final class FloatingBarPanel: NSPanel {
     static func bottomCenteredFrame(size: NSSize, visibleFrame: NSRect) -> NSRect {
         NSRect(
             x: visibleFrame.midX - size.width / 2,
-            y: visibleFrame.minY + TF.barBottomOffset,
+            y: visibleFrame.minY + TF.barBottomOffset - TF.floatingPanelShadowInset,
             width: size.width,
             height: size.height
         )
@@ -87,7 +89,7 @@ final class FloatingBarPanel: NSPanel {
 @MainActor
 final class FloatingBarController {
 
-    private static let panelShrinkDelay: Duration = .milliseconds(350)
+    private static let capsuleShrinkDelay: Duration = .seconds(TF.recordingCapsuleSpringResponse)
 
     let panel: FloatingBarPanel
     private let state: AppState
@@ -123,6 +125,7 @@ final class FloatingBarController {
     }
 
     func updatePanelLayout(_ layout: FloatingBarPanelLayout) {
+        let previousLayout = currentLayout
         currentLayout = layout
 
         panel.ignoresMouseEvents = !layout.hasVisibleContent || state.barPhase == .hidden
@@ -138,7 +141,7 @@ final class FloatingBarController {
             && state.barPhase != .hidden
             && !panel.isVisible
             && panelGeneration > 0
-        resizePanel(to: layout.panelSize, display: panel.isVisible)
+        resizePanel(from: previousLayout, to: layout, display: panel.isVisible)
 
         if shouldShow {
             show()
@@ -160,7 +163,7 @@ final class FloatingBarController {
             return
         }
 
-        resizePanel(to: layout.panelSize, display: panel.isVisible)
+        resizePanel(from: currentLayout, to: layout, display: panel.isVisible)
         panel.ignoresMouseEvents = false
 
         panel.contentView?.layer?.removeAllAnimations()
@@ -201,31 +204,44 @@ final class FloatingBarController {
         return .fallback(for: RecordingIndicatorStyle.current())
     }
 
-    private func resizePanel(to targetSize: NSSize, display: Bool) {
+    private func resizePanel(
+        from previousLayout: FloatingBarPanelLayout,
+        to layout: FloatingBarPanelLayout,
+        display: Bool
+    ) {
         cancelPendingPanelShrink()
 
+        let targetSize = layout.panelSize
         let currentSize = panel.frame.size
         guard !approximatelyEqual(currentSize, targetSize) else { return }
 
-        let isShrinking = targetSize.width < currentSize.width - 0.5
-            || targetSize.height < currentSize.height - 0.5
-        guard display, isShrinking else {
-            applyPanelSize(targetSize, display: display)
-            return
-        }
+        let capsuleWidthShrinks = previousLayout.capsuleSize.map { previous in
+            layout.capsuleSize.map { $0.width < previous.width - 0.5 } ?? false
+        } ?? false
+        let capsuleHeightShrinks = previousLayout.capsuleSize.map { previous in
+            layout.capsuleSize.map { $0.height < previous.height - 0.5 } ?? false
+        } ?? false
+        let delaysWidth = display
+            && targetSize.width < currentSize.width - 0.5
+            && capsuleWidthShrinks
+        let delaysHeight = display
+            && targetSize.height < currentSize.height - 0.5
+            && capsuleHeightShrinks
 
-        // Expand either axis immediately, but keep shrinking axes large enough
-        // for the capsule spring and overlay fade to finish without clipping.
+        // Overlay-only axes resize immediately. Only axes whose visible capsule
+        // is still springing retain their old bounds until that spring ends.
         let transitionSize = NSSize(
-            width: max(currentSize.width, targetSize.width),
-            height: max(currentSize.height, targetSize.height)
+            width: delaysWidth ? max(currentSize.width, targetSize.width) : targetSize.width,
+            height: delaysHeight ? max(currentSize.height, targetSize.height) : targetSize.height
         )
         if !approximatelyEqual(currentSize, transitionSize) {
-            applyPanelSize(transitionSize, display: true)
+            applyPanelSize(transitionSize, display: display)
         }
 
+        guard delaysWidth || delaysHeight else { return }
+
         panelShrinkTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: Self.panelShrinkDelay)
+            try? await Task.sleep(for: Self.capsuleShrinkDelay)
             guard !Task.isCancelled, let self else { return }
             guard self.state.barPhase != .hidden,
                   self.approximatelyEqual(self.currentLayout.panelSize, targetSize)
@@ -248,10 +264,6 @@ final class FloatingBarController {
             visibleFrame: screen.visibleFrame
         )
         panel.setFrame(frame, display: display)
-        Task { @MainActor [weak self] in
-            self?.panel.contentView?.layoutSubtreeIfNeeded()
-            self?.panel.invalidateShadow()
-        }
     }
 
     private func resolvedAnchorScreen() -> NSScreen? {
