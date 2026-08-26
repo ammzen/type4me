@@ -72,6 +72,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
     @State private var isTranscriptHoverActive = false
     @State private var transcriptHoverExitTask: Task<Void, Never>?
     @State private var hoveredAction: RecordingControlAction?
+    @State private var pressedAction: RecordingControlAction?
+    @State private var cancelDragOffset: CGSize = .zero
     @State private var showsModeHint = false
     @State private var modeHintTask: Task<Void, Never>?
     @State private var recordingActionLocked = false
@@ -525,6 +527,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
         }
         .overlay {
             FloatingBarButtonInteraction(
+                onPressChanged: { pressed in
+                    guard !recordingActionLocked else { return }
+                    pressedAction = pressed ? action : (pressedAction == action ? nil : pressedAction)
+                },
                 onHoverChanged: { hovered in
                     guard !recordingActionLocked else { return }
                     hoveredAction = hovered ? action : (hoveredAction == action ? nil : hoveredAction)
@@ -613,18 +619,16 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     style: recordingVisualStyle,
                     audioEnergy: state.audioLevel.current,
                     isHovered: hoveredAction == .finish,
-                    isPressed: recordingActionLocked
+                    isPressed: pressedAction == .finish || recordingActionLocked
                 )
                 .id("recording_orb_button")
             } else {
-                Circle()
-                    .fill(TF.floatingControlLight)
-                    .overlay {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(TF.floatingBackground)
-                            .allowsHitTesting(false)
-                    }
+                LiquidGlassCancelButton(
+                    isHovered: hoveredAction == .cancel,
+                    isPressed: pressedAction == .cancel || recordingActionLocked,
+                    dragOffset: pressedAction == .cancel ? cancelDragOffset : .zero
+                )
+                .id("recording_cancel_button")
             }
         }
         .frame(width: size, height: size)
@@ -638,6 +642,17 @@ struct FloatingBarView<S: FloatingBarState>: View {
         }
         .overlay {
             FloatingBarButtonInteraction(
+                onPressChanged: { pressed in
+                    guard !recordingActionLocked else { return }
+                    pressedAction = pressed ? action : (pressedAction == action ? nil : pressedAction)
+                    if !pressed && action == .cancel {
+                        cancelDragOffset = .zero
+                    }
+                },
+                onDragOffsetChanged: action == .cancel ? { offset in
+                    guard !recordingActionLocked else { return }
+                    cancelDragOffset = offset
+                } : nil,
                 onHoverChanged: { hovered in
                     guard !recordingActionLocked else { return }
                     hoveredAction = hovered ? action : (hoveredAction == action ? nil : hoveredAction)
@@ -648,8 +663,11 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private func triggerRecordingAction(_ action: RecordingControlAction) {
+        guard presentationOverride == nil else { return }
         guard !recordingActionLocked else { return }
         recordingActionLocked = true
+        pressedAction = nil
+        cancelDragOffset = .zero
         hoveredAction = nil
         transcriptHoverExitTask?.cancel()
         isTranscriptHoverActive = false
@@ -812,6 +830,8 @@ struct FloatingBarView<S: FloatingBarState>: View {
             transcriptHoverExitTask?.cancel()
             isTranscriptHoverActive = false
             hoveredAction = nil
+            pressedAction = nil
+            cancelDragOffset = .zero
         }
         switch phase {
         case .preparing:
@@ -1077,25 +1097,37 @@ struct RecordingTimer: View {
 /// `acceptsFirstMouse` makes the first click actionable even while another app
 /// owns focus, which SwiftUI `Button` does not reliably guarantee here.
 private struct FloatingBarButtonInteraction: NSViewRepresentable {
+    var onPressChanged: ((Bool) -> Void)? = nil
+    var onDragOffsetChanged: ((CGSize) -> Void)? = nil
     let onHoverChanged: (Bool) -> Void
     let onClick: () -> Void
 
     func makeNSView(context: Context) -> FloatingBarButtonNSView {
         let view = FloatingBarButtonNSView()
+        view.onPressChanged = onPressChanged
+        view.onDragOffsetChanged = onDragOffsetChanged
         view.onHoverChanged = onHoverChanged
         view.onClick = onClick
         return view
     }
 
     func updateNSView(_ nsView: FloatingBarButtonNSView, context: Context) {
+        nsView.onPressChanged = onPressChanged
+        nsView.onDragOffsetChanged = onDragOffsetChanged
         nsView.onHoverChanged = onHoverChanged
         nsView.onClick = onClick
     }
 }
 
 final class FloatingBarButtonNSView: NSView {
+    var onPressChanged: ((Bool) -> Void)?
+    var onDragOffsetChanged: ((CGSize) -> Void)?
     var onHoverChanged: ((Bool) -> Void)?
     var onClick: (() -> Void)?
+
+    private var isTrackingPress: Bool = false
+
+    override var isFlipped: Bool { true }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -1118,8 +1150,33 @@ final class FloatingBarButtonNSView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        guard bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
-        onClick?()
+        let location = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(location) else { return }
+        isTrackingPress = true
+        let center = NSPoint(x: bounds.midX, y: bounds.midY)
+        let offset = CGSize(width: location.x - center.x, height: location.y - center.y)
+        onDragOffsetChanged?(offset)
+        onPressChanged?(true)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isTrackingPress else { return }
+        let location = convert(event.locationInWindow, from: nil)
+        let center = NSPoint(x: bounds.midX, y: bounds.midY)
+        let offset = CGSize(width: location.x - center.x, height: location.y - center.y)
+        onDragOffsetChanged?(offset)
+        onPressChanged?(true)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isTrackingPress else { return }
+        isTrackingPress = false
+        onDragOffsetChanged?(.zero)
+        onPressChanged?(false)
+        let location = convert(event.locationInWindow, from: nil)
+        if bounds.contains(location) {
+            onClick?()
+        }
     }
 }
 

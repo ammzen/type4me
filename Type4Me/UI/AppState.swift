@@ -72,7 +72,10 @@ enum RecordingVisualStyle: String, CaseIterable {
     case aurora
     case chrome
     case spectrum
-    case staticGlass = "static"
+    case staticSiri = "staticSiri"
+
+    /// Backward compatibility alias for staticGlass
+    static let staticGlass = Self.staticSiri
 
     var displayName: String {
         switch self {
@@ -86,19 +89,20 @@ enum RecordingVisualStyle: String, CaseIterable {
         case .aurora: return L("极光帷幕", "Aurora Veil")
         case .chrome: return L("液态铬", "Liquid Chrome")
         case .spectrum: return L("彩色声场", "Color Soundfield")
-        case .staticGlass: return L("静态", "Static")
+        case .staticSiri: return L("静态 Siri (低能耗)", "Static Siri (Power-saving)")
         }
     }
 
     var isAnimated: Bool {
-        self != .staticGlass
+        self != .staticSiri
     }
 
     static func current(userDefaults: UserDefaults = .standard) -> Self {
-        guard let raw = userDefaults.string(forKey: storageKey),
-              let style = Self(rawValue: raw)
-        else { return .siri }
-        return style
+        guard let raw = userDefaults.string(forKey: storageKey) else { return .siri }
+        if raw == "static" || raw == "staticGlass" {
+            return .staticSiri
+        }
+        return Self(rawValue: raw) ?? .siri
     }
 
     static func migrateLegacyPreferenceIfNeeded(userDefaults: UserDefaults = .standard) {
@@ -114,8 +118,8 @@ enum RecordingVisualStyle: String, CaseIterable {
             migrated = .voiceWave
         case "timeline":
             migrated = .spectrum
-        case "effectless", "hidden", "static":
-            migrated = .staticGlass
+        case "effectless", "hidden", "static", "staticGlass", "staticSiri":
+            migrated = .staticSiri
         case "siri", "blueDrop", "chromaticMetal", "frost", "opal", "voiceWave", "violetEmber", "aurora", "chrome", "spectrum":
             migrated = RecordingVisualStyle(rawValue: raw) ?? .siri
         default:

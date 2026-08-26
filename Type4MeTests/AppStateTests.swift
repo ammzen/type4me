@@ -258,7 +258,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertTrue(buttonTarget.acceptsFirstMouse(for: nil))
         XCTAssertTrue(buttonTarget.hitTest(NSPoint(x: 22, y: 22)) === buttonTarget)
 
-        let event = NSEvent.mouseEvent(
+        let downEvent = NSEvent.mouseEvent(
             with: .leftMouseDown,
             location: NSPoint(x: 22, y: 22),
             modifierFlags: [],
@@ -269,8 +269,56 @@ final class AppStateTests: XCTestCase {
             clickCount: 1,
             pressure: 1
         )
-        buttonTarget.mouseDown(with: try! XCTUnwrap(event))
-        XCTAssertEqual(clickCount, 1)
+        let upEvent = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: NSPoint(x: 22, y: 22),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 2,
+            clickCount: 1,
+            pressure: 0
+        )
+        buttonTarget.mouseDown(with: try! XCTUnwrap(downEvent))
+        XCTAssertEqual(clickCount, 0) // Does not trigger on mouseDown alone
+        buttonTarget.mouseUp(with: try! XCTUnwrap(upEvent))
+        XCTAssertEqual(clickCount, 1) // Triggers on mouseUp inside bounds
+
+        // Test drag-to-cancel: release outside bounds should not trigger click
+        var pressStates: [Bool] = []
+        buttonTarget.onPressChanged = { pressStates.append($0) }
+        buttonTarget.mouseDown(with: try! XCTUnwrap(downEvent))
+        XCTAssertEqual(pressStates.last, true)
+
+        let outsideDragEvent = NSEvent.mouseEvent(
+            with: .leftMouseDragged,
+            location: NSPoint(x: 100, y: 100),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 3,
+            clickCount: 1,
+            pressure: 1
+        )
+        buttonTarget.mouseDragged(with: try! XCTUnwrap(outsideDragEvent))
+        XCTAssertEqual(pressStates.last, true) // stays pressed during drag across screen
+
+        let outsideUpEvent = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: NSPoint(x: 100, y: 100),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 4,
+            clickCount: 1,
+            pressure: 0
+        )
+        buttonTarget.mouseUp(with: try! XCTUnwrap(outsideUpEvent))
+        XCTAssertEqual(pressStates.last, false) // unpressed on mouseUp
+        XCTAssertEqual(clickCount, 1) // clickCount still 1 (release outside bounds does not trigger click)
     }
 
     func testFloatingIndicatorActionCallbacksAreForwarded() {

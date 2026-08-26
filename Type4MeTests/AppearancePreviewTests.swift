@@ -90,10 +90,10 @@ final class AppearancePreviewTests: XCTestCase {
         XCTAssertEqual(RecordingVisualStyle.aurora.displayName, L("极光帷幕", "Aurora Veil"))
         XCTAssertEqual(RecordingVisualStyle.chrome.displayName, L("液态铬", "Liquid Chrome"))
         XCTAssertEqual(RecordingVisualStyle.spectrum.displayName, L("彩色声场", "Color Soundfield"))
-        XCTAssertEqual(RecordingVisualStyle.staticGlass.displayName, L("静态", "Static"))
+        XCTAssertEqual(RecordingVisualStyle.staticSiri.displayName, L("静态 Siri (低能耗)", "Static Siri (Power-saving)"))
 
         XCTAssertTrue(RecordingVisualStyle.siri.isAnimated)
-        XCTAssertFalse(RecordingVisualStyle.staticGlass.isAnimated)
+        XCTAssertFalse(RecordingVisualStyle.staticSiri.isAnimated)
     }
 
     // MARK: - Text Formatting Options Preview Tests

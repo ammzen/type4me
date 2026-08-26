@@ -417,7 +417,7 @@ public struct OrbPreset: Equatable {
         )
     )
 
-    public static let staticGlass = OrbPreset(
+    public static let staticSiri = OrbPreset(
         styleID: 10,
         isAnimated: false,
         uniforms: makeSeed(
@@ -427,24 +427,26 @@ public struct OrbPreset: Equatable {
             warp: 3.2,
             ridgeAmt: 0.5,
             sharp: 2.2,
-            shade: 0.16,
+            shade: 0.12,
             sheen: 0.28,
-            gloss: 0.32,
-            shellMidAlpha: 0.22,
+            gloss: 0.24,
+            shellMidAlpha: 0.18,
             shellEdgeAlpha: 1.0,
-            exposure: 1.5,
+            exposure: 2.0,
             styleFlowIndex: 9.0,
             glassOpacity: 1.0,
-            colorA: "#330006",
-            colorB: "#FF1F38",
-            colorC: "#FF5266",
-            colorD: "#800010",
-            shellMid: "#FF667A",
-            shellEdge: "#FF1F38",
-            canvasColor: "#050001",
-            glowColor: "#FF1F38"
+            colorA: "#FFD86B",
+            colorB: "#82F4FF",
+            colorC: "#FF7BD5",
+            colorD: "#8E6CFF",
+            shellMid: "#9BF4FF",
+            shellEdge: "#C5A9FF",
+            canvasColor: "#030409",
+            glowColor: "#956CFF"
         )
     )
+
+    public static let staticGlass = staticSiri
 }
 
 extension RecordingVisualStyle {
@@ -460,7 +462,7 @@ extension RecordingVisualStyle {
         case .aurora: return .aurora
         case .chrome: return .chrome
         case .spectrum: return .spectrum
-        case .staticGlass: return .staticGlass
+        case .staticSiri: return .staticSiri
         }
     }
 }

@@ -83,8 +83,8 @@ private final class LiquidOrbRenderer: NSObject, MTKViewDelegate {
         view.colorPixelFormat = .bgra8Unorm
         view.framebufferOnly = true
         view.preferredFramesPerSecond = 60
-        view.enableSetNeedsDisplay = false
-        view.isPaused = false
+        view.enableSetNeedsDisplay = !preset.isAnimated
+        view.isPaused = !preset.isAnimated
         view.layer?.isOpaque = false
         view.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
     }
@@ -175,95 +175,21 @@ private struct LiquidOrbMetalSurface: NSViewRepresentable {
     }
 
     func updateNSView(_ view: MTKView, context: Context) {
+        view.isPaused = !isAnimated
+        view.enableSetNeedsDisplay = !isAnimated
         context.coordinator.renderer?.updatePreset(
             preset,
             audioEnergy: audioEnergy,
             isAnimated: isAnimated
         )
+        if !isAnimated {
+            view.setNeedsDisplay(view.bounds)
+        }
     }
 
     final class Coordinator {
         var mtkView: MTKView?
         var renderer: LiquidOrbRenderer?
-    }
-}
-
-// MARK: - Static Red Glass Orb View (No texture / no wave, pure red glass sphere)
-
-struct StaticRedGlassOrbView: View {
-    let size: CGFloat
-
-    var body: some View {
-        ZStack {
-            // 1. Deep red glass body gradient (radial depth from bright vivid crimson to dark wine red rim)
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color(red: 1.0, green: 0.22, blue: 0.35),
-                            Color(red: 0.85, green: 0.08, blue: 0.20),
-                            Color(red: 0.45, green: 0.02, blue: 0.08),
-                        ],
-                        center: UnitPoint(x: 0.38, y: 0.32),
-                        startRadius: 2,
-                        endRadius: size * 0.52
-                    )
-                )
-
-            // 2. Bottom-right subtle ambient bounce light (soft coral reflection)
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color(red: 1.0, green: 0.45, blue: 0.55).opacity(0.35),
-                            Color.clear,
-                        ],
-                        center: UnitPoint(x: 0.65, y: 0.78),
-                        startRadius: 1,
-                        endRadius: size * 0.36
-                    )
-                )
-
-            // 3. Delicate glass outer rim glow (Fresnel rim)
-            Circle()
-                .strokeBorder(
-                    LinearGradient(
-                        stops: [
-                            .init(color: Color.white.opacity(0.65), location: 0.0),
-                            .init(color: Color(red: 1.0, green: 0.3, blue: 0.4).opacity(0.50), location: 0.3),
-                            .init(color: Color(red: 0.6, green: 0.0, blue: 0.1).opacity(0.80), location: 0.7),
-                            .init(color: Color(red: 1.0, green: 0.4, blue: 0.5).opacity(0.40), location: 1.0),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1.0
-                )
-
-            // 4. Primary specular gloss arc (top-left glass reflection)
-            Ellipse()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.85),
-                            Color.white.opacity(0.15),
-                            Color.clear,
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(width: size * 0.46, height: size * 0.24)
-                .rotationEffect(.degrees(-22))
-                .offset(x: -size * 0.14, y: -size * 0.18)
-
-            // 5. Secondary micro specular dot
-            Circle()
-                .fill(Color.white.opacity(0.70))
-                .frame(width: size * 0.07, height: size * 0.07)
-                .offset(x: -size * 0.25, y: -size * 0.10)
-        }
-        .frame(width: size, height: size)
     }
 }
 
@@ -281,17 +207,13 @@ struct LiquidGlassOrb: View {
 
     var body: some View {
         ZStack {
-            if style == .staticGlass {
-                StaticRedGlassOrbView(size: orbSize)
-            } else {
-                LiquidOrbMetalSurface(
-                    preset: style.preset,
-                    audioEnergy: max(0.0, min(1.0, audioEnergy)),
-                    isAnimated: style.isAnimated && !reduceMotion
-                )
-                .frame(width: orbSize, height: orbSize)
-                .clipShape(Circle())
-            }
+            LiquidOrbMetalSurface(
+                preset: style.preset,
+                audioEnergy: max(0.0, min(1.0, audioEnergy)),
+                isAnimated: style.isAnimated && !reduceMotion
+            )
+            .frame(width: orbSize, height: orbSize)
+            .clipShape(Circle())
 
             // Stop Affordance on hover / press
             RoundedRectangle(cornerRadius: 2.5, style: .continuous)
