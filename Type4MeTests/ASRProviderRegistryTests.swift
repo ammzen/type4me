@@ -4,7 +4,7 @@ import XCTest
 final class ASRProviderRegistryTests: XCTestCase {
 
     func testAvailableProvidersSupportDirectMode() {
-        for provider in [ASRProvider.volcano, .stepfunBatch, .mimo, .baidu, .bailian, .deepgram, .assemblyai, .soniox, .openai] {
+        for provider in [ASRProvider.volcano, .stepfunBatch, .mimo, .baidu, .bailian, .deepgram, .gemini, .assemblyai, .soniox, .openai] {
             XCTAssertTrue(ASRProviderRegistry.supports(.direct, for: provider))
         }
     }
@@ -37,6 +37,20 @@ final class ASRProviderRegistryTests: XCTestCase {
         XCTAssertEqual(bailianModes.map(\.id), [ProcessingMode.directId, customMode.id])
     }
 
+    func testRegistry_exposesGeminiProviderConfiguration() {
+        let entry = ASRProviderRegistry.entry(for: .gemini)
+        XCTAssertNotNil(entry)
+        XCTAssertTrue(entry?.isAvailable ?? false)
+        XCTAssertTrue(ASRProviderRegistry.configType(for: .gemini) == GeminiASRConfig.self)
+        XCTAssertNotNil(ASRProviderRegistry.createClient(for: .gemini))
+
+        let caps = ASRProviderRegistry.capabilities(for: .gemini)
+        XCTAssertTrue(caps.isAvailable)
+        XCTAssertTrue(caps.isStreaming)
+        XCTAssertTrue(caps.supportsRealtimeRecognition)
+        XCTAssertEqual(caps.audioInput, .pcmData)
+    }
+
     func testRegistry_exposesMiMoProviderConfiguration() {
         let entry = ASRProviderRegistry.entry(for: .mimo)
         XCTAssertNotNil(entry)
@@ -63,7 +77,7 @@ final class ASRProviderRegistryTests: XCTestCase {
         // Realtime streaming providers
         for realtime in [
             ASRProvider.apple, .volcano, .deepgram, .cartesia,
-            .assemblyai, .elevenlabs, .grok, .soniox, .bailian, .baidu
+            .assemblyai, .elevenlabs, .gemini, .grok, .soniox, .bailian, .baidu
         ] {
             let caps = ASRProviderRegistry.capabilities(for: realtime)
             XCTAssertTrue(caps.isAvailable)
