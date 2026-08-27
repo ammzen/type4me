@@ -242,6 +242,91 @@ final class AppearancePreviewTests: XCTestCase {
         demoState.stop()
     }
 
+    // MARK: - Compact Live Transcript Tests
+
+    func testCompactTranscriptOffset() {
+        // Text fits comfortably inside viewport: no offset (leading aligned)
+        XCTAssertEqual(compactTranscriptOffset(textWidth: 0, viewportWidth: 164), 0)
+        XCTAssertEqual(compactTranscriptOffset(textWidth: 80, viewportWidth: 164), 0)
+        // Exactly at viewport boundary: no offset
+        XCTAssertEqual(compactTranscriptOffset(textWidth: 164, viewportWidth: 164), 0)
+        // Text overflows viewport: negative offset aligns text tail to right edge
+        XCTAssertEqual(compactTranscriptOffset(textWidth: 190, viewportWidth: 164), -26)
+        XCTAssertEqual(compactTranscriptOffset(textWidth: 300, viewportWidth: 164), -136)
+    }
+
+    func testCompactLiveTranscriptDesignTokens() {
+        XCTAssertEqual(TF.compactIndicatorWidth, 180)
+        XCTAssertEqual(TF.compactIndicatorHeight, 24)
+        XCTAssertEqual(TF.compactTranscriptLaneHeight, 24)
+        XCTAssertEqual(TF.compactTranscriptExpandedHeight, 48)
+        XCTAssertEqual(TF.compactTranscriptFontSize, 12)
+        XCTAssertEqual(TF.compactTranscriptCornerRadius, 10)
+        XCTAssertEqual(TF.compactTranscriptHorizontalInset, 8)
+        XCTAssertEqual(TF.compactTranscriptLeadingFadeWidth, 10)
+
+        // Viewport width arithmetic contract
+        let viewportWidth = TF.compactIndicatorWidth - TF.compactTranscriptHorizontalInset * 2
+        XCTAssertEqual(viewportWidth, 164)
+
+        // Height arithmetic contract
+        XCTAssertEqual(
+            TF.compactTranscriptLaneHeight + TF.compactIndicatorHeight,
+            TF.compactTranscriptExpandedHeight
+        )
+    }
+
+    func testFloatingBarPresentation_compactLiveTranscriptSupport() {
+        let compactLiveOn = FloatingBarPresentation(
+            indicatorStyle: .compact,
+            showsLiveTranscript: true
+        )
+        XCTAssertEqual(compactLiveOn.indicatorStyle, .compact)
+        XCTAssertTrue(compactLiveOn.showsLiveTranscript)
+
+        let compactLiveOff = FloatingBarPresentation(
+            indicatorStyle: .compact,
+            showsLiveTranscript: false
+        )
+        XCTAssertEqual(compactLiveOff.indicatorStyle, .compact)
+        XCTAssertFalse(compactLiveOff.showsLiveTranscript)
+    }
+
+    func testFloatingBarPresentation_switchingStylesPreservesCorrectPreferences() {
+        var presentation = FloatingBarPresentation(
+            indicatorStyle: .compact,
+            showsLiveTranscript: true
+        )
+        XCTAssertEqual(presentation.indicatorStyle, .compact)
+        XCTAssertTrue(presentation.showsLiveTranscript)
+
+        // Switch to regular
+        presentation.indicatorStyle = .regular
+        XCTAssertEqual(presentation.indicatorStyle, .regular)
+        XCTAssertTrue(presentation.showsLiveTranscript)
+
+        // Switch live transcript off
+        presentation.showsLiveTranscript = false
+        XCTAssertFalse(presentation.showsLiveTranscript)
+    }
+
+    func testFloatingBarPanelLayout_fallbackWithLiveTranscript() {
+        let compactLiveOn = FloatingBarPanelLayout.fallback(for: .compact, showsLiveTranscript: true)
+        XCTAssertEqual(compactLiveOn.contentSize, NSSize(width: TF.barWidthCompact, height: TF.compactTranscriptExpandedHeight))
+        XCTAssertEqual(compactLiveOn.capsuleSize, NSSize(width: TF.barWidthCompact, height: TF.compactTranscriptExpandedHeight))
+        XCTAssertEqual(compactLiveOn.panelSize, NSSize(width: 196, height: 64))
+
+        let compactLiveOff = FloatingBarPanelLayout.fallback(for: .compact, showsLiveTranscript: false)
+        XCTAssertEqual(compactLiveOff.contentSize, NSSize(width: TF.barWidthCompact, height: TF.compactIndicatorHeight))
+        XCTAssertEqual(compactLiveOff.capsuleSize, NSSize(width: TF.barWidthCompact, height: TF.compactIndicatorHeight))
+        XCTAssertEqual(compactLiveOff.panelSize, NSSize(width: 196, height: 40))
+
+        let regular = FloatingBarPanelLayout.fallback(for: .regular)
+        XCTAssertEqual(regular.contentSize, NSSize(width: TF.barWidthCompact, height: TF.barHeight))
+        XCTAssertEqual(regular.capsuleSize, NSSize(width: TF.barWidthCompact, height: TF.barHeight))
+        XCTAssertEqual(regular.panelSize, NSSize(width: 196, height: 71))
+    }
+
     // MARK: - SettingsTab Appearance Tests
 
     func testSettingsTab_appearanceProperties() {

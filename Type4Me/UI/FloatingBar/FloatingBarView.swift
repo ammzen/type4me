@@ -125,8 +125,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private var effectiveShowsLiveTranscript: Bool {
-        guard effectiveIndicatorStyle == .regular else { return false }
-        return presentationOverride?.showsLiveTranscript ?? showLiveTranscript
+        presentationOverride?.showsLiveTranscript ?? showLiveTranscript
     }
 
     private var effectiveHoverTranscriptPreview: Bool {
@@ -153,6 +152,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
     private var usesCompactRecordingLayout: Bool {
         effectiveIndicatorStyle == .compact
             && (state.barPhase == .preparing || state.barPhase == .recording)
+    }
+
+    private var usesCompactExpandedRecordingLayout: Bool {
+        usesCompactRecordingLayout && effectiveShowsLiveTranscript
     }
 
     // MARK: - Transcript Popup
@@ -206,7 +209,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private var capsuleHeight: CGFloat {
-        usesCompactPresentation ? TF.compactIndicatorHeight : TF.barHeight
+        guard usesCompactPresentation else { return TF.barHeight }
+        return usesCompactExpandedRecordingLayout
+            ? TF.compactTranscriptExpandedHeight
+            : TF.compactIndicatorHeight
     }
 
     private var compactStatusIntrinsicWidth: CGFloat {
@@ -331,6 +337,23 @@ struct FloatingBarView<S: FloatingBarState>: View {
         )
     }
 
+    private func updateRecordingPeakWidthIfNeeded() {
+        guard !usesCompactPresentation, state.barPhase == .recording, effectiveShowsLiveTranscript else {
+            if !effectiveShowsLiveTranscript && state.barPhase == .recording {
+                recordingPeakWidth = baseRecordingWidth
+            }
+            return
+        }
+        let text = state.transcriptionText.isEmpty
+            ? state.segments.map(\.text).joined()
+            : state.transcriptionText
+        guard !text.isEmpty else { return }
+        let needed = recordingNeededWidth(for: text)
+        if needed > recordingPeakWidth {
+            recordingPeakWidth = needed
+        }
+    }
+
     var body: some View {
         VStack(spacing: topOverlayGap) {
             if let overlay = activeTopOverlay {
@@ -345,6 +368,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         .padding(TF.floatingPanelShadowInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .onAppear {
+            updateRecordingPeakWidthIfNeeded()
             onPanelLayoutChange?(panelLayout)
         }
         .onChange(of: panelLayout) { _, layout in
@@ -353,24 +377,25 @@ struct FloatingBarView<S: FloatingBarState>: View {
         .onChange(of: state.barPhase) { _, newPhase in
             handlePhaseChange(newPhase)
         }
-        .onChange(of: state.segments) { _, newSegments in
-            guard !usesCompactPresentation, state.barPhase == .recording, effectiveShowsLiveTranscript else { return }
-            let text = newSegments.map(\.text).joined()
-            let needed = recordingNeededWidth(for: text)
-            if needed > recordingPeakWidth {
-                recordingPeakWidth = needed
-            }
+        .onChange(of: state.segments) { _, _ in
+            updateRecordingPeakWidthIfNeeded()
         }
         .onChange(of: state.transcriptionText) { _, text in
             if !text.isEmpty && !usesCompactPresentation {
                 dismissModeHint()
             }
+            updateRecordingPeakWidthIfNeeded()
         }
-        .onChange(of: effectiveShowsLiveTranscript) { _, _ in
-            guard !usesCompactPresentation, state.barPhase == .recording else { return }
-            let needed = recordingNeededWidth(for: state.transcriptionText)
-            if needed > recordingPeakWidth {
-                recordingPeakWidth = needed
+        .onChange(of: effectiveShowsLiveTranscript) { _, showsLive in
+            if showsLive {
+                updateRecordingPeakWidthIfNeeded()
+            } else {
+                recordingPeakWidth = baseRecordingWidth
+            }
+        }
+        .onChange(of: effectiveIndicatorStyle) { _, newStyle in
+            if newStyle == .regular {
+                updateRecordingPeakWidthIfNeeded()
             }
         }
         .onDisappear {
@@ -382,13 +407,24 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     // MARK: - Capsule Container
 
+    private var barCornerRadius: CGFloat {
+        if usesCompactExpandedRecordingLayout {
+            return TF.compactTranscriptCornerRadius
+        }
+        return capsuleHeight / 2
+    }
+
+    private var barShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: barCornerRadius, style: .continuous)
+    }
+
     private var capsuleBar: some View {
         barContent
             .frame(width: capsuleWidth, height: capsuleHeight)
-            .clipShape(Capsule())
+            .clipShape(barShape)
             .background {
                 capsuleBackground
-                    .clipShape(Capsule())
+                    .clipShape(barShape)
             }
             .overlay {
                 capsuleBorder
@@ -406,6 +442,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
             .animation(
                 .spring(response: TF.recordingCapsuleSpringResponse, dampingFraction: 1.0),
                 value: capsuleHeight
+            )
+            .animation(
+                .spring(response: TF.recordingCapsuleSpringResponse, dampingFraction: 1.0),
+                value: barCornerRadius
             )
     }
 
@@ -464,7 +504,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         .animation(.easeInOut(duration: 0.18), value: state.barPhase)
     }
 
-    private var compactRecordingContent: some View {
+    private var compactRecordingControls: some View {
         HStack(spacing: 0) {
             compactRecordingButton(.finish)
                 .frame(width: 32, height: TF.compactIndicatorHeight)
@@ -480,6 +520,19 @@ struct FloatingBarView<S: FloatingBarState>: View {
             }
         }
         .frame(width: TF.compactIndicatorWidth, height: TF.compactIndicatorHeight)
+    }
+
+    @ViewBuilder
+    private var compactRecordingContent: some View {
+        if effectiveShowsLiveTranscript {
+            VStack(spacing: 0) {
+                CompactLiveTranscriptRow(text: state.transcriptionText)
+                compactRecordingControls
+            }
+            .frame(width: TF.compactIndicatorWidth, height: TF.compactTranscriptExpandedHeight)
+        } else {
+            compactRecordingControls
+        }
     }
 
     @ViewBuilder
@@ -631,6 +684,10 @@ struct FloatingBarView<S: FloatingBarState>: View {
         .padding(.trailing, TF.recordingTrailingInset)
     }
 
+    private var isLiveTranscriptTrailingAligned: Bool {
+        effectiveShowsLiveTranscript && !state.segments.isEmpty && recordingPeakWidth >= TF.barWidth
+    }
+
     private var recordingText: some View {
         // The text is an overlay on a flexible Color.clear so it never
         // participates in the HStack layout: it can never push the cancel
@@ -638,13 +695,13 @@ struct FloatingBarView<S: FloatingBarState>: View {
         // is exactly the space between the two controls; the text is masked to
         // it, so overflow only fades on the leading edge.
         Color.clear
-            .overlay(alignment: recordingPeakWidth >= TF.barWidth ? .trailing : .center) {
+            .overlay(alignment: isLiveTranscriptTrailingAligned ? .trailing : .center) {
                 recordingTextContent
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
             }
             .mask {
-                if effectiveShowsLiveTranscript && !state.segments.isEmpty && recordingPeakWidth >= TF.barWidth {
+                if isLiveTranscriptTrailingAligned {
                     HStack(spacing: 0) {
                         LinearGradient(
                             colors: [.clear, .white],
@@ -876,7 +933,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     private var capsuleBorder: some View {
-        Capsule()
+        barShape
             .strokeBorder(borderColor, lineWidth: 0.5)
     }
 
@@ -928,6 +985,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
             if recordingPeakWidth < base {
                 recordingPeakWidth = base
             }
+            updateRecordingPeakWidthIfNeeded()
             recordingActionLocked = false
         case .processing:
             dismissModeHint()

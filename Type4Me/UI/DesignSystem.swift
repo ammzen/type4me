@@ -141,6 +141,12 @@ enum TF {
 
     static let compactIndicatorWidth: CGFloat = barWidthCompact
     static let compactIndicatorHeight: CGFloat = 24
+    static let compactTranscriptLaneHeight: CGFloat = 24
+    static let compactTranscriptExpandedHeight: CGFloat = 48
+    static let compactTranscriptFontSize: CGFloat = 12
+    static let compactTranscriptCornerRadius: CGFloat = 10
+    static let compactTranscriptHorizontalInset: CGFloat = 8
+    static let compactTranscriptLeadingFadeWidth: CGFloat = 10
     static let compactIndicatorControlVisualSize: CGFloat = 15
     static let compactIndicatorWaveBarWidth: CGFloat = 2
     static let compactIndicatorWaveMinHeight: CGFloat = 2

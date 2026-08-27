@@ -74,12 +74,16 @@ struct AppearanceSettingsTab: View, SettingsCardHelpers {
 
             settingsGroupCard(L("录音显示", "Recording Display"), icon: "macwindow") {
                 indicatorStyleRow
+                SettingsDivider()
 
                 if !isCompact {
-                    SettingsDivider()
                     visualStyleRow
                     SettingsDivider()
-                    liveTranscriptRow
+                }
+
+                liveTranscriptRow
+
+                if !isCompact {
                     SettingsDivider()
                     hoverPreviewRow
                 }
