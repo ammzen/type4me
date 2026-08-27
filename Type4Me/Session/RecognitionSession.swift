@@ -307,6 +307,8 @@ actor RecognitionSession {
             return "https://stt-rt.soniox.com"
         case .deepgram:
             return "https://api.deepgram.com"
+        case .gemini:
+            return "https://generativelanguage.googleapis.com"
         default:
             return ""
         }
@@ -345,6 +347,16 @@ actor RecognitionSession {
     // MARK: - Accumulated text
 
     private let maxRecordingDuration: TimeInterval = 600  // 10 minutes
+
+    /// Gemini Live sessions are terminated by the server at roughly 10 minutes,
+    /// measured from `connect()`. Stopping slightly earlier lets Type4Me finish
+    /// the recording through the normal path (and surface the existing
+    /// "已达最大时长" hint) instead of losing the tail to a server-side close.
+    private let geminiMaxRecordingDuration: TimeInterval = 570  // 9m30s
+
+    private func maxRecordingDuration(for provider: ASRProvider) -> TimeInterval {
+        provider == .gemini ? geminiMaxRecordingDuration : maxRecordingDuration
+    }
 
     private var currentTranscript: RecognitionTranscript = .empty
     private var eventConsumptionTask: Task<Void, Never>?
@@ -1057,10 +1069,11 @@ actor RecognitionSession {
         asrCleanupTask?.cancel()
         asrCleanupTask = nil
         asrCleanupGeneration = nil
-        maxDurationTask = Task { [weak self, maxRecordingDuration] in
-            try? await Task.sleep(for: .seconds(maxRecordingDuration))
+        let recordingLimit = maxRecordingDuration(for: activeProvider)
+        maxDurationTask = Task { [weak self, recordingLimit] in
+            try? await Task.sleep(for: .seconds(recordingLimit))
             guard let self, !Task.isCancelled else { return }
-            await self.autoStopIfRecording()
+            await self.autoStopIfRecording(limit: recordingLimit)
         }
     }
 
@@ -1069,9 +1082,9 @@ actor RecognitionSession {
     }
 
     /// Auto-stop triggered by max recording duration timer.
-    private func autoStopIfRecording() async {
+    private func autoStopIfRecording(limit: TimeInterval) async {
         guard state == .recording else { return }
-        DebugFileLogger.log("max recording duration reached (\(maxRecordingDuration)s), auto-stopping")
+        DebugFileLogger.log("max recording duration reached (\(limit)s), auto-stopping")
         stoppedByMaxDuration = true
         await stopRecording()
     }

@@ -127,6 +127,12 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             return [
                 (L("API Key", "API Key"), L("获取", "get"), URL(string: "https://elevenlabs.io/app/settings/api-keys")!),
             ]
+        case .gemini:
+            return [
+                (L("官方文档", "Docs"), L("查看", "view"), URL(string: "https://ai.google.dev/gemini-api/docs/live-api/live-transcribe")!),
+                ("API Key", L("获取", "get"), URL(string: "https://aistudio.google.com/app/apikey")!),
+                (L("定价与限制", "Pricing & Limits"), L("查看", "view"), URL(string: "https://ai.google.dev/gemini-api/docs/pricing")!),
+            ]
         case .grok:
             return [
                 ("API Key", L("获取", "get"), URL(string: "https://console.x.ai/team/default/api-keys")!),
@@ -214,6 +220,11 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             )
         case .deepgram:
             return L("受接口限制，热词仅取前 30 个", "Due to API limits, only the first 30 hotwords are used")
+        case .gemini:
+            return L(
+                "实时流式识别。Smart 模式会自动清理口语停顿、重复和自我纠正；如需逐字记录可切换为 Verbatim。",
+                "Real-time streaming transcription. Smart mode cleans up disfluencies, repetitions, and self-corrections; switch to Verbatim for literal transcripts."
+            )
         case .openai:
             return L(
                 "松开快捷键后提交完整录音进行转写。",
