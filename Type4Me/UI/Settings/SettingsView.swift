@@ -90,6 +90,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 final class AppNavigationModel {
     var selectedTab: SettingsTab = .general
     var pendingAskAnythingSessionID: UUID?
+    var pendingModeSelectionID: UUID?
 }
 
 // MARK: - Settings View
@@ -217,11 +218,10 @@ struct SettingsView: View {
         }
         #endif
         .onReceive(NotificationCenter.default.publisher(for: .navigateToMode)) { note in
-            requestNavigation(to: .modes) {
-                if let modeId = note.object as? UUID {
-                    NotificationCenter.default.post(name: .selectMode, object: modeId)
-                }
+            if let modeId = note.object as? UUID {
+                navigationModel.pendingModeSelectionID = modeId
             }
+            requestNavigation(to: .modes)
         }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToHistory)) { _ in
             requestNavigation(to: .history)
@@ -434,11 +434,10 @@ struct SettingsView: View {
                 HomeDottedWaveBackground()
                 tabPage {
                     HomeDashboardView(isActive: selectedTab == .general) { modeId in
-                        requestNavigation(to: .modes) {
-                            if let modeId {
-                                NotificationCenter.default.post(name: .selectMode, object: modeId)
-                            }
+                        if let modeId {
+                            navigationModel.pendingModeSelectionID = modeId
                         }
+                        requestNavigation(to: .modes)
                     }
                 }
             }
